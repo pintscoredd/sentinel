@@ -622,11 +622,12 @@ CHART_LAYOUT = dict(
     font=dict(color="#FF8C00", family="IBM Plex Mono"),
     xaxis=dict(gridcolor="#111111", color="#555555", showgrid=True),
     yaxis=dict(gridcolor="#111111", color="#555555", showgrid=True),
-    margin=dict(l=0,r=10,t=24,b=0), showlegend=False
+    showlegend=False
 )
 
 def dark_fig(height=300):
-    fig = go.Figure(); fig.update_layout(**CHART_LAYOUT, height=height)
+    fig = go.Figure()
+    fig.update_layout(**CHART_LAYOUT, height=height, margin=dict(l=0,r=10,t=24,b=0))
     return fig
 
 def tv_chart(symbol, height=450):
@@ -894,7 +895,7 @@ def render_poly_card(m, show_unusual=False):
             f'</div>')
 
 # ════════════════════════════════════════════════════════════════════
-# HEADER + TAPE + TABS
+# HEADER + TABS
 # ════════════════════════════════════════════════════════════════════
 st.markdown(f"""
 <div style="background:#FF6600;padding:5px 14px;display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
@@ -904,8 +905,6 @@ st.markdown(f"""
   </div>
   <div style="font-size:10px;color:#000;opacity:0.75">{now_pst()} &nbsp;|&nbsp; LIVE</div>
 </div>""", unsafe_allow_html=True)
-
-components.html(tv_tape(), height=48, scrolling=False)
 
 tabs = st.tabs(["BRIEF","MARKETS","MACRO","CRYPTO","POLYMARKET","GEO","EARNINGS","SENTINEL AI"])
 
