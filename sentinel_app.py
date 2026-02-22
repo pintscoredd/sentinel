@@ -149,17 +149,6 @@ section.main > div.block-container {
   padding-top: 0 !important;
 }
 
-/* Bigger metric values for brief tab prices */
-[data-testid="stMetricValue"] {
-  font-size: 22px !important;
-  font-weight: 700 !important;
-}
-[data-testid="stMetricLabel"] {
-  font-size: 11px !important;
-}
-[data-testid="stMetricDelta"] {
-  font-size: 13px !important;
-}
 
 /* ─── BLOOMBERG COMPONENT STYLES ─── */
 .bb-bar {
@@ -593,43 +582,37 @@ with tabs[1]:
             st.markdown('<div class="bb-ph" style="margin-top:8px">CHART — TRADINGVIEW (RSI + SMA)</div>', unsafe_allow_html=True)
             components.html(tv_chart(tv_sym, 480), height=485, scrolling=False)
 
-            oc, ic = st.columns([1,1])
-            with oc:
-                st.markdown('<div class="bb-ph">📋 OPTIONS CHAIN</div>', unsafe_allow_html=True)
-                # Expiry selector
-                expiries = options_expiries(tkr)
-                selected_exp = None
-                if expiries:
-                    selected_exp = st.selectbox("EXPIRY DATE", expiries, index=0, key=f"exp_{tkr}")
-                with st.spinner("Loading options…"):
-                    calls, puts, exp_date = options_chain(tkr, selected_exp)
-                if calls is not None:
-                    st.markdown(f'<div style="color:#888;font-size:10px;font-family:monospace;margin-bottom:6px">EXPIRY: {exp_date} | CURRENT: {fmt_p(q["price"])}</div>', unsafe_allow_html=True)
-                    st.markdown('<div style="max-height:580px;overflow-y:auto;border:1px solid #111">', unsafe_allow_html=True)
-                    cc, pc = st.columns(2)
-                    with cc:
-                        st.markdown('<div style="color:#00CC44;font-size:9px;font-weight:700;letter-spacing:2px">▲ CALLS</div>', unsafe_allow_html=True)
-                        st.markdown(render_options_table(calls,"calls",q["price"]), unsafe_allow_html=True)
-                    with pc:
-                        st.markdown('<div style="color:#FF4444;font-size:9px;font-weight:700;letter-spacing:2px">▼ PUTS</div>', unsafe_allow_html=True)
-                        st.markdown(render_options_table(puts,"puts",q["price"]), unsafe_allow_html=True)
-                    st.markdown('</div>', unsafe_allow_html=True)
-                else:
-                    st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Options unavailable for this ticker.</p>', unsafe_allow_html=True)
+            # ── Options Chain (full width)
+            st.markdown('<div class="bb-ph">📋 OPTIONS CHAIN</div>', unsafe_allow_html=True)
+            expiries = options_expiries(tkr)
+            selected_exp = None
+            if expiries:
+                selected_exp = st.selectbox("EXPIRY DATE", expiries, index=0, key=f"exp_{tkr}")
+            with st.spinner("Loading options…"):
+                calls, puts, exp_date = options_chain(tkr, selected_exp)
+            if calls is not None:
+                st.markdown(f'<div style="color:#888;font-size:10px;font-family:monospace;margin-bottom:6px">EXPIRY: {exp_date} | CURRENT: {fmt_p(q["price"])}</div>', unsafe_allow_html=True)
+                cc, pc = st.columns(2)
+                with cc:
+                    st.markdown('<div style="color:#00CC44;font-size:9px;font-weight:700;letter-spacing:2px">▲ CALLS</div>', unsafe_allow_html=True)
+                    st.markdown(render_options_table(calls,"calls",q["price"]), unsafe_allow_html=True)
+                with pc:
+                    st.markdown('<div style="color:#FF4444;font-size:9px;font-weight:700;letter-spacing:2px">▼ PUTS</div>', unsafe_allow_html=True)
+                    st.markdown(render_options_table(puts,"puts",q["price"]), unsafe_allow_html=True)
+            else:
+                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Options unavailable for this ticker.</p>', unsafe_allow_html=True)
 
-            with ic:
-                st.markdown('<div class="bb-ph">🔍 INSIDER TRANSACTIONS</div>', unsafe_allow_html=True)
-                if st.session_state.finnhub_key:
-                    with st.spinner("Loading insider data…"):
-                        ins = finnhub_insider(tkr, st.session_state.finnhub_key)
-                    if ins:
-                        st.markdown('<div style="max-height:580px;overflow-y:auto">', unsafe_allow_html=True)
-                        st.markdown(render_insider_cards(ins[:10], tkr, st.session_state.finnhub_key), unsafe_allow_html=True)
-                        st.markdown('</div>', unsafe_allow_html=True)
-                    else:
-                        st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No recent insider transactions found.</p>', unsafe_allow_html=True)
+            # ── Insider Transactions (full width below)
+            st.markdown('<div class="bb-ph" style="margin-top:12px">🔍 INSIDER TRANSACTIONS</div>', unsafe_allow_html=True)
+            if st.session_state.finnhub_key:
+                with st.spinner("Loading insider data…"):
+                    ins = finnhub_insider(tkr, st.session_state.finnhub_key)
+                if ins:
+                    st.markdown(render_insider_cards(ins[:10], tkr, st.session_state.finnhub_key), unsafe_allow_html=True)
                 else:
-                    st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Add Finnhub key in sidebar.</p>', unsafe_allow_html=True)
+                    st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No recent insider transactions found.</p>', unsafe_allow_html=True)
+            else:
+                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Add Finnhub key in sidebar.</p>', unsafe_allow_html=True)
         else:
             st.error(f"No data for '{tkr}'. Check ticker symbol.")
 
@@ -1180,18 +1163,24 @@ Place globe.html in your GitHub repo root alongside sentinel_app.py and redeploy
                         st.markdown(render_news_card(title[:100],u,src,pub,"bb-news bb-news-macro"), unsafe_allow_html=True)
 
     with geo_col2:
-        st.markdown('<div class="bb-ph">⚠️ THEATER STATUS</div>', unsafe_allow_html=True)
-        for name, status, color in [
-            ("Middle East","CRITICAL","#FF0000"),("Ukraine","ACTIVE","#FF4444"),
-            ("Red Sea","DISRUPTED","#FF4444"),("Sahel","ELEVATED","#FF8C00"),
-            ("Hormuz","ELEVATED","#FF8C00"),("Taiwan","MONITORING","#FFCC00"),
-            ("S.China Sea","MONITORING","#FFCC00")]:
-            st.markdown(f'<div class="theater-row"><span style="color:#CCC">{name}</span><span style="color:{color};font-size:9px;font-weight:700">{status}</span></div>', unsafe_allow_html=True)
+        st.markdown('<div class="bb-ph">📊 COMMODITY & CURRENCY IMPACT RADAR</div>', unsafe_allow_html=True)
+        impact_tickers = {"WTI Crude": "CL=F", "Brent Crude": "BZ=F", "Natural Gas": "NG=F",
+                          "Gold": "GC=F", "Silver": "SI=F", "Wheat": "ZW=F",
+                          "USD Index": "DX-Y.NYB", "EUR/USD": "EURUSD=X", "10Y Yield": "^TNX"}
+        impact_qs = multi_quotes(list(impact_tickers.values()))
+        for q in impact_qs:
+            name = [k for k,v in impact_tickers.items() if v == q['ticker']]
+            name = name[0] if name else q['ticker']
+            c = pct_color(q['pct'])
+            arr = "▲" if q['pct'] >= 0 else "▼"
+            st.markdown(f'<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #111;font-family:monospace;font-size:12px">'
+                        f'<span style="color:#CCC">{name}</span>'
+                        f'<span style="color:{c};font-weight:700">{arr} {q["pct"]:+.2f}% &nbsp; {fmt_p(q["price"])}</span></div>', unsafe_allow_html=True)
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-        st.markdown('<div class="bb-ph">📖 CONFIDENCE</div>', unsafe_allow_html=True)
-        for lbl,c in [("HIGH","#00CC44"),("MEDIUM","#FF8C00"),("LOW","#FFCC00"),("UNCONFIRMED","#555")]:
-            st.markdown(f'<div style="font-family:monospace;font-size:10px;padding:3px 0"><span style="color:{c};font-weight:700">{lbl}</span></div>', unsafe_allow_html=True)
+        st.markdown('<div class="bb-ph">📖 CONFIDENCE LEVELS</div>', unsafe_allow_html=True)
+        for lbl, c, desc in [("HIGH","#00CC44","Multiple verified sources"),("MEDIUM","#FF8C00","Single source / partial confirm"),("LOW","#FFCC00","Unverified rumor"),("UNCONFIRMED","#555","Raw signal only")]:
+            st.markdown(f'<div style="font-family:monospace;font-size:10px;padding:3px 0"><span style="color:{c};font-weight:700">{lbl}</span> <span style="color:#444">— {desc}</span></div>', unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════
 # TAB 6 — EARNINGS TRACKER
