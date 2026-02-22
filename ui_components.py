@@ -131,6 +131,26 @@ def yield_history_chart(fred_key, height=220):
             font=dict(size=11, color="#FF6600"), x=0))
     return fig
 
+def cpi_vs_rates_chart(fred_key, height=250):
+    """CPI YoY vs Fed Funds Rate chart"""
+    if not fred_key: return None
+    LINES = [("CPI YoY %", "CPIAUCSL", "#FF4444"), ("Fed Funds Rate", "FEDFUNDS", "#00AAFF"),
+             ("Core PCE", "PCEPILFE", "#FFCC00")]
+    fig = dark_fig(height)
+    has_data = False
+    for lbl, code, color in LINES:
+        df = fred_series(code, fred_key, 36)
+        if df is not None and not df.empty:
+            has_data = True
+            fig.add_trace(go.Scatter(x=df["date"], y=df["value"], mode="lines",
+                name=lbl, line=dict(color=color, width=2)))
+    if not has_data: return None
+    fig.update_layout(showlegend=True,
+        legend=dict(bgcolor="#050505", bordercolor="#333", font=dict(size=10, color="#FF8C00")),
+        yaxis_title="Rate / Index", title=dict(text="CPI vs FED FUNDS vs CORE PCE (3Y)",
+            font=dict(size=11, color="#FF6600"), x=0))
+    return fig
+
 # ════════════════════════════════════════════════════════════════════
 # RENDER HELPERS
 # ════════════════════════════════════════════════════════════════════
