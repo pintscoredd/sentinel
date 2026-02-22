@@ -107,6 +107,15 @@ html, body, .stApp, [data-testid="stAppViewContainer"] {
 div[data-testid="stDecoration"], footer, #MainMenu,
 [data-testid="stToolbar"] { display: none !important; }
 
+/* MOVE CONTENT UP — reduce default Streamlit top padding */
+section.main > div.block-container {
+  padding-top: 0.25rem !important;
+  padding-bottom: 1rem !important;
+}
+[data-testid="stAppViewContainer"] > section.main {
+  padding-top: 0 !important;
+}
+
 /* ─── BLOOMBERG COMPONENT STYLES ─── */
 .bb-bar {
   background: var(--org); color: var(--blk);
@@ -814,13 +823,20 @@ def render_insider_cards(data, ticker="", finnhub_key=""):
 
 def poly_url(m):
     """Build correct Polymarket URL — use conditionId or slug"""
-    slug = m.get("slug","")
-    cond = m.get("conditionId","")
-    # Try event slug from events API
-    evt_slug = m.get("eventSlug","")
-    if evt_slug: return f"https://polymarket.com/event/{evt_slug}"
-    if slug: return f"https://polymarket.com/event/{slug}"
-    if cond: return f"https://polymarket.com/market/{cond}"
+    slug = m.get("slug","") or ""
+    cond = m.get("conditionId","") or ""
+    evt_slug = m.get("eventSlug","") or ""
+    # Clean slug
+    def clean(s): return s.strip().strip("/")
+    if evt_slug: return f"https://polymarket.com/event/{clean(evt_slug)}"
+    if slug: return f"https://polymarket.com/event/{clean(slug)}"
+    if cond: return f"https://polymarket.com/market/{clean(cond)}"
+    # Last resort: build slug from question title
+    q = m.get("question","") or ""
+    if q:
+        import re
+        auto_slug = re.sub(r'[^a-z0-9]+','-',q.lower())[:60].strip('-')
+        if auto_slug: return f"https://polymarket.com/event/{auto_slug}"
     return "https://polymarket.com"
 
 def poly_status(m):
@@ -927,9 +943,11 @@ def render_poly_card(m, show_unusual=False):
 # HEADER + TABS
 # ════════════════════════════════════════════════════════════════════
 st.markdown(f"""
-<div style="background:#FF6600;padding:5px 14px;display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+<div style="background:#FF6600;padding:5px 14px;display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
   <div style="display:flex;align-items:center;gap:14px">
-    <span style="font-size:20px;font-weight:900;letter-spacing:5px;color:#000;font-family:monospace">⚡ SENTINEL</span>
+    <span id="sentinel-logo" onclick="document.querySelector('[data-testid=\\"stSidebar\\"] button').click()"
+      style="font-size:20px;font-weight:900;letter-spacing:5px;color:#000;font-family:monospace;cursor:pointer;user-select:none"
+      title="Click to toggle API keys">⚡ SENTINEL</span>
     <span style="font-size:10px;color:#000;background:rgba(0,0,0,0.15);padding:2px 8px">PROFESSIONAL INTELLIGENCE</span>
   </div>
   <div style="font-size:10px;color:#000;opacity:0.75">{now_pst()} &nbsp;|&nbsp; LIVE</div>
@@ -1255,24 +1273,31 @@ with tabs[3]:
             st.markdown('<div style="background:#001A00;border-left:3px solid #00CC44;padding:8px 12px;font-family:monospace;font-size:11px;color:#CCC">✅ BTC Dominance <45% — Altcoin season conditions.</div>', unsafe_allow_html=True)
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-    cr1, cr2 = st.columns([2,3])
+    cr1, cr2 = st.columns([3,3])
 
     with cr1:
         st.markdown('<div class="bb-ph">💹 TOP 20 BY MARKET CAP</div>', unsafe_allow_html=True)
         with st.spinner("Loading crypto markets…"):
             cdata = crypto_markets(st.session_state.coingecko_key)
         if cdata and isinstance(cdata, list):
+            # Header row
+            st.markdown(
+                '<div style="display:grid;grid-template-columns:80px 130px 90px 110px;gap:8px;'
+                'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
+                'font-size:10px;color:#FF6600;letter-spacing:1px;margin-bottom:3px">'
+                '<span>SYMBOL</span><span>PRICE</span><span>24H %</span><span>MKT CAP</span></div>',
+                unsafe_allow_html=True)
             for c in cdata:
                 if not isinstance(c, dict) or not c.get("current_price"): continue
                 pct = c.get("price_change_percentage_24h",0) or 0; color = pct_color(pct)
                 sign = "+" if pct>=0 else ""
                 st.markdown(
-                    f'<div style="display:grid;grid-template-columns:60px 100px 72px 80px;gap:6px;'
-                    f'padding:4px 8px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px;align-items:center">'
+                    f'<div style="display:grid;grid-template-columns:80px 130px 90px 110px;gap:8px;'
+                    f'padding:6px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:13px;align-items:center">'
                     f'<span style="color:#FF6600;font-weight:700">{c["symbol"].upper()}</span>'
-                    f'<span style="color:#FFF">{fmt_p(c["current_price"])}</span>'
-                    f'<span style="color:{color};font-weight:600">{sign}{pct:.2f}%</span>'
-                    f'<span style="color:#555">${c["market_cap"]/1e9:.1f}B</span></div>', unsafe_allow_html=True)
+                    f'<span style="color:#FFF;font-weight:600">{fmt_p(c["current_price"])}</span>'
+                    f'<span style="color:{color};font-weight:700">{sign}{pct:.2f}%</span>'
+                    f'<span style="color:#777">${c["market_cap"]/1e9:.1f}B</span></div>', unsafe_allow_html=True)
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">CoinGecko data unavailable. Rate limits may apply — try adding a CoinGecko key.</p>', unsafe_allow_html=True)
 
@@ -1404,12 +1429,12 @@ with tabs[4]:
                 ratio = v24/vtot*100 if vtot>0 else 0
                 url = poly_url(m)
                 side, side_cls = unusual_side(m)
-                side_html = f' — <span class="{side_cls or "poly-unusual-yes"}">Favoring {side or "UNKNOWN"}</span>' if side else ""
+                side_html = f' &nbsp;— <span class="{side_cls or "poly-unusual-yes"}" style="font-size:13px">Favoring {side or "UNKNOWN"}</span>' if side else ""
                 st.markdown(
                     f'<div style="background:#0D0000;border:1px solid #FF0000;border-left:4px solid #FF0000;'
-                    f'padding:10px 12px;margin:4px 0;font-family:monospace;font-size:12px">'
-                    f'🚨 <a href="{url}" target="_blank" style="color:#FF4444;font-weight:600">{_esc(raw_t[:85])}</a>'
-                    f'<div style="margin-top:4px;font-size:10px"><span style="color:#FF6600">24h: ${v24:,.0f} ({ratio:.0f}% of total)</span>'
+                    f'padding:14px 16px;margin:6px 0;font-family:monospace">'
+                    f'🚨 <a href="{url}" target="_blank" style="color:#FF4444;font-weight:700;font-size:15px">{_esc(raw_t[:90])}</a>'
+                    f'<div style="margin-top:7px;font-size:13px"><span style="color:#FF6600;font-weight:600">24h Vol: ${v24:,.0f} &nbsp;({ratio:.0f}% of total volume)</span>'
                     f'{side_html}</div></div>', unsafe_allow_html=True)
             st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
