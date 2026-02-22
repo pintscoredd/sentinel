@@ -8,8 +8,7 @@
 body{background:#000;color:#d0d3d8;overflow:hidden;user-select:none;}
 #c{display:block;width:100vw;height:100vh;}
 #overlay{position:fixed;inset:0;pointer-events:none;z-index:10;}
-/* Header */
-#hdr{position:fixed;top:0;left:0;right:0;z-index:20;background:linear-gradient(180deg,rgba(0,0,0,0.95) 0%,transparent 100%);padding:7px 14px;display:flex;justify-content:space-between;align-items:center;pointer-events:none;}
+#hdr{position:fixed;top:0;left:0;right:0;z-index:20;background:linear-gradient(180deg,rgba(0,0,0,.95) 0%,transparent 100%);padding:7px 14px;display:flex;justify-content:space-between;align-items:center;pointer-events:none;}
 #logo{color:#FF6600;font-size:13px;font-weight:700;letter-spacing:4px;}
 #hst{font-size:9px;color:#444;display:flex;gap:12px;}
 .hd{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;vertical-align:middle;}
@@ -17,32 +16,34 @@ body{background:#000;color:#d0d3d8;overflow:hidden;user-select:none;}
 .ha{background:#FF6600;box-shadow:0 0 4px #FF6600;}
 .hr{background:#FF4444;box-shadow:0 0 4px #FF4444;animation:pb 1s infinite;}
 @keyframes pb{0%,100%{opacity:1}50%{opacity:.25}}
-/* Filter bar */
 #fb{position:fixed;left:10px;top:46px;z-index:20;display:flex;flex-direction:column;gap:3px;pointer-events:all;}
 .fbtn{background:rgba(0,0,0,.88);border:1px solid #1a1a1a;color:#666;font-family:'Courier New',monospace;font-size:9px;letter-spacing:1px;padding:5px 10px;cursor:pointer;width:108px;text-align:left;transition:all .15s;}
 .fbtn:hover,.fbtn.on{background:rgba(255,102,0,.1);border-color:#FF6600;color:#FF6600;}
-/* Theater panel */
-#tp{position:fixed;right:0;top:46px;width:190px;background:rgba(0,0,0,.92);border:1px solid #1a1a1a;border-right:none;z-index:20;}
-.tph{padding:5px 10px;font-size:9px;letter-spacing:2px;color:#FF6600;border-bottom:1px solid #1a1a1a;}
-.tpi{padding:6px 10px;border-bottom:1px solid #111;cursor:pointer;transition:background .15s;pointer-events:all;}
-.tpi:hover{background:rgba(255,102,0,.07);}
-.tpn{font-size:10px;color:#ccc;font-weight:600;}
-.tps{font-size:9px;margin-top:2px;}
-.tc{color:#FF4444;}.te{color:#FF6600;}.tw{color:#FFCC00;}
-/* Info card */
-#ic{position:fixed;z-index:30;background:rgba(0,0,0,.97);border:1px solid #1a1a1a;border-left:3px solid #FF6600;padding:13px 15px;width:300px;display:none;pointer-events:none;}
+/* ── THEATER PANEL — BIGGER TEXT ── */
+#tp{position:fixed;right:0;top:46px;width:220px;background:rgba(0,0,0,.95);border:1px solid #2a2a2a;border-right:none;z-index:20;box-shadow:-4px 0 20px rgba(255,102,0,.08);}
+.tph{padding:8px 12px;font-size:11px;letter-spacing:2px;color:#FF6600;border-bottom:1px solid #2a2a2a;font-weight:700;text-transform:uppercase;}
+.tpi{padding:10px 12px;border-bottom:1px solid #181818;cursor:pointer;transition:background .15s,border .1s;pointer-events:all;border-left:3px solid transparent;}
+.tpi:hover{background:rgba(255,102,0,.1);border-left-color:#FF6600;}
+.tpn{font-size:13px;color:#eee;font-weight:700;letter-spacing:.5px;}
+.tps{font-size:12px;margin-top:3px;font-weight:700;letter-spacing:1px;}
+.tc{color:#FF4444;text-shadow:0 0 8px rgba(255,68,68,.5);}
+.te{color:#FF6600;text-shadow:0 0 8px rgba(255,102,0,.5);}
+.tw{color:#FFCC00;text-shadow:0 0 8px rgba(255,204,0,.5);}
+/* ── INFO CARD ── */
+#ic{position:fixed;z-index:30;background:rgba(2,2,8,.97);border:1px solid #2a2a2a;border-left:4px solid #FF6600;padding:16px 18px;width:320px;display:none;pointer-events:all;box-shadow:0 8px 40px rgba(0,0,0,.85);}
 #ic.show{display:block;}
 #ic.critical{border-left-color:#FF4444;}
 #ic.elevated{border-left-color:#FF6600;}
 #ic.watch{border-left-color:#FFCC00;}
-.icl{font-size:8px;letter-spacing:2px;color:#444;margin-bottom:3px;}
-.ict{font-size:12px;font-weight:700;color:#fff;margin-bottom:5px;}
-.icb{font-size:10px;color:#888;line-height:1.65;}
-.icm{color:#00AAFF;margin-top:6px;font-size:10px;}
-.ictags{margin-top:7px;display:flex;gap:4px;flex-wrap:wrap;}
-.ictag{font-size:8px;padding:2px 5px;border:1px solid #222;color:#444;}
-/* Add event */
-#addbtn{position:fixed;right:200px;bottom:55px;z-index:20;background:rgba(255,102,0,.1);border:1px solid #FF6600;color:#FF6600;font-family:'Courier New',monospace;font-size:10px;padding:5px 12px;cursor:pointer;letter-spacing:1px;pointer-events:all;}
+#ic-close{position:absolute;top:8px;right:10px;cursor:pointer;color:#555;font-size:16px;line-height:1;transition:color .15s;}
+#ic-close:hover{color:#FF6600;}
+.icl{font-size:9px;letter-spacing:2px;color:#555;margin-bottom:5px;text-transform:uppercase;}
+.ict{font-size:15px;font-weight:700;color:#fff;margin-bottom:9px;line-height:1.3;}
+.icb{font-size:11px;color:#999;line-height:1.8;margin-bottom:6px;}
+.icm{color:#00AAFF;margin-top:9px;font-size:11px;font-weight:600;}
+.ictags{margin-top:9px;display:flex;gap:4px;flex-wrap:wrap;}
+.ictag{font-size:9px;padding:2px 7px;border:1px solid #2a2a2a;color:#555;letter-spacing:1px;}
+#addbtn{position:fixed;right:230px;bottom:55px;z-index:20;background:rgba(255,102,0,.1);border:1px solid #FF6600;color:#FF6600;font-family:'Courier New',monospace;font-size:10px;padding:5px 12px;cursor:pointer;letter-spacing:1px;pointer-events:all;}
 #addbtn:hover{background:rgba(255,102,0,.22);}
 #adddlg{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);background:#0a0a0a;border:1px solid #FF6600;padding:20px;width:350px;z-index:50;display:none;pointer-events:all;}
 #adddlg.show{display:block;}
@@ -52,22 +53,31 @@ body{background:#000;color:#d0d3d8;overflow:hidden;user-select:none;}
 .dbtns{display:flex;gap:8px;margin-top:4px;}
 .dbok{flex:1;padding:6px;font-family:'Courier New',monospace;font-size:10px;cursor:pointer;border:1px solid #FF6600;background:rgba(255,102,0,.15);color:#FF6600;}
 .dbcancel{flex:1;padding:6px;font-family:'Courier New',monospace;font-size:10px;cursor:pointer;border:1px solid #222;background:transparent;color:#666;}
-/* Status bar */
 #sb{position:fixed;bottom:0;left:0;right:0;padding:4px 14px;display:flex;justify-content:space-between;background:linear-gradient(0deg,rgba(0,0,0,.95) 0%,transparent 100%);z-index:20;font-size:8px;letter-spacing:1px;color:#333;pointer-events:none;}
-/* Tooltip */
 #tt{position:fixed;z-index:25;background:rgba(0,0,0,.9);border:1px solid #FF6600;padding:4px 8px;font-size:9px;color:#FF8C00;display:none;pointer-events:none;white-space:nowrap;}
+#loadscreen{position:fixed;inset:0;background:#000005;z-index:100;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;}
+#loadscreen.hidden{display:none;}
+.ltxt{color:#FF6600;font-size:11px;letter-spacing:4px;animation:pb 1.5s infinite;}
+.lbar{width:220px;height:2px;background:#111;position:relative;overflow:hidden;}
+.lbar::after{content:'';position:absolute;left:-50%;width:50%;height:100%;background:linear-gradient(90deg,transparent,#FF6600,transparent);animation:slide 1.2s linear infinite;}
+@keyframes slide{to{left:150%;}}
 </style>
 </head>
 <body>
+<div id="loadscreen">
+  <div style="color:#FF6600;font-size:20px;font-weight:900;letter-spacing:5px">⚡ SENTINEL GEO</div>
+  <div class="ltxt">INITIALIZING GEOPOLITICAL INTELLIGENCE…</div>
+  <div class="lbar"></div>
+</div>
 <canvas id="c"></canvas>
 <div id="overlay"></div>
 
 <div id="hdr">
   <div><span id="logo">⚡ SENTINEL GEO</span><span style="color:#333;font-size:9px;margin-left:12px">GEOPOLITICAL INTELLIGENCE LAYER</span></div>
   <div id="hst">
-    <span><span class="hd hg"></span>THREE.JS GLOBE</span>
-    <span><span class="hd hg"></span>GDELT LIVE</span>
-    <span><span class="hd ha"></span>AIS FEED</span>
+    <span><span class="hd hg"></span>LIVE GLOBE</span>
+    <span><span class="hd hg"></span>GDELT FEED</span>
+    <span><span class="hd ha"></span>AIS LAYER</span>
     <span id="clk"></span>
   </div>
 </div>
@@ -83,17 +93,38 @@ body{background:#000;color:#d0d3d8;overflow:hidden;user-select:none;}
 </div>
 
 <div id="tp">
-  <div class="tph">THEATER STATUS</div>
-  <div class="tpi" onclick="flyTo(31.5,34.8)"><div class="tpn">MIDDLE EAST</div><div class="tps tc">CRITICAL</div></div>
-  <div class="tpi" onclick="flyTo(49,31)"><div class="tpn">UKRAINE</div><div class="tps tc">ACTIVE</div></div>
-  <div class="tpi" onclick="flyTo(14,43)"><div class="tpn">RED SEA</div><div class="tps tc">DISRUPTED</div></div>
-  <div class="tpi" onclick="flyTo(26.5,56)"><div class="tpn">HORMUZ</div><div class="tps te">ELEVATED</div></div>
-  <div class="tpi" onclick="flyTo(14,2)"><div class="tpn">SAHEL</div><div class="tps te">ELEVATED</div></div>
-  <div class="tpi" onclick="flyTo(25,121)"><div class="tpn">TAIWAN</div><div class="tps tw">MONITORING</div></div>
-  <div class="tpi" onclick="flyTo(12,115)"><div class="tpn">S. CHINA SEA</div><div class="tps tw">MONITORING</div></div>
+  <div class="tph">⚠ THEATER STATUS</div>
+  <div class="tpi" onclick="flyToTheater(31.5,34.8,'MIDDLE EAST')">
+    <div class="tpn">MIDDLE EAST</div><div class="tps tc">● CRITICAL</div>
+  </div>
+  <div class="tpi" onclick="flyToTheater(49,31,'UKRAINE')">
+    <div class="tpn">UKRAINE</div><div class="tps tc">● ACTIVE</div>
+  </div>
+  <div class="tpi" onclick="flyToTheater(14,43,'RED SEA')">
+    <div class="tpn">RED SEA</div><div class="tps tc">● DISRUPTED</div>
+  </div>
+  <div class="tpi" onclick="flyToTheater(26.5,56,'HORMUZ')">
+    <div class="tpn">HORMUZ</div><div class="tps te">● ELEVATED</div>
+  </div>
+  <div class="tpi" onclick="flyToTheater(14,2,'SAHEL')">
+    <div class="tpn">SAHEL</div><div class="tps te">● ELEVATED</div>
+  </div>
+  <div class="tpi" onclick="flyToTheater(25,121,'TAIWAN')">
+    <div class="tpn">TAIWAN</div><div class="tps tw">● MONITORING</div>
+  </div>
+  <div class="tpi" onclick="flyToTheater(12,115,'S. CHINA SEA')">
+    <div class="tpn">S. CHINA SEA</div><div class="tps tw">● MONITORING</div>
+  </div>
 </div>
 
-<div id="ic"><div class="icl" id="ic-sev"></div><div class="ict" id="ic-ttl"></div><div class="icb" id="ic-body"></div><div class="icm" id="ic-mkt"></div><div class="ictags" id="ic-tags"></div></div>
+<div id="ic">
+  <span id="ic-close" onclick="document.getElementById('ic').style.display='none'">✕</span>
+  <div class="icl" id="ic-sev"></div>
+  <div class="ict" id="ic-ttl"></div>
+  <div class="icb" id="ic-body"></div>
+  <div class="icm" id="ic-mkt"></div>
+  <div class="ictags" id="ic-tags"></div>
+</div>
 <div id="tt"></div>
 
 <button id="addbtn" onclick="document.getElementById('adddlg').classList.add('show')">＋ ADD EVENT</button>
@@ -101,8 +132,11 @@ body{background:#000;color:#d0d3d8;overflow:hidden;user-select:none;}
   <h3>ADD CUSTOM EVENT</h3>
   <label>TITLE</label><input id="ae-title" placeholder="e.g. Belarus Border Tensions">
   <label>LAT / LON</label>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px"><input id="ae-lat" placeholder="e.g. 52.0"><input id="ae-lon" placeholder="e.g. 28.0"></div>
-  <label>DESCRIPTION</label><textarea id="ae-desc" placeholder="Brief intel summary…"></textarea>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+    <input id="ae-lat" placeholder="e.g. 52.0">
+    <input id="ae-lon" placeholder="e.g. 28.0">
+  </div>
+  <label>DESCRIPTION</label><textarea id="ae-desc" rows="3" placeholder="Brief intel summary…"></textarea>
   <label>SEVERITY</label>
   <select id="ae-sev"><option value="critical">CRITICAL</option><option value="elevated">ELEVATED</option><option value="watch">WATCH</option></select>
   <label>MARKET IMPACT</label><input id="ae-mkt" placeholder="e.g. XLE, WTI Crude">
@@ -120,165 +154,222 @@ body{background:#000;color:#d0d3d8;overflow:hidden;user-select:none;}
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
-// ── CLOCK ─────────────────────────────────────────────────────────────────────
+// ── CLOCK
 setInterval(()=>{
   const d=new Date();
   document.getElementById('clk').textContent=d.toUTCString().slice(17,25)+' UTC';
 },1000);
 
-// ── SCENE ─────────────────────────────────────────────────────────────────────
 const W=window.innerWidth, H=window.innerHeight;
 const renderer=new THREE.WebGLRenderer({canvas:document.getElementById('c'),antialias:true});
-renderer.setSize(W,H); renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
-renderer.setClearColor(0x000000);
+renderer.setSize(W,H);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+renderer.setClearColor(0x000005);
 
 const scene=new THREE.Scene();
-const camera=new THREE.PerspectiveCamera(45,W/H,0.1,1000);
-camera.position.set(0,0,2.8);
+const camera=new THREE.PerspectiveCamera(42,W/H,0.1,1000);
+camera.position.set(0,0,2.7);
 
-// ── GLOBE ─────────────────────────────────────────────────────────────────────
+// ── REALISTIC GLOBE SETUP
 const loader=new THREE.TextureLoader();
-// Use a simple procedural earth appearance since external textures may be blocked
-const globeGeo=new THREE.SphereGeometry(1,64,64);
+const globeGeo=new THREE.SphereGeometry(1,96,96);
+let globeMesh=null, cloudMesh=null;
+let earthTex=null, specTex=null, cloudTex=null;
 
-// Load earth texture - use multiple fallbacks
-const TEXTURES=[
+function buildFallbackTexture(){
+  // Procedural detailed Earth texture
+  const cv=document.createElement('canvas'); cv.width=2048; cv.height=1024;
+  const ctx=cv.getContext('2d');
+  // Deep ocean
+  const og=ctx.createLinearGradient(0,0,2048,1024);
+  og.addColorStop(0,'#030c1c'); og.addColorStop(.5,'#061625'); og.addColorStop(1,'#030c1c');
+  ctx.fillStyle=og; ctx.fillRect(0,0,2048,1024);
+  // Ocean depth variation
+  ctx.fillStyle='rgba(0,20,50,0.3)';
+  for(let i=0;i<20;i++){
+    ctx.beginPath();
+    ctx.ellipse(Math.random()*2048,Math.random()*1024,Math.random()*200+50,Math.random()*100+30,Math.random()*Math.PI,0,Math.PI*2);
+    ctx.fill();
+  }
+  // Continents
+  ctx.fillStyle='#1d3c18';
+  const continents=[
+    // North America
+    [310,220,175,130,-.2],[260,310,100,90,.1],[230,350,65,55,0],[380,290,85,65,-.1],
+    // South America
+    [330,490,95,75,.1],[305,560,80,95,-.05],[315,630,65,72,-.1],
+    // Europe
+    [620,205,90,65,.05],[665,235,65,52,-.1],[638,188,55,42,.15],
+    // Africa
+    [625,345,105,95,.05],[615,430,95,105,-.05],[605,510,75,85,0],[598,585,55,52,.1],
+    // Asia mainland
+    [715,195,140,105,.1],[820,215,125,92,-.05],[875,255,105,80,.05],[920,295,90,72,-.1],
+    [962,195,85,62,.1],[1010,280,75,62,-.1],[840,175,62,52,.2],
+    // Japan
+    [980,230,18,45,.2],[990,260,12,30,.2],
+    // SE Asia
+    [920,380,70,55,.05],[960,420,55,42,-.1],
+    // Australia
+    [905,510,95,62,.05],[925,565,72,52,-.1],
+    // Greenland
+    [358,138,68,45,.1],[328,128,42,32,.15],
+    // UK/Ireland
+    [598,195,20,28,.1],[612,192,14,22,.1],
+  ];
+  continents.forEach(([x,y,w,h,r])=>{
+    ctx.save(); ctx.translate(x,y); ctx.rotate(r);
+    ctx.beginPath(); ctx.ellipse(0,0,w,h,0,0,Math.PI*2); ctx.fill(); ctx.restore();
+  });
+  // Highland texture on continents
+  ctx.fillStyle='#162d12';
+  [[720,215,28,18],[690,228,22,14],[882,225,18,12]].forEach(([x,y,w,h])=>{
+    ctx.beginPath();ctx.ellipse(x,y,w,h,0,0,Math.PI*2);ctx.fill();
+  });
+  // Desert/savanna tones
+  ctx.fillStyle='rgba(80,60,20,0.25)';
+  [[620,380,80,50],[900,310,60,40]].forEach(([x,y,w,h])=>{
+    ctx.beginPath();ctx.ellipse(x,y,w,h,0,0,Math.PI*2);ctx.fill();
+  });
+  // Arctic ice
+  ctx.fillStyle='#c5dde8';
+  ctx.fillRect(0,0,2048,22);
+  ctx.fillRect(0,996,2048,28);
+  // Antarctic shelf
+  ctx.fillStyle='rgba(180,210,230,0.7)';
+  ctx.fillRect(0,22,2048,18);
+  ctx.fillRect(0,978,2048,18);
+  return new THREE.CanvasTexture(cv);
+}
+
+function applyGlobe(){
+  const mat=new THREE.MeshPhongMaterial({
+    map: earthTex || buildFallbackTexture(),
+    specularMap: specTex || null,
+    specular: specTex ? new THREE.Color(0x335599) : new THREE.Color(0x112244),
+    shininess: specTex ? 55 : 10,
+    emissive: new THREE.Color(0x000810),
+    emissiveIntensity: 0.2,
+  });
+  if(globeMesh){ scene.remove(globeMesh); }
+  globeMesh=new THREE.Mesh(globeGeo,mat);
+  scene.add(globeMesh);
+  if(cloudTex && !cloudMesh){
+    const cm=new THREE.MeshPhongMaterial({
+      map:cloudTex, transparent:true, opacity:0.32,
+      depthWrite:false, blending:THREE.AdditiveBlending,
+    });
+    cloudMesh=new THREE.Mesh(new THREE.SphereGeometry(1.007,64,64),cm);
+    scene.add(cloudMesh);
+  }
+  document.getElementById('loadscreen').classList.add('hidden');
+}
+
+// Load earth texture — multiple fallbacks
+const EARTH=[
   'https://raw.githubusercontent.com/turban/webgl-earth/master/images/2_no_clouds_4k.jpg',
   'https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg',
 ];
+const SPEC=['https://raw.githubusercontent.com/turban/webgl-earth/master/images/8081_earthspec10k.jpg'];
+const CLOUDS=['https://raw.githubusercontent.com/turban/webgl-earth/master/images/fair_clouds_4k.png'];
 
-let globeMesh;
-function createGlobe(texture){
-  const mat=new THREE.MeshPhongMaterial({
-    map: texture||null,
-    color: texture?0xffffff:0x1a3a5c,
-    emissive: 0x000308,
-    specular: 0x222244,
-    shininess: 8,
-  });
-  if(!texture){
-    // Draw continents procedurally via canvas
-    const cv=document.createElement('canvas'); cv.width=1024; cv.height=512;
-    const ctx=cv.getContext('2d');
-    // Ocean
-    ctx.fillStyle='#0a1628'; ctx.fillRect(0,0,1024,512);
-    // Simple continent blobs
-    ctx.fillStyle='#1a3a1a';
-    const continents=[
-      [200,150,120,80],[350,180,80,60],[420,200,40,30],
-      [430,140,60,50],[500,180,30,25],[530,200,20,15],
-      [80,170,90,70],[100,240,60,50],[90,300,40,35],
-      [530,100,80,60],[580,130,50,40],[620,160,30,25],
-      [700,200,50,40],[720,250,40,30],
-      [200,300,60,50],[170,350,50,40],
-      [300,380,40,30],[320,350,30,25],
-      [120,120,30,20],[140,100,25,15],
-    ];
-    continents.forEach(([x,y,w,h])=>{
-      ctx.beginPath();ctx.ellipse(x,y,w,h,0,0,Math.PI*2);ctx.fill();
-    });
-    // Ice caps
-    ctx.fillStyle='#3a5a6a';
-    ctx.fillRect(0,0,1024,30); ctx.fillRect(0,480,1024,32);
-    const t=new THREE.CanvasTexture(cv);
-    mat.map=t; mat.needsUpdate=true;
-  }
-  globeMesh=new THREE.Mesh(globeGeo,mat);
-  scene.add(globeMesh);
+let earthReady=false;
+function tryEarth(i){
+  if(i>=EARTH.length){applyGlobe();return;}
+  loader.load(EARTH[i],t=>{earthTex=t;earthReady=true;applyGlobe();},undefined,()=>tryEarth(i+1));
 }
+tryEarth(0);
+loader.load(SPEC[0],t=>{specTex=t;if(earthReady)applyGlobe();},undefined,()=>{});
+loader.load(CLOUDS[0],t=>{cloudTex=t;if(earthReady)applyGlobe();},undefined,()=>{});
+setTimeout(()=>{document.getElementById('loadscreen').classList.add('hidden');},5000);
 
-// Try loading real texture
-loader.load(TEXTURES[0], t=>createGlobe(t), undefined, ()=>{
-  loader.load(TEXTURES[1], t=>createGlobe(t), undefined, ()=>createGlobe(null));
-});
+// ── ATMOSPHERE
+const atm1=new THREE.MeshPhongMaterial({color:0x003366,transparent:true,opacity:0.16,side:THREE.FrontSide,depthWrite:false,blending:THREE.AdditiveBlending});
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.018,64,64),atm1));
+const atm2=new THREE.MeshPhongMaterial({color:0x001133,transparent:true,opacity:0.07,side:THREE.FrontSide,depthWrite:false,blending:THREE.AdditiveBlending});
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.042,64,64),atm2));
+// Grid overlay
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.001,24,12),new THREE.MeshBasicMaterial({color:0x001a33,wireframe:true,transparent:true,opacity:0.04})));
 
-// Atmosphere glow
-const atmGeo=new THREE.SphereGeometry(1.015,64,64);
-const atmMat=new THREE.MeshPhongMaterial({
-  color:0x002244,transparent:true,opacity:0.12,side:THREE.FrontSide,depthWrite:false
-});
-scene.add(new THREE.Mesh(atmGeo,atmMat));
+// ── LIGHTING
+scene.add(new THREE.AmbientLight(0x112233,0.75));
+const sun=new THREE.DirectionalLight(0xfff5ee,1.7); sun.position.set(6,3,4); scene.add(sun);
+const fill=new THREE.DirectionalLight(0x0a1533,0.28); fill.position.set(-6,-2,-4); scene.add(fill);
+const rim=new THREE.DirectionalLight(0x113355,0.45); rim.position.set(-3,1,-5); scene.add(rim);
 
-// Wireframe overlay (subtle grid)
-const wfGeo=new THREE.SphereGeometry(1.001,32,16);
-const wfMat=new THREE.MeshBasicMaterial({color:0x001122,wireframe:true,transparent:true,opacity:0.06});
-scene.add(new THREE.Mesh(wfGeo,wfMat));
-
-// Lighting
-scene.add(new THREE.AmbientLight(0x223344,1.2));
-const sun=new THREE.DirectionalLight(0xffffff,1.0);
-sun.position.set(5,3,5); scene.add(sun);
-const fill=new THREE.DirectionalLight(0x112244,0.4);
-fill.position.set(-5,-3,-5); scene.add(fill);
-
-// Stars
-const starGeo=new THREE.BufferGeometry();
-const starPos=[];
-for(let i=0;i<2000;i++){
-  const theta=Math.random()*Math.PI*2; const phi=Math.acos(2*Math.random()-1);
-  const r=50+Math.random()*100;
-  starPos.push(r*Math.sin(phi)*Math.cos(theta),r*Math.cos(phi),r*Math.sin(phi)*Math.sin(theta));
+// ── STARS (colorized)
+const sg=new THREE.BufferGeometry();
+const sp=[],sc=[];
+for(let i=0;i<4000;i++){
+  const th=Math.random()*Math.PI*2, ph=Math.acos(2*Math.random()-1), r=65+Math.random()*90;
+  sp.push(r*Math.sin(ph)*Math.cos(th),r*Math.cos(ph),r*Math.sin(ph)*Math.sin(th));
+  const t=Math.random();
+  if(t<.1)sc.push(.75,.75,1.0);
+  else if(t<.2)sc.push(1.0,.9,.65);
+  else sc.push(.45,.5,.62);
 }
-starGeo.setAttribute('position',new THREE.Float32BufferAttribute(starPos,3));
-scene.add(new THREE.Points(starGeo,new THREE.PointsMaterial({color:0x445566,size:0.15})));
+sg.setAttribute('position',new THREE.Float32BufferAttribute(sp,3));
+sg.setAttribute('color',new THREE.Float32BufferAttribute(sc,3));
+scene.add(new THREE.Points(sg,new THREE.PointsMaterial({size:.12,vertexColors:true})));
 
-// ── HOTSPOT DATA ──────────────────────────────────────────────────────────────
+// ── HOTSPOT DATA
 const HOTSPOTS=[
   {lat:31.5,lon:34.8,label:'GAZA/ISRAEL',sev:'critical',type:'conflict',
    title:'Gaza — Active Conflict Zone',
-   body:'Ongoing operations. Regional escalation risk involves Hezbollah and IRGC. Iran-backed proxy involvement continues.',
-   mkt:'WTI Crude (CL=F), XLE, ITA',tags:['OIL RISK','ESCALATION']},
+   body:'Ongoing operations in Gaza. Regional escalation risk via Hezbollah and IRGC proxies. Iran-backed network active across Lebanon, Syria, Iraq. US carrier strike group in Eastern Med.',
+   mkt:'WTI (CL=F), Gold (GLD), XLE, ITA, LMT',tags:['OIL RISK','ESCALATION','IRGC']},
   {lat:14,lon:43,label:'RED SEA',sev:'critical',type:'shipping',
    title:'Red Sea — Houthi Shipping Attacks',
-   body:'Houthi attacks on commercial vessels ongoing. Ships rerouting around Cape of Good Hope (+12-14 days voyage time).',
-   mkt:'Container rates, XLE, European CPI',tags:['SHIPPING','INFLATION']},
+   body:'Houthi ballistic and drone attacks on commercial vessels ongoing. Ships rerouting around Cape of Good Hope adding 12–14 days voyage time. Container rates +35% vs pre-crisis. Suez Canal transits down ~40%.',
+   mkt:'Container ETFs, FDX, UPS, European CPI, XLE',tags:['SHIPPING','INFLATION','HOUTHI']},
   {lat:26.5,lon:56,label:'HORMUZ',sev:'elevated',type:'energy',
    title:'Strait of Hormuz — Iranian Naval Presence',
-   body:'IRGC elevated naval presence. 20% of global oil transits here. Lloyd\'s war risk premium elevated.',
-   mkt:'WTI (CL=F), Brent, XLE, Airline margins',tags:['20% GLOBAL OIL','IRAN']},
+   body:"IRGC elevated naval presence in Persian Gulf. 20% of global oil transits Hormuz daily. Lloyd's war risk premium elevated +300%. Tanker insurance spiking.",
+   mkt:'WTI (CL=F), Brent, XLE, airline margins',tags:['20% GLOBAL OIL','IRAN','LLOYD\'S']},
   {lat:25,lon:121,label:'TAIWAN',sev:'elevated',type:'trade',
    title:'Taiwan Strait — PLA Military Posture',
-   body:'PLA conducting regular exercises. TSMC produces 90% of advanced chips. US carrier groups present.',
-   mkt:'SMH, NVDA, AAPL supply chain, SOXX',tags:['TSMC','SEMICONDUCTORS']},
+   body:'PLA conducting regular exercises near median line. TSMC produces 90%+ of advanced chips <5nm. US carrier groups in Western Pacific. AUKUS submarine deliveries accelerating.',
+   mkt:'SMH, NVDA, AAPL supply chain, SOXX, TSM',tags:['TSMC','SEMICONDUCTORS','PLA']},
   {lat:49,lon:31,label:'UKRAINE',sev:'critical',type:'conflict',
    title:'Ukraine — Active War Theater',
-   body:'Frontline active. Russia targeting energy infrastructure. NATO posture elevated.',
-   mkt:'Natural gas (NG=F), Wheat (ZW=F), European banks',tags:['NATGAS','GRAIN']},
+   body:'Frontline active across 1,000km. Russia targeting power grid and energy infrastructure ahead of winter. NATO posture elevated — Patriot deployments expanding. Grain corridor disrupted.',
+   mkt:'NG=F (natgas), ZW=F (wheat), European banks, defense ETFs',tags:['NATGAS','GRAIN','NATO']},
   {lat:14,lon:2,label:'SAHEL',sev:'elevated',type:'minerals',
    title:'Sahel — Coups & Critical Minerals',
-   body:'Coup governments across Mali, Niger, Burkina Faso. Chinese mining rights expanding.',
-   mkt:'GDX, SIL, LIT (lithium ETF)',tags:['GOLD','LITHIUM']},
+   body:'Coup governments across Mali, Niger, Burkina Faso. French forces fully withdrawn. Wagner/Africa Corps active. Chinese mining rights expanding in cobalt, gold, lithium zones.',
+   mkt:'GDX, SIL, LIT, gold futures',tags:['GOLD','LITHIUM','WAGNER']},
   {lat:-5,lon:23.5,label:'DRC/COBALT',sev:'elevated',type:'minerals',
    title:'DRC — Cobalt Supply Chain',
-   body:'DRC produces ~70% of world cobalt. Eastern DRC conflict threatening mining operations.',
-   mkt:'Cobalt, TSLA supply chain, ALB, SQM',tags:['70% COBALT','EV']},
+   body:'DRC produces ~70% of world cobalt. M23 rebels active near Goma. Eastern DRC conflict threatening mining operations. Chinese firms control ~80% of processing capacity.',
+   mkt:'Cobalt, TSLA supply chain, ALB, SQM, LIT',tags:['70% COBALT','EV','M23']},
   {lat:12,lon:115,label:'S CHINA SEA',sev:'elevated',type:'shipping',
    title:'South China Sea — Territorial Disputes',
-   body:'$3T+ annual trade transits here. Philippines-China confrontations escalating.',
-   mkt:'Container shipping, Asian FX, semiconductors',tags:['$3T TRADE','NAVAL']},
+   body:'$3T+ annual trade transits here. Philippines-China confrontations at Second Thomas Shoal escalating. Water cannon incidents. ASEAN unity fractured. US-Phil. military exercises intensifying.',
+   mkt:'Container shipping, Asian FX, semiconductors',tags:['$3T TRADE','NAVAL','PHILIPPINES']},
   {lat:56,lon:37.6,label:'RUSSIA',sev:'elevated',type:'energy',
    title:'Russia — Energy Export Rerouting',
-   body:'Russian oil rerouted to China and India. European LNG costs remain elevated.',
-   mkt:'European natgas, LNG stocks, UNG, XLE',tags:['LNG','SANCTIONS']},
+   body:'Russian oil rerouted to China and India at 15–20% discount. European LNG costs remain elevated. Sanctions enforcement tightening. Shadow fleet growing.',
+   mkt:'European natgas, LNG stocks, UNG, XLE',tags:['LNG','SANCTIONS','OPEC+']},
   {lat:35.6,lon:139.7,label:'BOJ/YEN',sev:'watch',type:'trade',
    title:'Japan — BOJ Policy & Yen Carry Trade',
-   body:'BOJ normalizing ultra-loose policy. Yen carry trade unwind risk — trillions in positions.',
-   mkt:'USD/JPY, Nikkei, DXY, global bonds',tags:['YEN CARRY','BOJ']},
+   body:'BOJ normalizing ultra-loose policy after 3 decades. Yen carry trade unwind risk — estimated $4T+ in positions. Rate hike trajectory uncertain — global volatility trigger.',
+   mkt:'USD/JPY, Nikkei, DXY, global bonds, TLT',tags:['YEN CARRY','BOJ','REFLATION']},
   {lat:-20,lon:28,label:'ZIMBABWE',sev:'watch',type:'minerals',
    title:'Zimbabwe — Lithium Export Controls',
-   body:'Zimbabwe imposed raw lithium ore export ban. Chinese firms dominate processing.',
-   mkt:'LIT, ALB (Albemarle), SQM',tags:['LITHIUM','EV']},
+   body:'Zimbabwe banned raw lithium ore exports in 2023. Chinese firms dominate local processing. EV battery supply chain implications for Tesla, BYD.',
+   mkt:'LIT, ALB (Albemarle), SQM, LTHM',tags:['LITHIUM','EV','EXPORT BAN']},
+  {lat:33,lon:44,label:'IRAQ/IRAN',sev:'elevated',type:'energy',
+   title:'Iraq — Iranian Proxy Network',
+   body:'Iranian-backed militias (Islamic Resistance in Iraq) targeted 160+ US facilities. Iraqi oil output near record high at 4.3Mbpd. OPEC+ compliance politics complex.',
+   mkt:'WTI, Brent, XLE, OIH',tags:['IRAN PROXIES','OPEC+','OIL']},
 ];
 
 const COLORS={critical:'#FF4444',elevated:'#FF6600',watch:'#FFCC00'};
-let customEvents=[]; let activeFilter='all';
-let autoRotate=true; let dragging=false;
-let prevX=0,prevY=0; let rotX=0,rotY=0;
-let targetRotX=0,targetRotY=0;
-let currentHotspot=null;
+let customEvents=[],activeFilter='all';
+let autoRotate=true,dragging=false,isDrag=false,dragDist=0;
+let prevX=0,prevY=0,rotX=0,rotY=0,targetRotX=0,targetRotY=0;
 const markers=[];
 
-function latLonToVec3(lat,lon,r=1.012){
+function latLonToVec3(lat,lon,r=1.013){
   const phi=(90-lat)*Math.PI/180;
   const theta=(lon+180)*Math.PI/180;
   return new THREE.Vector3(
@@ -291,88 +382,89 @@ function latLonToVec3(lat,lon,r=1.012){
 function makeMarker(h){
   const col=COLORS[h.sev]||'#FF6600';
   const c=new THREE.Color(col);
-  const geo=new THREE.SphereGeometry(0.016,12,12);
-  const mat=new THREE.MeshBasicMaterial({color:c});
-  const mesh=new THREE.Mesh(geo,mat);
   const pos=latLonToVec3(h.lat,h.lon);
-  mesh.position.copy(pos);
-  mesh.userData={hotspot:h};
+
+  // Core dot
+  const mesh=new THREE.Mesh(
+    new THREE.SphereGeometry(0.022,16,16),
+    new THREE.MeshBasicMaterial({color:c})
+  );
+  mesh.position.copy(pos); mesh.userData={hotspot:h};
+
+  // Glow halo
+  const glow=new THREE.Mesh(
+    new THREE.SphereGeometry(0.040,16,16),
+    new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:0.12,side:THREE.FrontSide})
+  );
+  glow.position.copy(pos); glow.userData={hotspot:h};
 
   // Pulse ring
-  const rg=new THREE.RingGeometry(0.022,0.028,24);
-  const rm=new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:0.5,side:THREE.DoubleSide});
-  const ring=new THREE.Mesh(rg,rm);
-  ring.position.copy(pos);
-  ring.lookAt(0,0,0); ring.rotateX(Math.PI/2);
-  ring.userData={pulse:true,phase:Math.random()*Math.PI*2};
-  scene.add(ring);
-  scene.add(mesh);
-  markers.push({mesh,ring,hotspot:h,basePos:pos.clone()});
-  return mesh;
+  const ring=new THREE.Mesh(
+    new THREE.RingGeometry(0.028,0.037,32),
+    new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:0.55,side:THREE.DoubleSide})
+  );
+  ring.position.copy(pos); ring.lookAt(0,0,0); ring.rotateX(Math.PI/2);
+  ring.userData={phase:Math.random()*Math.PI*2};
+
+  scene.add(ring); scene.add(glow); scene.add(mesh);
+  markers.push({mesh,ring,glow,hotspot:h,basePos:pos.clone()});
 }
 
 function renderMarkers(){
-  // Remove old
-  markers.forEach(({mesh,ring})=>{scene.remove(mesh);scene.remove(ring);});
+  markers.forEach(({mesh,ring,glow})=>{scene.remove(mesh);scene.remove(ring);scene.remove(glow);});
   markers.length=0;
-  const show=HOTSPOTS.filter(h=>activeFilter==='all'||h.type===activeFilter);
-  if(activeFilter==='custom'||activeFilter==='all') customEvents.forEach(h=>show.push(h));
-  show.forEach(makeMarker);
+  HOTSPOTS.filter(h=>activeFilter==='all'||h.type===activeFilter).forEach(makeMarker);
+  if(activeFilter==='custom'||activeFilter==='all') customEvents.forEach(makeMarker);
 }
 renderMarkers();
 
-// ── INTERACTION ───────────────────────────────────────────────────────────────
+// ── INTERACTION
 const canvas=document.getElementById('c');
 const raycaster=new THREE.Raycaster();
 const mouse=new THREE.Vector2();
-let lastMouse={x:0,y:0};
 
-function getMousePos(e){
-  const r=canvas.getBoundingClientRect();
-  return{x:e.clientX-r.left,y:e.clientY-r.top};
-}
+function mpos(e){const r=canvas.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top};}
 
 canvas.addEventListener('mousedown',e=>{
-  dragging=true; autoRotate=false;
-  const p=getMousePos(e); prevX=p.x; prevY=p.y;
+  dragging=true; isDrag=false; dragDist=0; autoRotate=false;
+  const p=mpos(e); prevX=p.x; prevY=p.y;
 });
 canvas.addEventListener('mouseup',()=>{dragging=false;});
 canvas.addEventListener('mousemove',e=>{
-  const p=getMousePos(e);
-  lastMouse={x:e.clientX,y:e.clientY};
+  const p=mpos(e);
   if(dragging){
-    const dx=p.x-prevX; const dy=p.y-prevY;
+    const dx=p.x-prevX,dy=p.y-prevY;
+    dragDist+=Math.abs(dx)+Math.abs(dy);
+    if(dragDist>5) isDrag=true;
     targetRotY+=dx*0.005; targetRotX+=dy*0.004;
-    targetRotX=Math.max(-Math.PI/2.2,Math.min(Math.PI/2.2,targetRotX));
-    prevX=p.x; prevY=p.y; autoRotate=false;
+    targetRotX=Math.max(-Math.PI/2.1,Math.min(Math.PI/2.1,targetRotX));
+    prevX=p.x; prevY=p.y;
   }
-  // Hover detection
   mouse.x=(p.x/W)*2-1; mouse.y=-(p.y/H)*2+1;
   raycaster.setFromCamera(mouse,camera);
-  const hits=raycaster.intersectObjects(markers.map(m=>m.mesh));
+  const all=markers.flatMap(m=>[m.mesh,m.glow]);
+  const hits=raycaster.intersectObjects(all);
   const tt=document.getElementById('tt');
   if(hits.length){
     const h=hits[0].object.userData.hotspot;
     tt.style.display='block';
-    tt.style.left=(e.clientX+12)+'px';
-    tt.style.top=(e.clientY-8)+'px';
+    tt.style.left=(e.clientX+12)+'px'; tt.style.top=(e.clientY-8)+'px';
     tt.textContent=h.label+' — '+h.sev.toUpperCase();
     canvas.style.cursor='pointer';
   }else{
-    tt.style.display='none';
-    canvas.style.cursor='default';
+    tt.style.display='none'; canvas.style.cursor='default';
   }
 });
 canvas.addEventListener('click',e=>{
-  mouse.x=((e.clientX)/W)*2-1; mouse.y=-((e.clientY)/H)*2+1;
+  if(isDrag) return;
+  mouse.x=(e.clientX/W)*2-1; mouse.y=-(e.clientY/H)*2+1;
   raycaster.setFromCamera(mouse,camera);
-  const hits=raycaster.intersectObjects(markers.map(m=>m.mesh));
-  const ic=document.getElementById('ic');
+  const all=markers.flatMap(m=>[m.mesh,m.glow]);
+  const hits=raycaster.intersectObjects(all);
   if(hits.length){
-    const h=hits[0].object.userData.hotspot;
-    showCard(h,e.clientX,e.clientY);
+    showCard(hits[0].object.userData.hotspot,e.clientX,e.clientY);
   }else{
-    ic.style.display='none';
+    document.getElementById('ic').style.display='none';
   }
 });
 
@@ -381,36 +473,44 @@ function showCard(h,cx,cy){
   document.getElementById('ic-sev').textContent=h.sev.toUpperCase()+' — '+h.type.toUpperCase();
   document.getElementById('ic-ttl').textContent=h.title||h.label;
   document.getElementById('ic-body').textContent=h.body||'';
-  document.getElementById('ic-mkt').textContent=h.mkt?'📊 MARKET EXPOSURE: '+h.mkt:'';
-  const tagsEl=document.getElementById('ic-tags');
-  tagsEl.innerHTML=(h.tags||[]).map(t=>`<span class="ictag">${t}</span>`).join('');
+  document.getElementById('ic-mkt').textContent=h.mkt?'📊 MARKET: '+h.mkt:'';
+  document.getElementById('ic-tags').innerHTML=(h.tags||[]).map(t=>`<span class="ictag">${t}</span>`).join('');
   ic.className='show '+(h.sev||'elevated');
-  // Position card
   let x=cx+18,y=cy-20;
-  if(x+310>W) x=cx-325;
-  if(y+220>H) y=H-230;
-  ic.style.left=x+'px'; ic.style.top=y+'px';
-  ic.style.display='block';
+  if(x+330>W) x=cx-338; if(y+280>H) y=H-285; if(y<50) y=50;
+  ic.style.left=x+'px'; ic.style.top=y+'px'; ic.style.display='block';
 }
 
-// Scroll zoom
+function showCardCenter(h){
+  // Center popup for theater panel clicks
+  const x=Math.max(130,W/2-160);
+  const y=Math.max(60,H/2-140);
+  showCard(h,x,y);
+}
+
 canvas.addEventListener('wheel',e=>{
   e.preventDefault();
-  camera.position.z+=e.deltaY*0.001;
-  camera.position.z=Math.max(1.4,Math.min(5.0,camera.position.z));
+  camera.position.z=Math.max(1.4,Math.min(5.0,camera.position.z+e.deltaY*0.001));
 },{passive:false});
 
-// ── THEATER FLY-TO ────────────────────────────────────────────────────────────
+// ── THEATER FLY-TO (FIXED: rotates globe correctly and opens popup)
 function flyTo(lat,lon){
-  const phi=(90-lat)*Math.PI/180;
-  const theta=(lon+180)*Math.PI/180;
-  targetRotY=theta-Math.PI;
-  targetRotX=-(lat*Math.PI/180)*0.5;
+  // Convert lat/lon to target globe rotation
+  // Globe rotation Y corresponds to -longitude (globe rotates opposite to lon)
+  targetRotY = -lon * Math.PI/180;
+  targetRotX = -lat * Math.PI/180 * 0.5;
   autoRotate=false;
+  camera.position.z=2.25;
+}
+
+function flyToTheater(lat,lon,label){
+  flyTo(lat,lon);
+  const h=HOTSPOTS.find(h=>Math.abs(h.lat-lat)<3&&Math.abs(h.lon-lon)<6);
+  if(h) setTimeout(()=>showCardCenter(h),700);
 }
 window.flyTo=flyTo;
+window.flyToTheater=flyToTheater;
 
-// ── FILTER ────────────────────────────────────────────────────────────────────
 function setFilter(f,btn){
   activeFilter=f;
   document.querySelectorAll('.fbtn').forEach(b=>b.classList.remove('on'));
@@ -419,69 +519,48 @@ function setFilter(f,btn){
 }
 window.setFilter=setFilter;
 
-// ── ADD CUSTOM EVENT ──────────────────────────────────────────────────────────
 function addCustomEvent(){
   const title=document.getElementById('ae-title').value;
   const lat=parseFloat(document.getElementById('ae-lat').value);
   const lon=parseFloat(document.getElementById('ae-lon').value);
-  const desc=document.getElementById('ae-desc').value;
-  const sev=document.getElementById('ae-sev').value;
-  const mkt=document.getElementById('ae-mkt').value;
   if(!title||isNaN(lat)||isNaN(lon)) return;
-  customEvents.push({lat,lon,label:title,sev,type:'custom',title,body:desc,mkt,tags:['CUSTOM']});
+  customEvents.push({lat,lon,label:title,sev:document.getElementById('ae-sev').value,type:'custom',
+    title,body:document.getElementById('ae-desc').value,mkt:document.getElementById('ae-mkt').value,tags:['CUSTOM']});
   document.getElementById('adddlg').classList.remove('show');
   renderMarkers();
 }
 window.addCustomEvent=addCustomEvent;
 
-// ── ANIMATION LOOP ────────────────────────────────────────────────────────────
+// ── ANIMATION
 let lastT=0;
 function animate(t){
   requestAnimationFrame(animate);
   const dt=Math.min((t-lastT)/1000,0.05); lastT=t;
-
-  if(autoRotate) targetRotY+=dt*0.08;
-
-  rotX+=(targetRotX-rotX)*0.08;
-  rotY+=(targetRotY-rotY)*0.08;
-
-  if(globeMesh){
-    globeMesh.rotation.x=rotX;
-    globeMesh.rotation.y=rotY;
-  }
-  scene.children.forEach(obj=>{
-    if(obj.userData.pulse!==undefined&&!obj.userData.hotspot){return;}
-  });
-  // Rotate markers with globe
-  markers.forEach(({mesh,ring,hotspot,basePos})=>{
-    const euler=new THREE.Euler(rotX,rotY,0,'XYZ');
-    const quat=new THREE.Quaternion().setFromEuler(euler);
-    const rotated=basePos.clone().applyQuaternion(quat);
-    mesh.position.copy(rotated);
-    ring.position.copy(rotated);
+  if(autoRotate) targetRotY+=dt*0.07;
+  rotX+=(targetRotX-rotX)*0.06;
+  rotY+=(targetRotY-rotY)*0.06;
+  if(globeMesh){globeMesh.rotation.x=rotX;globeMesh.rotation.y=rotY;}
+  if(cloudMesh){cloudMesh.rotation.x=rotX;cloudMesh.rotation.y=rotY+t*0.00004;}
+  markers.forEach(({mesh,ring,glow,basePos})=>{
+    const quat=new THREE.Quaternion().setFromEuler(new THREE.Euler(rotX,rotY,0,'XYZ'));
+    const rp=basePos.clone().applyQuaternion(quat);
+    mesh.position.copy(rp); ring.position.copy(rp); glow.position.copy(rp);
     ring.lookAt(camera.position);
-    // Pulse
-    const p=ring.userData.phase||0;
-    ring.userData.phase=(p||0)+dt*2;
-    ring.material.opacity=0.3+0.25*Math.sin(ring.userData.phase);
-    const scl=1+0.15*Math.sin(ring.userData.phase);
-    ring.scale.set(scl,scl,1);
-    // Hide markers on back of globe
-    const toCamera=camera.position.clone().sub(rotated).normalize();
-    const normal=rotated.clone().normalize();
-    mesh.visible=toCamera.dot(normal)>0.1;
-    ring.visible=toCamera.dot(normal)>0.1;
+    ring.userData.phase=(ring.userData.phase||0)+dt*2.2;
+    ring.material.opacity=0.2+0.35*Math.sin(ring.userData.phase);
+    const s=1+0.2*Math.sin(ring.userData.phase);
+    ring.scale.set(s,s,1);
+    glow.material.opacity=0.04+0.12*Math.abs(Math.sin(ring.userData.phase*.7));
+    const vis=camera.position.clone().sub(rp).normalize().dot(rp.clone().normalize())>0.08;
+    mesh.visible=ring.visible=glow.visible=vis;
   });
-
   renderer.render(scene,camera);
 }
 animate(0);
 
-// Resize
 window.addEventListener('resize',()=>{
   const w=window.innerWidth,h=window.innerHeight;
-  camera.aspect=w/h; camera.updateProjectionMatrix();
-  renderer.setSize(w,h);
+  camera.aspect=w/h; camera.updateProjectionMatrix(); renderer.setSize(w,h);
 });
 </script>
 </body>
