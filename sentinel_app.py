@@ -220,13 +220,21 @@ section.main > div.block-container {
 .sec-cell.up { background: rgba(0,204,68,0.08); border-left: 3px solid var(--grn); }
 .sec-cell.dn { background: rgba(255,68,68,0.08); border-left: 3px solid var(--red); }
 
-/* GAINERS/LOSERS */
+/* GAINERS/LOSERS - wider grid */
 .mover-row {
-  display: grid; grid-template-columns: 75px 110px 80px 80px;
-  gap: 6px; padding: 5px 8px; border-bottom: 1px solid var(--bg3);
-  font-family: var(--mono); font-size: 11px; align-items: center;
+  display: grid; grid-template-columns: 70px 105px 80px 80px 80px;
+  gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--bg3);
+  font-family: var(--mono); font-size: 12px; align-items: center; width:100%;
 }
 .mover-row:hover { background: var(--bg2); }
+
+/* FUTURES ROW */
+.fut-row {
+  display: grid; grid-template-columns: 90px 130px 120px 75px 85px 85px;
+  gap: 6px; padding: 5px 10px; border-bottom: 1px solid var(--bg3);
+  font-family: var(--mono); font-size: 12px; align-items: center; width:100%;
+}
+.fut-row:hover { background: var(--bg2); }
 
 /* THEATER */
 .theater-row {
@@ -260,13 +268,13 @@ section.main > div.block-container {
 /* EARN */
 .earn-card {
   background: var(--bg1); border: 1px solid var(--ghost); border-left: 3px solid var(--blu);
-  padding: 8px 12px; margin: 3px 0; display: grid;
-  grid-template-columns: 75px 1fr auto auto auto;
-  gap: 10px; align-items: center; font-family: var(--mono); font-size: 11px;
+  padding: 10px 14px; margin: 3px 0; display: grid;
+  grid-template-columns: 85px 1fr auto auto auto;
+  gap: 12px; align-items: center; font-family: var(--mono); font-size: 11px;
 }
 .earn-card:hover { background: var(--bg2); }
-.earn-ticker { color: var(--org); font-weight: 700; font-size: 13px; }
-.earn-date { color: var(--wht); font-weight: 600; }
+.earn-ticker { color: var(--org); font-weight: 700; font-size: 16px; }
+.earn-date { color: var(--wht); font-weight: 700; font-size: 13px; }
 
 /* CAPS */
 [data-testid="column"] { padding: 0 4px !important; }
@@ -284,7 +292,7 @@ DEFAULTS = {
     "chat_history":[],
     "watchlist":["SPY","QQQ","NVDA","AAPL","GLD","TLT","BTC-USD"],
     "macro_theses":"", "geo_watch":"",
-    "wl_add_input":"", "api_panel_open": False,
+    "wl_add_input":"", "api_panel_open": True,  # Open by default
 }
 for k,v in DEFAULTS.items():
     if k not in st.session_state: st.session_state[k]=v
@@ -299,33 +307,22 @@ with st.sidebar:
   <div style="color:#000;font-size:9px;opacity:0.6">{now_pst()}</div>
 </div>""", unsafe_allow_html=True)
 
-    # ── API KEY TOGGLE BUTTON ──
-    api_btn_label = "🔑 HIDE API KEYS ▲" if st.session_state.api_panel_open else "🔑 CONFIGURE API KEYS ▼"
-    if st.button(api_btn_label, use_container_width=True, key="api_toggle"):
-        st.session_state.api_panel_open = not st.session_state.api_panel_open
-        st.rerun()
-
-    if st.session_state.api_panel_open:
-        st.markdown('<div style="color:#FF6600;font-size:9px;letter-spacing:2px;font-weight:700;margin-top:6px">API KEYS</div>', unsafe_allow_html=True)
-        with st.expander("🤖 Gemini AI — Required", expanded=not bool(st.session_state.gemini_key)):
-            st.caption("[aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)")
-            st.session_state.gemini_key = st.text_input("Gemini Key", value=st.session_state.gemini_key, type="password", key="gk")
-
-        with st.expander("📊 Finnhub"):
-            st.caption("[finnhub.io/register](https://finnhub.io/register)")
-            st.session_state.finnhub_key = st.text_input("Finnhub Key", value=st.session_state.finnhub_key, type="password", key="fhk")
-
-        with st.expander("📈 FRED Macro"):
-            st.caption("[fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html)")
-            st.session_state.fred_key = st.text_input("FRED Key", value=st.session_state.fred_key, type="password", key="frk")
-
-        with st.expander("📰 NewsAPI"):
-            st.caption("[newsapi.org/register](https://newsapi.org/register)")
-            st.session_state.newsapi_key = st.text_input("NewsAPI Key", value=st.session_state.newsapi_key, type="password", key="nak")
-
-        with st.expander("💰 CoinGecko"):
-            st.caption("[coingecko.com](https://www.coingecko.com/en/api/pricing)")
-            st.session_state.coingecko_key = st.text_input("CoinGecko Key", value=st.session_state.coingecko_key, type="password", key="cgk")
+    st.markdown('<div style="color:#FF6600;font-size:9px;letter-spacing:2px;font-weight:700;margin-bottom:6px">🔑 API KEYS</div>', unsafe_allow_html=True)
+    with st.expander("🤖 Gemini AI — Required", expanded=not bool(st.session_state.gemini_key)):
+        st.caption("[aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)")
+        st.session_state.gemini_key = st.text_input("Gemini Key", value=st.session_state.gemini_key, type="password", key="gk")
+    with st.expander("📊 Finnhub"):
+        st.caption("[finnhub.io/register](https://finnhub.io/register)")
+        st.session_state.finnhub_key = st.text_input("Finnhub Key", value=st.session_state.finnhub_key, type="password", key="fhk")
+    with st.expander("📈 FRED Macro"):
+        st.caption("[fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html)")
+        st.session_state.fred_key = st.text_input("FRED Key", value=st.session_state.fred_key, type="password", key="frk")
+    with st.expander("📰 NewsAPI"):
+        st.caption("[newsapi.org/register](https://newsapi.org/register)")
+        st.session_state.newsapi_key = st.text_input("NewsAPI Key", value=st.session_state.newsapi_key, type="password", key="nak")
+    with st.expander("💰 CoinGecko"):
+        st.caption("[coingecko.com](https://www.coingecko.com/en/api/pricing)")
+        st.session_state.coingecko_key = st.text_input("CoinGecko Key", value=st.session_state.coingecko_key, type="password", key="cgk")
 
     st.markdown('<hr style="border-top:1px solid #222;margin:8px 0">', unsafe_allow_html=True)
     st.markdown('<div style="color:#FF6600;font-size:9px;letter-spacing:2px;font-weight:700">STATUS</div>', unsafe_allow_html=True)
@@ -381,13 +378,60 @@ def pct_color(v):
 
 @st.cache_data(ttl=300)
 def yahoo_quote(ticker):
+    # Map problematic tickers
+    TICKER_MAP = {"DXY":"DX-Y.NYB", "$DXY":"DX-Y.NYB"}
+    t = TICKER_MAP.get(ticker, ticker)
     try:
-        h = yf.Ticker(ticker).history(period="2d")
+        h = yf.Ticker(t).history(period="2d")
         if h.empty: return None
         price = h["Close"].iloc[-1]; prev = h["Close"].iloc[-2] if len(h)>1 else price
         chg = price-prev; pct = chg/prev*100; vol = int(h["Volume"].iloc[-1]) if "Volume" in h.columns else 0
         return {"ticker":ticker,"price":round(price,2),"change":round(chg,2),"pct":round(pct,2),"volume":vol}
     except: return None
+
+@st.cache_data(ttl=120)
+def get_futures():
+    """Fetch key futures contracts"""
+    FUTURES = [
+        ("ES=F","S&P 500 Fut"),("NQ=F","Nasdaq Fut"),("YM=F","Dow Fut"),
+        ("RTY=F","Russell Fut"),("ZN=F","10Y Bond Fut"),("CL=F","WTI Crude"),
+        ("GC=F","Gold"),("SI=F","Silver"),("NG=F","Nat Gas"),
+        ("ZW=F","Wheat"),("ZC=F","Corn"),("DX=F","USD Index"),
+    ]
+    rows=[]
+    for ticker, name in FUTURES:
+        try:
+            h=yf.Ticker(ticker).history(period="2d")
+            if h.empty: continue
+            price=h["Close"].iloc[-1]; prev=h["Close"].iloc[-2] if len(h)>1 else price
+            chg=price-prev; pct=chg/prev*100
+            rows.append({"ticker":ticker,"name":name,"price":round(price,2),
+                          "change":round(chg,2),"pct":round(pct,2)})
+        except: pass
+    return rows
+
+@st.cache_data(ttl=300)
+def get_heatmap_data():
+    """Fetch S&P sector heatmap data for FinViz-style display"""
+    SECTOR_STOCKS = {
+        "Technology":["AAPL","MSFT","NVDA","AVGO","META","ORCL","AMD","INTC","QCOM","TXN","ADBE","CRM","INTU","IBM","ACN"],
+        "Healthcare":["UNH","JNJ","LLY","ABBV","MRK","TMO","ABT","PFE","DHR","BMY","ISRG","GILD","MDT","CVS","CI"],
+        "Financials":["JPM","BAC","WFC","GS","MS","BLK","C","AXP","COF","PGR","ICE","CME","SPGI","V","MA"],
+        "Consumer Disc":["AMZN","TSLA","HD","MCD","NKE","LOW","BKNG","TJX","SBUX","MAR","TGT","ROST","ORLY","DHI"],
+        "Comm Svcs":["GOOGL","META","DIS","NFLX","T","VZ","CMCSA","TMUS","EA","TTWO"],
+        "Industrials":["GE","RTX","CAT","HON","UNP","LMT","DE","WM","NSC","ITW","ETN","PH","GD","BA"],
+        "Energy":["XOM","CVX","COP","SLB","EOG","PSX","MPC","OXY","VLO","HAL","DVN","BKR"],
+        "Consumer Stap":["WMT","PG","KO","PEP","PM","MO","CL","GIS","KHC","KMB","SYY"],
+        "Utilities":["NEE","DUK","SO","AEP","D","EXC","PCG","SRE","XEL","CEG"],
+        "Materials":["LIN","APD","ECL","SHW","NEM","FCX","NUE","VMC","ALB","MOS"],
+        "Real Estate":["PLD","AMT","CCI","EQIX","PSA","SPG","WELL","O","DLR","AVB"],
+    }
+    rows=[]
+    for sector, tickers in SECTOR_STOCKS.items():
+        for tkr in tickers:
+            q=yahoo_quote(tkr)
+            if q: rows.append({"ticker":tkr,"sector":sector,"pct":q["pct"],"price":q["price"],"change":q["change"]})
+    return rows
 
 @st.cache_data(ttl=300)
 def multi_quotes(tickers):
@@ -477,13 +521,27 @@ def _is_english(text):
 
 @st.cache_data(ttl=600)
 def gdelt_news(query, max_rec=15):
-    try:
-        r = requests.get("https://api.gdeltproject.org/api/v2/doc/doc",
-            params={"query":query+" sourcelang:english","mode":"artlist","maxrecords":max_rec,
-                    "format":"json","timespan":"48h"},timeout=14)
-        arts = r.json().get("articles",[])
-        return [a for a in arts if _is_english(a.get("title",""))][:12]
-    except: return []
+    """Fetch from GDELT with multiple endpoint fallbacks"""
+    # Try V2 artlist first, then V2 timelinevol, then older format
+    endpoints = [
+        {"url":"https://api.gdeltproject.org/api/v2/doc/doc",
+         "params":{"query":query+" sourcelang:english","mode":"artlist","maxrecords":max_rec,
+                   "format":"json","timespan":"72h"}},
+        {"url":"https://api.gdeltproject.org/api/v2/doc/doc",
+         "params":{"query":query+" sourcelang:english","mode":"artlist","maxrecords":max_rec,
+                   "format":"json","timespan":"168h"}},  # fallback to 7 days
+    ]
+    for ep in endpoints:
+        try:
+            r = requests.get(ep["url"], params=ep["params"], timeout=18)
+            if r.status_code != 200: continue
+            data = r.json()
+            arts = data.get("articles", [])
+            if arts:
+                filtered = [a for a in arts if _is_english(a.get("title",""))][:max_rec]
+                if filtered: return filtered
+        except Exception: continue
+    return []
 
 @st.cache_data(ttl=300)
 def newsapi_headlines(key, query="stock market finance"):
@@ -579,7 +637,7 @@ def detect_unusual_poly(markets):
 
 def market_snapshot_str():
     try:
-        qs = multi_quotes(["SPY","QQQ","DXY","GLD","BTC-USD"])
+        qs = multi_quotes(["SPY","QQQ","DX-Y.NYB","GLD","BTC-USD"])
         parts = [f"{q['ticker']}: ${q['price']:,.2f} ({q['pct']:+.2f}%)" for q in qs]
         v = vix_price()
         if v: parts.append(f"VIX: {v}")
@@ -945,9 +1003,7 @@ def render_poly_card(m, show_unusual=False):
 st.markdown(f"""
 <div style="background:#FF6600;padding:5px 14px;display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
   <div style="display:flex;align-items:center;gap:14px">
-    <span id="sentinel-logo" onclick="document.querySelector('[data-testid=\\"stSidebar\\"] button').click()"
-      style="font-size:20px;font-weight:900;letter-spacing:5px;color:#000;font-family:monospace;cursor:pointer;user-select:none"
-      title="Click to toggle API keys">⚡ SENTINEL</span>
+    <span style="font-size:20px;font-weight:900;letter-spacing:5px;color:#000;font-family:monospace">⚡ SENTINEL</span>
     <span style="font-size:10px;color:#000;background:rgba(0,0,0,0.15);padding:2px 8px">PROFESSIONAL INTELLIGENCE</span>
   </div>
   <div style="font-size:10px;color:#000;opacity:0.75">{now_pst()} &nbsp;|&nbsp; LIVE</div>
@@ -965,7 +1021,7 @@ with tabs[0]:
         st.cache_data.clear(); st.rerun()
 
     KEY_T = {"SPY":"S&P 500","QQQ":"Nasdaq 100","DIA":"Dow Jones","IWM":"Russell 2K",
-             "^TNX":"10Y Yield","DXY":"USD Index","GLD":"Gold","CL=F":"WTI Crude","BTC-USD":"Bitcoin"}
+             "^TNX":"10Y Yield","DX-Y.NYB":"USD Index","GLD":"Gold","CL=F":"WTI Crude","BTC-USD":"Bitcoin"}
     qs = multi_quotes(list(KEY_T.keys()))
     cols = st.columns(len(qs))
     for col, q in zip(cols, qs):
@@ -1132,23 +1188,73 @@ with tabs[1]:
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-    # ── Top Gainers & Losers
+    # ── FUTURES TRACKER ──────────────────────────────────────────
+    st.markdown('<div class="bb-ph">📡 FUTURES — LIVE TRACKING</div>', unsafe_allow_html=True)
+    with st.spinner("Loading futures…"):
+        fut_data = get_futures()
+    if fut_data:
+        st.markdown(
+            '<div class="fut-row" style="color:#FF6600;font-size:9px;letter-spacing:1px;border-bottom:1px solid #FF6600">'
+            '<span>CONTRACT</span><span>NAME</span><span>PRICE</span><span>CHG%</span><span>CHG $</span><span>SIGNAL</span>'
+            '</div>', unsafe_allow_html=True)
+        for f in fut_data:
+            c = "#00CC44" if f["pct"]>=0 else "#FF4444"
+            arr = "▲" if f["pct"]>=0 else "▼"
+            sig_lbl = "BULL" if f["pct"]>=0.5 else ("BEAR" if f["pct"]<=-0.5 else "FLAT")
+            sig_c = "#00CC44" if sig_lbl=="BULL" else ("#FF4444" if sig_lbl=="BEAR" else "#555")
+            st.markdown(
+                f'<div class="fut-row">'
+                f'<span style="color:#FF6600;font-weight:700">{f["ticker"]}</span>'
+                f'<span style="color:#AAA;font-size:10px">{f["name"]}</span>'
+                f'<span style="color:#FFF;font-weight:600">{fmt_p(f["price"])}</span>'
+                f'<span style="color:{c};font-weight:700">{arr}{abs(f["pct"]):.2f}%</span>'
+                f'<span style="color:{c}">{"+"+str(f["change"]) if f["change"]>=0 else str(f["change"])}</span>'
+                f'<span style="color:{sig_c};font-size:10px;font-weight:700">{sig_lbl}</span>'
+                f'</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Futures data loading…</p>', unsafe_allow_html=True)
+
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+    # ── Top Gainers & Losers — FULL WIDTH ─────────────────────────
     st.markdown('<div class="bb-ph">🏆 TOP MOVERS — S&P 100 UNIVERSE</div>', unsafe_allow_html=True)
     with st.spinner("Scanning universe for top movers…"):
         gainers, losers = top_movers()
     gco, lco = st.columns(2)
     with gco:
-        st.markdown('<div style="color:#00CC44;font-size:10px;font-weight:700;letter-spacing:1px;margin-bottom:4px">▲ TOP GAINERS</div>', unsafe_allow_html=True)
-        st.markdown('<div class="mover-row" style="color:#FF6600;font-size:9px"><span>TICKER</span><span>PRICE</span><span>CHG%</span><span>VOLUME</span></div>', unsafe_allow_html=True)
+        st.markdown('<div style="color:#00CC44;font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:4px">▲ TOP GAINERS</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="mover-row" style="color:#FF6600;font-size:9px;letter-spacing:1px;border-bottom:1px solid #FF6600">'
+            '<span>TICKER</span><span>PRICE</span><span>CHG%</span><span>CHG $</span><span>VOLUME</span>'
+            '</div>', unsafe_allow_html=True)
         for q in gainers:
             vol = f"{q['volume']/1e6:.1f}M" if q["volume"]>1e6 else f"{q['volume']/1e3:.0f}K"
-            st.markdown(f'<div class="mover-row"><span style="color:#FF6600;font-weight:700">{q["ticker"]}</span><span style="color:#FFF">{fmt_p(q["price"])}</span><span class="up">+{q["pct"]:.2f}%</span><span style="color:#555;font-size:10px">{vol}</span></div>', unsafe_allow_html=True)
+            chg_str = f"+${q['change']:.2f}"
+            st.markdown(
+                f'<div class="mover-row">'
+                f'<span style="color:#FF6600;font-weight:700">{q["ticker"]}</span>'
+                f'<span style="color:#FFF;font-weight:600">{fmt_p(q["price"])}</span>'
+                f'<span class="up" style="font-weight:700">+{q["pct"]:.2f}%</span>'
+                f'<span style="color:#00CC44">{chg_str}</span>'
+                f'<span style="color:#555;font-size:10px">{vol}</span>'
+                f'</div>', unsafe_allow_html=True)
     with lco:
-        st.markdown('<div style="color:#FF4444;font-size:10px;font-weight:700;letter-spacing:1px;margin-bottom:4px">▼ TOP LOSERS</div>', unsafe_allow_html=True)
-        st.markdown('<div class="mover-row" style="color:#FF6600;font-size:9px"><span>TICKER</span><span>PRICE</span><span>CHG%</span><span>VOLUME</span></div>', unsafe_allow_html=True)
+        st.markdown('<div style="color:#FF4444;font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:4px">▼ TOP LOSERS</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="mover-row" style="color:#FF6600;font-size:9px;letter-spacing:1px;border-bottom:1px solid #FF6600">'
+            '<span>TICKER</span><span>PRICE</span><span>CHG%</span><span>CHG $</span><span>VOLUME</span>'
+            '</div>', unsafe_allow_html=True)
         for q in losers:
             vol = f"{q['volume']/1e6:.1f}M" if q["volume"]>1e6 else f"{q['volume']/1e3:.0f}K"
-            st.markdown(f'<div class="mover-row"><span style="color:#FF6600;font-weight:700">{q["ticker"]}</span><span style="color:#FFF">{fmt_p(q["price"])}</span><span class="dn">{q["pct"]:.2f}%</span><span style="color:#555;font-size:10px">{vol}</span></div>', unsafe_allow_html=True)
+            chg_str = f"-${abs(q['change']):.2f}"
+            st.markdown(
+                f'<div class="mover-row">'
+                f'<span style="color:#FF6600;font-weight:700">{q["ticker"]}</span>'
+                f'<span style="color:#FFF;font-weight:600">{fmt_p(q["price"])}</span>'
+                f'<span class="dn" style="font-weight:700">{q["pct"]:.2f}%</span>'
+                f'<span style="color:#FF4444">{chg_str}</span>'
+                f'<span style="color:#555;font-size:10px">{vol}</span>'
+                f'</div>', unsafe_allow_html=True)
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
@@ -1162,7 +1268,72 @@ with tabs[1]:
             text=ss["Pct"].apply(lambda x: f"{x:+.2f}%"),textposition="outside",
             textfont=dict(color="#FF8C00",size=10)))
         fig2.update_layout(**CHART_LAYOUT,height=350,xaxis_title="% Change",margin=dict(l=0,r=70,t=10,b=0))
-        st.plotly_chart(fig2,use_container_width=True)
+        st.plotly_chart(fig2, width="stretch")
+
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+    # ── FinViz-Style Market Heatmap
+    st.markdown('<div class="bb-ph">🗺 S&P 500 MARKET HEATMAP — FINVIZ STYLE</div>', unsafe_allow_html=True)
+    with st.spinner("Building heatmap (scanning ~120 stocks)…"):
+        hm_data = get_heatmap_data()
+    if hm_data:
+        hm_df = pd.DataFrame(hm_data)
+        hm_df["pct_capped"] = hm_df["pct"].clip(-5, 5)
+        hm_df["label"] = hm_df.apply(lambda r: f"{r['ticker']}<br>{r['pct']:+.2f}%", axis=1)
+
+        # Build treemap with proper root structure
+        # Add sector rows (parent = "")
+        sectors = hm_df["sector"].unique().tolist()
+        sec_rows = pd.DataFrame({
+            "label": sectors, "sector": [""] * len(sectors),
+            "pct_capped": [0]*len(sectors), "values": [1]*len(sectors),
+            "ticker": sectors, "price": [0]*len(sectors),
+            "pct": [0]*len(sectors), "change": [0]*len(sectors),
+        })
+        stock_rows = hm_df.copy()
+        stock_rows["values"] = 1
+
+        all_labels    = list(sec_rows["label"]) + list(stock_rows["label"])
+        all_parents   = list(sec_rows["sector"]) + list(stock_rows["sector"])
+        all_values    = list(sec_rows["values"]) + list(stock_rows["values"])
+        all_colors    = [0.0]*len(sec_rows) + list(stock_rows["pct_capped"])
+        all_custom    = [[r, 0, 0, 0, r] for r in sectors] + list(stock_rows[["ticker","price","pct","change","sector"]].values.tolist())
+
+        fig_hm = go.Figure(go.Treemap(
+            labels=all_labels, parents=all_parents, values=all_values,
+            customdata=all_custom,
+            hovertemplate="<b>%{customdata[0]}</b><br>Price: $%{customdata[1]:.2f}<br>Change: %{customdata[2]:+.2f}%<br>$Change: %{customdata[3]:+.2f}<extra></extra>",
+            marker=dict(
+                colors=all_colors,
+                colorscale=[
+                    [0.0,  "#8B0000"],
+                    [0.3,  "#CC2222"],
+                    [0.45, "#441111"],
+                    [0.5,  "#111111"],
+                    [0.55, "#114411"],
+                    [0.7,  "#22AA44"],
+                    [1.0,  "#007A2F"],
+                ],
+                cmid=0, cmin=-5, cmax=5,
+                showscale=True,
+                colorbar=dict(
+                    title=dict(text="% CHG", font=dict(color="#FF6600",size=10)),
+                    tickfont=dict(color="#888",size=9),
+                    thickness=10, len=0.6, bgcolor="#050505", bordercolor="#333",
+                ),
+                line=dict(width=1, color="#1a1a1a"),
+            ),
+            textfont=dict(color="#FFFFFF", size=11),
+            tiling=dict(squarifyratio=1.618),
+            pathbar=dict(visible=False),
+        ))
+        fig_hm.update_layout(
+            paper_bgcolor="#000000", plot_bgcolor="#000000",
+            font=dict(color="#FF8C00", family="IBM Plex Mono"),
+            height=580, margin=dict(l=0,r=0,t=10,b=0),
+        )
+        st.plotly_chart(fig_hm, width="stretch")
+    else:
+        st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Heatmap data loading… (requires fetching ~120 stocks)</p>', unsafe_allow_html=True)
 
     # ── Market news
     if st.session_state.finnhub_key:
@@ -1196,7 +1367,7 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
             with st.spinner("Loading yield curve…"):
                 fig_yc = yield_curve_chart(st.session_state.fred_key, 260)
             if fig_yc:
-                st.plotly_chart(fig_yc, use_container_width=True)
+                st.plotly_chart(fig_yc, width="stretch")
                 # Spread signal
                 df_2y = fred_series("DGS2", st.session_state.fred_key, 3)
                 df_10y = fred_series("DGS10", st.session_state.fred_key, 3)
@@ -1229,7 +1400,7 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
         with st.spinner("Loading yield history…"):
             fig_hist = yield_history_chart(st.session_state.fred_key, 240)
         if fig_hist:
-            st.plotly_chart(fig_hist, use_container_width=True)
+            st.plotly_chart(fig_hist, width="stretch")
         else:
             st.markdown('<p style="color:#555;font-family:monospace">Yield history data loading…</p>', unsafe_allow_html=True)
 
@@ -1341,81 +1512,101 @@ with tabs[4]:
         if poly_search:
             top10 = [m for m in active_markets if poly_search.lower() in str(m.get("question","")).lower()][:10]
 
-        # ── VISUALIZATIONS ROW ──────────────────────────────────────
+        # ── VISUALIZATIONS — STACKED VERTICALLY ─────────────────
         st.markdown('<div class="bb-ph" style="margin-top:10px">📊 MARKET INTELLIGENCE DASHBOARD</div>', unsafe_allow_html=True)
 
         if top10:
-            viz1, viz2, viz3 = st.columns(3)
+            # Build clickable labels with URLs
+            def make_poly_label(m, max_len=35):
+                q = m.get("question","")
+                url = poly_url(m)
+                short = q[:max_len]+"…" if len(q)>max_len else q
+                return short, url
 
-            # Chart 1: 24h Volume bar chart
-            with viz1:
-                labels = [m.get("question","")[:28]+"…" if len(m.get("question",""))>28 else m.get("question","") for m in top10]
-                vols   = [_safe_float(m.get("volume24hr",0))/1e3 for m in top10]  # in $K
-                colors = ["#FF6600" if i==0 else "#AA3300" if i<3 else "#662200" for i in range(len(top10))]
-                fig_vol = dark_fig(280)
-                fig_vol.add_trace(go.Bar(
-                    x=vols, y=labels, orientation="h",
-                    marker=dict(color=colors, line=dict(width=0)),
-                    text=[f"${v:.0f}K" for v in vols], textposition="outside",
-                    textfont=dict(size=9, color="#FF8C00")
-                ))
-                fig_vol.update_layout(
-                    margin=dict(l=0,r=60,t=28,b=0), height=280,
-                    title=dict(text="24H VOLUME ($K)", font=dict(size=10,color="#FF6600"), x=0),
-                    xaxis=dict(showgrid=False, color="#444"),
-                    yaxis=dict(autorange="reversed", tickfont=dict(size=8,color="#888"))
-                )
-                st.plotly_chart(fig_vol, use_container_width=True)
+            labels_with_url = [make_poly_label(m) for m in top10]
+            labels = [l for l,u in labels_with_url]
+            urls   = [u for l,u in labels_with_url]
 
-            # Chart 2: YES probability scatter
-            with viz2:
-                y_probs, y_names = [], []
+            # Chart 1: 24h Volume bar chart (full width)
+            vols   = [_safe_float(m.get("volume24hr",0))/1e3 for m in top10]
+            colors = ["#FF6600" if i==0 else "#AA3300" if i<3 else "#662200" for i in range(len(top10))]
+            fig_vol = dark_fig(320)
+            fig_vol.add_trace(go.Bar(
+                x=vols, y=labels, orientation="h",
+                marker=dict(color=colors, line=dict(width=0)),
+                text=[f"${v:,.0f}K" for v in vols], textposition="outside",
+                textfont=dict(size=10, color="#FF8C00"),
+                customdata=urls,
+            ))
+            fig_vol.update_layout(
+                margin=dict(l=10,r=80,t=32,b=0), height=320,
+                title=dict(text="24H VOLUME ($K) — Click bars to open market", font=dict(size=11,color="#FF6600"), x=0),
+                xaxis=dict(showgrid=False, color="#444"),
+                yaxis=dict(autorange="reversed", tickfont=dict(size=9,color="#CCC"))
+            )
+            st.plotly_chart(fig_vol, width="stretch")
+
+            # Clickable market links below chart 1
+            with st.expander("🔗 CLICK TO OPEN MARKETS", expanded=False):
                 for m in top10:
+                    q = m.get("question","")[:70]
+                    url = poly_url(m)
                     pp = _parse_poly_field(m.get("outcomePrices",[]))
                     p = _safe_float(pp[0])*100 if pp else 50
-                    y_probs.append(round(p,1))
-                    y_names.append(m.get("question","")[:28])
-                bar_colors = ["#00CC44" if p>=50 else "#FF4444" for p in y_probs]
-                fig_prob = dark_fig(280)
-                fig_prob.add_trace(go.Bar(
-                    x=y_probs, y=y_names, orientation="h",
-                    marker=dict(color=bar_colors, line=dict(width=0)),
-                    text=[f"{p:.0f}%" for p in y_probs], textposition="outside",
-                    textfont=dict(size=9, color="#CCCCCC")
-                ))
-                fig_prob.add_vline(x=50, line_dash="dash", line_color="#555", opacity=0.6)
-                fig_prob.update_layout(
-                    margin=dict(l=0,r=50,t=28,b=0), height=280,
-                    title=dict(text="YES PROBABILITY (%)", font=dict(size=10,color="#FF6600"), x=0),
-                    xaxis=dict(range=[0,110], showgrid=False, color="#444"),
-                    yaxis=dict(autorange="reversed", tickfont=dict(size=8,color="#888"))
-                )
-                st.plotly_chart(fig_prob, use_container_width=True)
+                    c = "#00CC44" if p>=50 else "#FF4444"
+                    st.markdown(f'<div style="padding:3px 0;font-family:monospace;font-size:11px"><a href="{url}" target="_blank" style="color:#FF6600">↗ {_esc(q)}</a> <span style="color:{c};font-weight:700">{p:.0f}%</span></div>', unsafe_allow_html=True)
 
-            # Chart 3: Total volume vs 24h volume (activity ratio)
-            with viz3:
-                ratios = []
-                for m in top10:
-                    v24 = _safe_float(m.get("volume24hr",0))
-                    vt  = _safe_float(m.get("volume",1))
-                    ratios.append(round(v24/vt*100,1) if vt>0 else 0)
-                r_names = [m.get("question","")[:28] for m in top10]
-                r_colors = ["#FF4444" if r>=38 else "#FF6600" if r>=20 else "#333333" for r in ratios]
-                fig_ratio = dark_fig(280)
-                fig_ratio.add_trace(go.Bar(
-                    x=ratios, y=r_names, orientation="h",
-                    marker=dict(color=r_colors, line=dict(width=0)),
-                    text=[f"{r:.0f}%" for r in ratios], textposition="outside",
-                    textfont=dict(size=9, color="#CCCCCC")
-                ))
-                fig_ratio.add_vline(x=38, line_dash="dash", line_color="#FF4444", opacity=0.5)
-                fig_ratio.update_layout(
-                    margin=dict(l=0,r=50,t=28,b=0), height=280,
-                    title=dict(text="24H / TOTAL VOL RATIO (≥38% = UNUSUAL)", font=dict(size=10,color="#FF6600"), x=0),
-                    xaxis=dict(range=[0,110], showgrid=False, color="#444"),
-                    yaxis=dict(autorange="reversed", tickfont=dict(size=8,color="#888"))
-                )
-                st.plotly_chart(fig_ratio, use_container_width=True)
+            st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+            # Chart 2: YES probability (full width)
+            y_probs = []
+            for m in top10:
+                pp = _parse_poly_field(m.get("outcomePrices",[]))
+                p = _safe_float(pp[0])*100 if pp else 50
+                y_probs.append(round(p,1))
+            bar_colors = ["#00CC44" if p>=50 else "#FF4444" for p in y_probs]
+            fig_prob = dark_fig(320)
+            fig_prob.add_trace(go.Bar(
+                x=y_probs, y=labels, orientation="h",
+                marker=dict(color=bar_colors, line=dict(width=0)),
+                text=[f"{p:.0f}%" for p in y_probs], textposition="outside",
+                textfont=dict(size=10, color="#CCCCCC"),
+                customdata=urls,
+            ))
+            fig_prob.add_vline(x=50, line_dash="dash", line_color="#555", opacity=0.6)
+            fig_prob.update_layout(
+                margin=dict(l=10,r=60,t=32,b=0), height=320,
+                title=dict(text="YES PROBABILITY (%)", font=dict(size=11,color="#FF6600"), x=0),
+                xaxis=dict(range=[0,115], showgrid=False, color="#444"),
+                yaxis=dict(autorange="reversed", tickfont=dict(size=9,color="#CCC"))
+            )
+            st.plotly_chart(fig_prob, width="stretch")
+
+            st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+            # Chart 3: Activity ratio (full width)
+            ratios = []
+            for m in top10:
+                v24 = _safe_float(m.get("volume24hr",0))
+                vt  = _safe_float(m.get("volume",1))
+                ratios.append(round(v24/vt*100,1) if vt>0 else 0)
+            r_colors = ["#FF4444" if r>=38 else "#FF6600" if r>=20 else "#333333" for r in ratios]
+            fig_ratio = dark_fig(320)
+            fig_ratio.add_trace(go.Bar(
+                x=ratios, y=labels, orientation="h",
+                marker=dict(color=r_colors, line=dict(width=0)),
+                text=[f"{r:.0f}%" for r in ratios], textposition="outside",
+                textfont=dict(size=10, color="#CCCCCC"),
+                customdata=urls,
+            ))
+            fig_ratio.add_vline(x=38, line_dash="dash", line_color="#FF4444", opacity=0.5)
+            fig_ratio.update_layout(
+                margin=dict(l=10,r=60,t=32,b=0), height=320,
+                title=dict(text="24H / TOTAL VOLUME RATIO — ≥38% = UNUSUAL ACTIVITY", font=dict(size=11,color="#FF6600"), x=0),
+                xaxis=dict(range=[0,115], showgrid=False, color="#444"),
+                yaxis=dict(autorange="reversed", tickfont=dict(size=9,color="#CCC"))
+            )
+            st.plotly_chart(fig_ratio, width="stretch")
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
@@ -1593,14 +1784,20 @@ with tabs[6]:
                 ed = row["EarningsDate"]; days = (ed-today).days if ed>today else 0
                 badge = "TODAY" if days==0 else (f"IN {days}D" if days>0 else "RECENT")
                 bc = "#FF6600" if days==0 else ("#00AAFF" if days<7 else "#555")
+                bc_bg = "rgba(255,102,0,0.08)" if days==0 else ("rgba(0,170,255,0.06)" if days<7 else "transparent")
                 eps_str = f"${row['EPS Est']:.2f}" if row.get("EPS Est") is not None else "—"
                 ed_fmt = ed.strftime("%b %d") if hasattr(ed, "strftime") else str(ed)
-                st.markdown(f"""<div class="earn-card">
+                company = str(row.get('Company',''))
+                sector = str(row.get('Sector','—'))
+                st.markdown(f"""<div class="earn-card" style="background:{bc_bg}">
   <span class="earn-ticker">{row['Ticker']}</span>
-  <div><div style="color:#888;font-size:10px">{row['Company']}</div><div style="color:#555;font-size:9px">{row['Sector']}</div></div>
-  <span style="color:{bc};font-size:9px;font-weight:700;letter-spacing:1px">{badge}</span>
-  <span class="earn-date">{ed_fmt}</span>
-  <span style="color:#888;font-size:10px">EPS est: {eps_str}</span>
+  <div style="min-width:0">
+    <div style="color:#CCCCCC;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{company}</div>
+    <div style="color:#FF6600;font-size:10px;margin-top:2px;letter-spacing:1px">{sector.upper()}</div>
+  </div>
+  <span style="color:{bc};font-size:10px;font-weight:700;letter-spacing:1px;white-space:nowrap">{badge}</span>
+  <span class="earn-date" style="white-space:nowrap">{ed_fmt}</span>
+  <span style="color:#888;font-size:11px;white-space:nowrap">EPS: <span style="color:#FFCC00;font-weight:700">{eps_str}</span></span>
 </div>""", unsafe_allow_html=True)
 
     with ec2:
