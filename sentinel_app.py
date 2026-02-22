@@ -275,7 +275,7 @@ DEFAULTS = {
     "chat_history":[],
     "watchlist":["SPY","QQQ","NVDA","AAPL","GLD","TLT","BTC-USD"],
     "macro_theses":"", "geo_watch":"",
-    "wl_add_input":"",
+    "wl_add_input":"", "api_panel_open": False,
 }
 for k,v in DEFAULTS.items():
     if k not in st.session_state: st.session_state[k]=v
@@ -290,27 +290,33 @@ with st.sidebar:
   <div style="color:#000;font-size:9px;opacity:0.6">{now_pst()}</div>
 </div>""", unsafe_allow_html=True)
 
-    st.markdown('<div style="color:#FF6600;font-size:9px;letter-spacing:2px;font-weight:700">API KEYS</div>', unsafe_allow_html=True)
+    # ── API KEY TOGGLE BUTTON ──
+    api_btn_label = "🔑 HIDE API KEYS ▲" if st.session_state.api_panel_open else "🔑 CONFIGURE API KEYS ▼"
+    if st.button(api_btn_label, use_container_width=True, key="api_toggle"):
+        st.session_state.api_panel_open = not st.session_state.api_panel_open
+        st.rerun()
 
-    with st.expander("🤖 Gemini AI — Required"):
-        st.caption("[aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)")
-        st.session_state.gemini_key = st.text_input("Gemini Key", value=st.session_state.gemini_key, type="password", key="gk")
+    if st.session_state.api_panel_open:
+        st.markdown('<div style="color:#FF6600;font-size:9px;letter-spacing:2px;font-weight:700;margin-top:6px">API KEYS</div>', unsafe_allow_html=True)
+        with st.expander("🤖 Gemini AI — Required", expanded=not bool(st.session_state.gemini_key)):
+            st.caption("[aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)")
+            st.session_state.gemini_key = st.text_input("Gemini Key", value=st.session_state.gemini_key, type="password", key="gk")
 
-    with st.expander("📊 Finnhub"):
-        st.caption("[finnhub.io/register](https://finnhub.io/register)")
-        st.session_state.finnhub_key = st.text_input("Finnhub Key", value=st.session_state.finnhub_key, type="password", key="fhk")
+        with st.expander("📊 Finnhub"):
+            st.caption("[finnhub.io/register](https://finnhub.io/register)")
+            st.session_state.finnhub_key = st.text_input("Finnhub Key", value=st.session_state.finnhub_key, type="password", key="fhk")
 
-    with st.expander("📈 FRED Macro"):
-        st.caption("[fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html)")
-        st.session_state.fred_key = st.text_input("FRED Key", value=st.session_state.fred_key, type="password", key="frk")
+        with st.expander("📈 FRED Macro"):
+            st.caption("[fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html)")
+            st.session_state.fred_key = st.text_input("FRED Key", value=st.session_state.fred_key, type="password", key="frk")
 
-    with st.expander("📰 NewsAPI"):
-        st.caption("[newsapi.org/register](https://newsapi.org/register)")
-        st.session_state.newsapi_key = st.text_input("NewsAPI Key", value=st.session_state.newsapi_key, type="password", key="nak")
+        with st.expander("📰 NewsAPI"):
+            st.caption("[newsapi.org/register](https://newsapi.org/register)")
+            st.session_state.newsapi_key = st.text_input("NewsAPI Key", value=st.session_state.newsapi_key, type="password", key="nak")
 
-    with st.expander("💰 CoinGecko"):
-        st.caption("[coingecko.com](https://www.coingecko.com/en/api/pricing)")
-        st.session_state.coingecko_key = st.text_input("CoinGecko Key", value=st.session_state.coingecko_key, type="password", key="cgk")
+        with st.expander("💰 CoinGecko"):
+            st.caption("[coingecko.com](https://www.coingecko.com/en/api/pricing)")
+            st.session_state.coingecko_key = st.text_input("CoinGecko Key", value=st.session_state.coingecko_key, type="password", key="cgk")
 
     st.markdown('<hr style="border-top:1px solid #222;margin:8px 0">', unsafe_allow_html=True)
     st.markdown('<div style="color:#FF6600;font-size:9px;letter-spacing:2px;font-weight:700">STATUS</div>', unsafe_allow_html=True)
@@ -1272,70 +1278,166 @@ with tabs[3]:
 
     with cr2:
         st.markdown('<div class="bb-ph">📈 BTC/USD — TRADINGVIEW</div>', unsafe_allow_html=True)
-        components.html(tv_chart("COINBASE:BTCUSD", 340), height=345, scrolling=False)
+        components.html(tv_chart("COINBASE:BTCUSD", 460), height=465, scrolling=False)
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
     st.markdown('<div class="bb-ph">📈 ETH/USD — TRADINGVIEW</div>', unsafe_allow_html=True)
     components.html(tv_chart("COINBASE:ETHUSD", 320), height=325, scrolling=False)
 
 # ════════════════════════════════════════════════════════════════════
-# TAB 4 — POLYMARKET (Fixed URLs, status labels, unusual side)
+# TAB 4 — POLYMARKET
 # ════════════════════════════════════════════════════════════════════
 with tabs[4]:
     st.markdown('<div class="bb-ph">🎲 POLYMARKET — PREDICTION INTELLIGENCE & UNUSUAL FLOW</div>', unsafe_allow_html=True)
-    st.markdown('<div style="color:#555;font-size:10px;font-family:monospace;margin-bottom:8px">Click any market title to open on Polymarket.com · Status shown on each card · Unusual volume direction labeled</div>', unsafe_allow_html=True)
 
-    poly_col, guide_col = st.columns([3,1])
-    with poly_col:
-        poly_search = st.text_input("🔍 FILTER MARKETS", placeholder="Fed rate, oil, Taiwan, gold, BTC, election…", key="ps")
-        with st.spinner("Loading Polymarket…"):
-            all_poly = polymarket_markets(80)
+    with st.spinner("Loading Polymarket…"):
+        all_poly = polymarket_markets(100)
 
-        if not all_poly:
-            st.markdown('<div style="background:#0A0500;border-left:4px solid #FF6600;padding:12px;font-family:monospace;font-size:12px;color:#FF8C00">⚠️ Could not reach Polymarket API. May be temporarily unavailable. Retry in a moment.</div>', unsafe_allow_html=True)
-        else:
-            filtered = [m for m in all_poly if not poly_search or poly_search.lower() in str(m.get("question","")).lower()] if poly_search else all_poly
+    if not all_poly:
+        st.markdown('<div style="background:#0A0500;border-left:4px solid #FF6600;padding:12px;font-family:monospace;font-size:12px;color:#FF8C00">⚠️ Could not reach Polymarket API. May be temporarily unavailable.</div>', unsafe_allow_html=True)
+    else:
+        # ── Filter to ACTIVE markets only, sorted by 24h volume, top 10
+        def is_active(m):
+            if m.get("closed", False) or m.get("resolved", False): return False
+            end = m.get("endDate","") or ""
+            if end:
+                try:
+                    from datetime import timezone
+                    e = datetime.fromisoformat(end.replace("Z","+00:00"))
+                    if e < datetime.now(timezone.utc): return False
+                except: pass
+            return True
 
-            # Unusual activity
-            unusual = detect_unusual_poly(all_poly)
-            if unusual:
-                st.markdown('<div class="bb-ph" style="color:#FF4444;border-color:#FF4444">🚨 UNUSUAL ACTIVITY DETECTED</div>', unsafe_allow_html=True)
-                for m in unusual:
-                    raw_t = m.get("question",m.get("title","")) or ""
-                    v24 = _safe_float(m.get("volume24hr",0)); vtot = _safe_float(m.get("volume",0))
-                    ratio = v24/vtot*100 if vtot>0 else 0
-                    url = poly_url(m)
-                    side, side_cls = unusual_side(m)
-                    side_html = f' — <span class="{side_cls or "poly-unusual-yes"}">Favoring {side or "UNKNOWN"}</span>' if side else ""
-                    st.markdown(
-                        f'<div style="background:#0D0000;border:1px solid #FF0000;border-left:4px solid #FF0000;'
-                        f'padding:10px 12px;margin:4px 0;font-family:monospace;font-size:12px">'
-                        f'🚨 <a href="{url}" target="_blank" style="color:#FF4444;font-weight:600">{_esc(raw_t[:85])}</a>'
-                        f'<div style="margin-top:4px;font-size:10px"><span style="color:#FF6600">24h: ${v24:,.0f} ({ratio:.0f}% of total)</span>'
-                        f'{side_html}</div></div>', unsafe_allow_html=True)
-                st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+        active_markets = [m for m in all_poly if is_active(m)]
+        active_markets.sort(key=lambda m: _safe_float(m.get("volume24hr",0)), reverse=True)
+        top10 = active_markets[:10]
 
-            st.markdown(f'<div class="bb-ph">📋 ACTIVE MARKETS ({len(filtered)} shown)</div>', unsafe_allow_html=True)
-            for m in filtered[:30]:
+        poly_search = st.text_input("🔍 SEARCH ALL ACTIVE MARKETS", placeholder="Fed rate, oil, Taiwan, BTC…", key="ps")
+        if poly_search:
+            top10 = [m for m in active_markets if poly_search.lower() in str(m.get("question","")).lower()][:10]
+
+        # ── VISUALIZATIONS ROW ──────────────────────────────────────
+        st.markdown('<div class="bb-ph" style="margin-top:10px">📊 MARKET INTELLIGENCE DASHBOARD</div>', unsafe_allow_html=True)
+
+        if top10:
+            viz1, viz2, viz3 = st.columns(3)
+
+            # Chart 1: 24h Volume bar chart
+            with viz1:
+                labels = [m.get("question","")[:28]+"…" if len(m.get("question",""))>28 else m.get("question","") for m in top10]
+                vols   = [_safe_float(m.get("volume24hr",0))/1e3 for m in top10]  # in $K
+                colors = ["#FF6600" if i==0 else "#AA3300" if i<3 else "#662200" for i in range(len(top10))]
+                fig_vol = dark_fig(280)
+                fig_vol.add_trace(go.Bar(
+                    x=vols, y=labels, orientation="h",
+                    marker=dict(color=colors, line=dict(width=0)),
+                    text=[f"${v:.0f}K" for v in vols], textposition="outside",
+                    textfont=dict(size=9, color="#FF8C00")
+                ))
+                fig_vol.update_layout(
+                    margin=dict(l=0,r=60,t=28,b=0), height=280,
+                    title=dict(text="24H VOLUME ($K)", font=dict(size=10,color="#FF6600"), x=0),
+                    xaxis=dict(showgrid=False, color="#444"),
+                    yaxis=dict(autorange="reversed", tickfont=dict(size=8,color="#888"))
+                )
+                st.plotly_chart(fig_vol, use_container_width=True)
+
+            # Chart 2: YES probability scatter
+            with viz2:
+                y_probs, y_names = [], []
+                for m in top10:
+                    pp = _parse_poly_field(m.get("outcomePrices",[]))
+                    p = _safe_float(pp[0])*100 if pp else 50
+                    y_probs.append(round(p,1))
+                    y_names.append(m.get("question","")[:28])
+                bar_colors = ["#00CC44" if p>=50 else "#FF4444" for p in y_probs]
+                fig_prob = dark_fig(280)
+                fig_prob.add_trace(go.Bar(
+                    x=y_probs, y=y_names, orientation="h",
+                    marker=dict(color=bar_colors, line=dict(width=0)),
+                    text=[f"{p:.0f}%" for p in y_probs], textposition="outside",
+                    textfont=dict(size=9, color="#CCCCCC")
+                ))
+                fig_prob.add_vline(x=50, line_dash="dash", line_color="#555", opacity=0.6)
+                fig_prob.update_layout(
+                    margin=dict(l=0,r=50,t=28,b=0), height=280,
+                    title=dict(text="YES PROBABILITY (%)", font=dict(size=10,color="#FF6600"), x=0),
+                    xaxis=dict(range=[0,110], showgrid=False, color="#444"),
+                    yaxis=dict(autorange="reversed", tickfont=dict(size=8,color="#888"))
+                )
+                st.plotly_chart(fig_prob, use_container_width=True)
+
+            # Chart 3: Total volume vs 24h volume (activity ratio)
+            with viz3:
+                ratios = []
+                for m in top10:
+                    v24 = _safe_float(m.get("volume24hr",0))
+                    vt  = _safe_float(m.get("volume",1))
+                    ratios.append(round(v24/vt*100,1) if vt>0 else 0)
+                r_names = [m.get("question","")[:28] for m in top10]
+                r_colors = ["#FF4444" if r>=38 else "#FF6600" if r>=20 else "#333333" for r in ratios]
+                fig_ratio = dark_fig(280)
+                fig_ratio.add_trace(go.Bar(
+                    x=ratios, y=r_names, orientation="h",
+                    marker=dict(color=r_colors, line=dict(width=0)),
+                    text=[f"{r:.0f}%" for r in ratios], textposition="outside",
+                    textfont=dict(size=9, color="#CCCCCC")
+                ))
+                fig_ratio.add_vline(x=38, line_dash="dash", line_color="#FF4444", opacity=0.5)
+                fig_ratio.update_layout(
+                    margin=dict(l=0,r=50,t=28,b=0), height=280,
+                    title=dict(text="24H / TOTAL VOL RATIO (≥38% = UNUSUAL)", font=dict(size=10,color="#FF6600"), x=0),
+                    xaxis=dict(range=[0,110], showgrid=False, color="#444"),
+                    yaxis=dict(autorange="reversed", tickfont=dict(size=8,color="#888"))
+                )
+                st.plotly_chart(fig_ratio, use_container_width=True)
+
+        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+        # ── Unusual activity ──
+        unusual = detect_unusual_poly(active_markets)
+        if unusual:
+            st.markdown('<div class="bb-ph" style="color:#FF4444;border-color:#FF4444">🚨 UNUSUAL ACTIVITY DETECTED</div>', unsafe_allow_html=True)
+            for m in unusual:
+                raw_t = m.get("question",m.get("title","")) or ""
+                v24 = _safe_float(m.get("volume24hr",0)); vtot = _safe_float(m.get("volume",0))
+                ratio = v24/vtot*100 if vtot>0 else 0
+                url = poly_url(m)
+                side, side_cls = unusual_side(m)
+                side_html = f' — <span class="{side_cls or "poly-unusual-yes"}">Favoring {side or "UNKNOWN"}</span>' if side else ""
+                st.markdown(
+                    f'<div style="background:#0D0000;border:1px solid #FF0000;border-left:4px solid #FF0000;'
+                    f'padding:10px 12px;margin:4px 0;font-family:monospace;font-size:12px">'
+                    f'🚨 <a href="{url}" target="_blank" style="color:#FF4444;font-weight:600">{_esc(raw_t[:85])}</a>'
+                    f'<div style="margin-top:4px;font-size:10px"><span style="color:#FF6600">24h: ${v24:,.0f} ({ratio:.0f}% of total)</span>'
+                    f'{side_html}</div></div>', unsafe_allow_html=True)
+            st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+        # ── Top 10 ACTIVE market cards + guide ──
+        poly_col, guide_col = st.columns([3,1])
+        with poly_col:
+            st.markdown(f'<div class="bb-ph">📋 TOP 10 ACTIVE MARKETS BY 24H VOLUME ({len(active_markets)} active total)</div>', unsafe_allow_html=True)
+            for m in top10:
                 is_unusual = m in unusual
                 st.markdown(render_poly_card(m, show_unusual=is_unusual), unsafe_allow_html=True)
 
-    with guide_col:
-        st.markdown("""<div style="background:#080808;border:1px solid #1A1A1A;padding:12px;font-family:monospace;font-size:10px;color:#888;line-height:1.9">
+        with guide_col:
+            st.markdown("""<div style="background:#080808;border:1px solid #1A1A1A;padding:12px;font-family:monospace;font-size:10px;color:#888;line-height:1.9">
 <span style="color:#FF6600;font-weight:700">HOW TO READ</span><br><br>
 <span style="color:#00CC44">ACTIVE</span> = Market open<br>
 <span style="color:#FFCC00">RESOLVED</span> = Settled ✓<br>
-<span style="color:#FF4444">CLOSED</span> = No longer trading<br>
-<span style="color:#FF4444">EXPIRED</span> = Awaiting resolve<br><br>
-<span style="color:#FF6600">UNUSUAL TRIGGERS</span><br>
-• 24h vol ≥38% of total<br>
-• Heavy pre-event flow<br>
-• New market + instant liq<br><br>
+<span style="color:#FF4444">CLOSED/EXP</span> = Inactive<br><br>
+<span style="color:#FF6600">CHARTS ABOVE</span><br>
+• Bar 1: 24h volume<br>
+• Bar 2: YES probability<br>
+• Bar 3: Activity ratio<br><br>
+<span style="color:#FF4444">🚨 UNUSUAL</span><br>
+≥38% of total vol in 24h<br><br>
 <span style="color:#AA44FF">⚡ SIDE LABEL</span><br>
-Shows which outcome the unusual volume is accumulating on.<br><br>
-<span style="color:#00CC44">GREEN bar</span> = YES/higher<br>
-<span style="color:#FF4444">RED bar</span> = NO/lower<br><br>
-<span style="color:#444">⚠️ Crowd odds only. Not financial advice.</span>
+Which outcome unusual volume favors<br><br>
+<span style="color:#00CC44">GREEN</span> = YES/higher<br>
+<span style="color:#FF4444">RED</span> = NO/lower<br><br>
+<span style="color:#444">⚠️ Crowd odds only.<br>Not financial advice.</span>
 </div>""", unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════
@@ -1467,11 +1569,12 @@ with tabs[6]:
                 badge = "TODAY" if days==0 else (f"IN {days}D" if days>0 else "RECENT")
                 bc = "#FF6600" if days==0 else ("#00AAFF" if days<7 else "#555")
                 eps_str = f"${row['EPS Est']:.2f}" if row.get("EPS Est") is not None else "—"
+                ed_fmt = ed.strftime("%b %d") if hasattr(ed, "strftime") else str(ed)
                 st.markdown(f"""<div class="earn-card">
   <span class="earn-ticker">{row['Ticker']}</span>
   <div><div style="color:#888;font-size:10px">{row['Company']}</div><div style="color:#555;font-size:9px">{row['Sector']}</div></div>
   <span style="color:{bc};font-size:9px;font-weight:700;letter-spacing:1px">{badge}</span>
-  <span class="earn-date">{ed}</span>
+  <span class="earn-date">{ed_fmt}</span>
   <span style="color:#888;font-size:10px">EPS est: {eps_str}</span>
 </div>""", unsafe_allow_html=True)
 
