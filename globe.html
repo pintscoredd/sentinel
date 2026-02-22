@@ -525,9 +525,10 @@
 
   <!-- Live news feed panel -->
   <div id="newsfeed"
-    style="position:absolute;bottom:38px;left:165px;z-index:20;width:380px;font-family:'Courier New',monospace">
-    <div style="color:#FF6600;font-size:9px;letter-spacing:2px;margin-bottom:4px">📡 LIVE INTEL FEED</div>
-    <div id="nf-items" style="font-size:11px"></div>
+    style="position:absolute;bottom:38px;left:10px;z-index:20;width:520px;font-family:'Courier New',monospace">
+    <div style="color:#FF6600;font-size:11px;letter-spacing:2px;margin-bottom:6px;font-weight:700">📡 LIVE INTEL FEED
+    </div>
+    <div id="nf-items" style="font-size:13px"></div>
   </div>
   <div id="tt"></div>
 
@@ -1063,27 +1064,37 @@
     // ── LIVE GDELT NEWS FEED — auto-refresh every 5 min
     async function fetchGDELTNews() {
       try {
-        const r = await fetch('https://api.gdeltproject.org/api/v2/doc/doc?query=geopolitical%20conflict%20oil%20market%20sourcelang:english&mode=artlist&maxrecords=3&format=json&timespan=24h');
+        const r = await fetch('https://api.gdeltproject.org/api/v2/doc/doc?query=geopolitical%20conflict%20oil%20market%20sourcelang:english&mode=artlist&maxrecords=8&format=json&timespan=24h');
         const data = await r.json();
-        const arts = (data.articles || []).filter(a => {
+        const allArts = (data.articles || []).filter(a => {
           const t = a.title || '';
           return t.length > 20 && (t.charCodeAt(0) < 128);
         });
+        // Deduplicate by title
+        const seen = new Set();
+        const arts = [];
+        for (const a of allArts) {
+          const key = (a.title || '').trim().toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          arts.push(a);
+          if (arts.length >= 3) break;
+        }
         const nf = document.getElementById('nf-items');
         if (arts.length > 0) {
           nf.innerHTML = arts.slice(0, 1).map(a => {
             const d = a.seendate ? a.seendate.substring(0, 4) + '-' + a.seendate.substring(4, 6) + '-' + a.seendate.substring(6, 8) : '';
             const dom = a.domain || 'GDELT';
-            return `<div style="background:rgba(0,0,0,.8);border-left:2px solid #FF6600;padding:6px 10px;margin:3px 0">
-              <a href="${a.url}" target="_blank" style="color:#CCC;text-decoration:none;font-size:12px;font-weight:600;line-height:1.4">${(a.title || '').substring(0, 90)}</a>
-              <div style="color:#666;font-size:9px;margin-top:3px">${dom} · ${d}</div>
+            return `<div style="background:rgba(0,0,0,.85);border-left:3px solid #FF6600;padding:8px 12px;margin:3px 0">
+              <a href="${a.url}" target="_blank" style="color:#DDD;text-decoration:none;font-size:14px;font-weight:600;line-height:1.4">${(a.title || '').substring(0, 100)}</a>
+              <div style="color:#888;font-size:10px;margin-top:4px">${dom} · ${d}</div>
             </div>`;
           }).join('');
         } else {
-          nf.innerHTML = '<div style="color:#333;font-size:10px">Awaiting intel…</div>';
+          nf.innerHTML = '<div style="color:#333;font-size:11px">Awaiting intel…</div>';
         }
       } catch (e) {
-        document.getElementById('nf-items').innerHTML = '<div style="color:#333;font-size:10px">Feed offline</div>';
+        document.getElementById('nf-items').innerHTML = '<div style="color:#333;font-size:11px">Feed offline</div>';
       }
     }
     fetchGDELTNews();
