@@ -834,15 +834,24 @@ def poly_status(m):
 def unusual_side(m):
     """Determine which side unusual volume favors"""
     try:
-        pp = m.get("outcomePrices",[]); outcomes = m.get("outcomes",[])
-        prices = json.loads(pp) if isinstance(pp,str) else pp
-        if not prices or not outcomes: return None, None
-        yes_p = _safe_float(prices[0])*100
-        # If YES probability is rising fast and >50, unusual vol likely favors YES
-        if yes_p > 60: return "YES", "poly-unusual-yes"
-        elif yes_p < 40: return "NO",  "poly-unusual-no"
+        outcomes   = _parse_poly_field(m.get("outcomes",[]))
+        out_prices = _parse_poly_field(m.get("outcomePrices",[]))
+        if not out_prices or not outcomes: return None, None
+        yes_p = _safe_float(out_prices[0]) * 100
+        yes_name = str(outcomes[0]) if outcomes else "YES"
+        no_name  = str(outcomes[1]) if len(outcomes)>1 else "NO"
+        if yes_p > 60: return yes_name, "poly-unusual-yes"
+        elif yes_p < 40: return no_name, "poly-unusual-no"
         else: return "BOTH SIDES", "poly-unusual-yes"
     except: return None, None
+
+def _parse_poly_field(field):
+    """Parse a Polymarket field that may be a JSON string or already a list."""
+    if not field: return []
+    if isinstance(field, str):
+        try: return json.loads(field)
+        except: return []
+    return field if isinstance(field, list) else []
 
 def render_poly_card(m, show_unusual=False):
     raw_title = m.get("question", m.get("title","Unknown")) or "Unknown"
@@ -852,23 +861,37 @@ def render_poly_card(m, show_unusual=False):
     status_lbl, status_cls = poly_status(m)
     t_html = f'<a href="{url}" target="_blank">{title_esc}</a>'
 
+    # Parse outcomes — always JSON strings from API e.g. '["Yes","No"]'
+    outcomes   = _parse_poly_field(m.get("outcomes",[]))
+    out_prices = _parse_poly_field(m.get("outcomePrices",[]))
+
+    # Detect resolved winner: the outcome whose price is closest to 1.0
+    winner_idx = None
+    is_settled = status_lbl in ("RESOLVED", "CLOSED")
+    if is_settled and out_prices:
+        prices_f = [_safe_float(p) for p in out_prices]
+        if prices_f:
+            max_p = max(prices_f)
+            if max_p >= 0.95:  # clear winner
+                winner_idx = prices_f.index(max_p)
+
     # Outcome bars
     prob_rows = ""
-    outcomes = m.get("outcomes",[]); out_prices = m.get("outcomePrices",[])
-    yes_p_val = 50
     if outcomes and out_prices:
         try:
-            prices = json.loads(out_prices) if isinstance(out_prices,str) else out_prices
             for i, outcome in enumerate(outcomes[:2]):
-                if i>=len(prices): break
-                p = max(0.0,min(100.0,_safe_float(prices[i])*100))
-                if i==0: yes_p_val = p
-                bar_c = "#00CC44" if p>=50 else "#FF4444"
-                resolved_flag = " ✓ WINNER" if (status_lbl=="RESOLVED" and p>=99) else ""
+                if i >= len(out_prices): break
+                p = max(0.0, min(100.0, _safe_float(out_prices[i]) * 100))
+                bar_c = "#00CC44" if p >= 50 else "#FF4444"
+                is_winner = (winner_idx == i)
+                winner_tag = (f' &nbsp;<span style="background:#00CC44;color:#000;'
+                              f'font-size:9px;font-weight:700;padding:1px 5px">✓ WINNER</span>'
+                              if is_winner else "")
+                outcome_name = _esc(str(outcome)[:30]) if isinstance(outcome, str) else _esc(str(outcome)[:30])
                 prob_rows += (
-                    f'<div style="display:flex;align-items:center;gap:8px;margin-top:5px">'
-                    f'<span style="color:{bar_c};font-size:11px;min-width:44px;font-weight:600">{p:.0f}%</span>'
-                    f'<span style="color:#888;font-size:10px;flex:1">{_esc(str(outcome)[:30])}{resolved_flag}</span>'
+                    f'<div style="display:flex;align-items:center;gap:8px;margin-top:6px">'
+                    f'<span style="color:{bar_c};font-size:11px;min-width:44px;font-weight:700">{p:.0f}%</span>'
+                    f'<span style="color:#888;font-size:10px;flex:1">{outcome_name}{winner_tag}</span>'
                     f'<div style="width:90px;height:5px;background:#1A1A1A;border-radius:1px;overflow:hidden">'
                     f'<div style="width:{p:.0f}%;height:100%;background:{bar_c};border-radius:1px"></div>'
                     f'</div></div>')
@@ -965,20 +988,27 @@ with tabs[0]:
 
         # Display watchlist with remove buttons
         wl_qs = multi_quotes(st.session_state.watchlist)
-        st.markdown('<div class="wl-hdr"><span>TICKER</span><span>PRICE</span><span>CHG%</span><span>CHG$</span><span>VOLUME</span><span>DEL</span></div>', unsafe_allow_html=True)
+        # Header row
+        st.markdown("""<div style="display:grid;grid-template-columns:90px 120px 100px 100px 90px 50px;
+gap:12px;padding:6px 10px;border-bottom:1px solid #FF6600;
+font-family:monospace;font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">
+<span>TICKER</span><span>PRICE</span><span>CHG %</span><span>CHG $</span><span>VOLUME</span><span>DEL</span>
+</div>""", unsafe_allow_html=True)
         for q in wl_qs:
             c = "#00CC44" if q["pct"]>=0 else "#FF4444"; arr = "▲" if q["pct"]>=0 else "▼"
             vol = f"{q['volume']/1e6:.1f}M" if q["volume"]>1e6 else f"{q['volume']/1e3:.0f}K"
-            crow = st.columns([1.2,1.8,1.5,1.5,1.3,0.7])
-            with crow[0]: st.markdown(f'<span style="color:#FF6600;font-weight:700;font-family:monospace">{q["ticker"]}</span>', unsafe_allow_html=True)
-            with crow[1]: st.markdown(f'<span style="color:#FFF;font-family:monospace">{fmt_p(q["price"])}</span>', unsafe_allow_html=True)
-            with crow[2]: st.markdown(f'<span style="color:{c};font-family:monospace">{arr} {abs(q["pct"]):.2f}%</span>', unsafe_allow_html=True)
-            with crow[3]: st.markdown(f'<span style="color:{c};font-family:monospace">{"+"+str(round(q["change"],2)) if q["change"]>=0 else str(round(q["change"],2))}</span>', unsafe_allow_html=True)
-            with crow[4]: st.markdown(f'<span style="color:#555;font-family:monospace;font-size:11px">{vol}</span>', unsafe_allow_html=True)
+            chg_str = f"+{q['change']:.2f}" if q["change"]>=0 else f"{q['change']:.2f}"
+            crow = st.columns([1.5, 2.0, 1.7, 1.7, 1.5, 0.8])
+            with crow[0]: st.markdown(f'<div style="color:#FF6600;font-weight:700;font-family:monospace;padding:4px 0">{q["ticker"]}</div>', unsafe_allow_html=True)
+            with crow[1]: st.markdown(f'<div style="color:#FFF;font-family:monospace;padding:4px 0">{fmt_p(q["price"])}</div>', unsafe_allow_html=True)
+            with crow[2]: st.markdown(f'<div style="color:{c};font-family:monospace;padding:4px 0">{arr} {abs(q["pct"]):.2f}%</div>', unsafe_allow_html=True)
+            with crow[3]: st.markdown(f'<div style="color:{c};font-family:monospace;padding:4px 0">{chg_str}</div>', unsafe_allow_html=True)
+            with crow[4]: st.markdown(f'<div style="color:#555;font-family:monospace;font-size:11px;padding:4px 0">{vol}</div>', unsafe_allow_html=True)
             with crow[5]:
                 if st.button("✕", key=f"rm_{q['ticker']}", help=f"Remove {q['ticker']}"):
                     st.session_state.watchlist = [x for x in st.session_state.watchlist if x!=q["ticker"]]
                     st.rerun()
+            st.markdown('<div style="border-bottom:1px solid #111;margin:0 0 2px 0"></div>', unsafe_allow_html=True)
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
@@ -1225,9 +1255,9 @@ with tabs[3]:
         st.markdown('<div class="bb-ph">💹 TOP 20 BY MARKET CAP</div>', unsafe_allow_html=True)
         with st.spinner("Loading crypto markets…"):
             cdata = crypto_markets(st.session_state.coingecko_key)
-        if cdata:
+        if cdata and isinstance(cdata, list):
             for c in cdata:
-                if not c.get("current_price"): continue
+                if not isinstance(c, dict) or not c.get("current_price"): continue
                 pct = c.get("price_change_percentage_24h",0) or 0; color = pct_color(pct)
                 sign = "+" if pct>=0 else ""
                 st.markdown(
