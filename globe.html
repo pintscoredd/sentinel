@@ -111,11 +111,11 @@
       border: 1px solid #1a1a1a;
       color: #555;
       font-family: 'Courier New', monospace;
-      font-size: 9px;
+      font-size: 12px;
       letter-spacing: 1px;
-      padding: 4px 9px;
+      padding: 6px 12px;
       cursor: pointer;
-      width: 106px;
+      width: 155px;
       text-align: left;
       transition: all .15s;
     }
@@ -520,6 +520,14 @@
     <div class="icb" id="ic-body"></div>
     <div class="icm" id="ic-mkt"></div>
     <div class="ictags" id="ic-tags"></div>
+    <div id="ic-date" style="color:#555;font-size:9px;margin-top:6px;letter-spacing:1px"></div>
+  </div>
+
+  <!-- Live news feed panel -->
+  <div id="newsfeed"
+    style="position:absolute;bottom:38px;left:165px;z-index:20;width:380px;font-family:'Courier New',monospace">
+    <div style="color:#FF6600;font-size:9px;letter-spacing:2px;margin-bottom:4px">📡 LIVE INTEL FEED</div>
+    <div id="nf-items" style="font-size:11px"></div>
   </div>
   <div id="tt"></div>
 
@@ -937,6 +945,7 @@
       document.getElementById('ic-body').textContent = h.body || '';
       document.getElementById('ic-mkt').textContent = h.mkt ? '📊 MARKET: ' + h.mkt : '';
       document.getElementById('ic-tags').innerHTML = (h.tags || []).map(t => `<span class="ictag">${t}</span>`).join('');
+      document.getElementById('ic-date').textContent = h.date ? 'UPDATED: ' + h.date : 'UPDATED: LIVE';
       ic.className = 'show ' + (h.sev || 'elevated');
 
       // Smart positioning — always stay inside canvas bounds
@@ -1050,6 +1059,35 @@
       const h = canvas.clientHeight || window.innerHeight;
       camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setSize(w, h);
     });
+
+    // ── LIVE GDELT NEWS FEED — auto-refresh every 5 min
+    async function fetchGDELTNews() {
+      try {
+        const r = await fetch('https://api.gdeltproject.org/api/v2/doc/doc?query=geopolitical%20conflict%20oil%20market%20sourcelang:english&mode=artlist&maxrecords=3&format=json&timespan=24h');
+        const data = await r.json();
+        const arts = (data.articles || []).filter(a => {
+          const t = a.title || '';
+          return t.length > 20 && (t.charCodeAt(0) < 128);
+        });
+        const nf = document.getElementById('nf-items');
+        if (arts.length > 0) {
+          nf.innerHTML = arts.slice(0, 1).map(a => {
+            const d = a.seendate ? a.seendate.substring(0, 4) + '-' + a.seendate.substring(4, 6) + '-' + a.seendate.substring(6, 8) : '';
+            const dom = a.domain || 'GDELT';
+            return `<div style="background:rgba(0,0,0,.8);border-left:2px solid #FF6600;padding:6px 10px;margin:3px 0">
+              <a href="${a.url}" target="_blank" style="color:#CCC;text-decoration:none;font-size:12px;font-weight:600;line-height:1.4">${(a.title || '').substring(0, 90)}</a>
+              <div style="color:#666;font-size:9px;margin-top:3px">${dom} · ${d}</div>
+            </div>`;
+          }).join('');
+        } else {
+          nf.innerHTML = '<div style="color:#333;font-size:10px">Awaiting intel…</div>';
+        }
+      } catch (e) {
+        document.getElementById('nf-items').innerHTML = '<div style="color:#333;font-size:10px">Feed offline</div>';
+      }
+    }
+    fetchGDELTNews();
+    setInterval(fetchGDELTNews, 300000); // refresh every 5 min
   </script>
 </body>
 
