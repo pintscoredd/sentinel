@@ -680,11 +680,11 @@
     function buildGlobe() {
       const mat = new THREE.MeshPhongMaterial({
         map: earthTex || makeFallback(),
-        color: new THREE.Color(0x1a2a40),
-        specular: new THREE.Color(0x05101a),
-        shininess: 6,
-        emissive: new THREE.Color(0x000510),
-        emissiveIntensity: 0.12,
+        color: new THREE.Color(0x8899bb),          // Bright tint — lets blue marble show naturally
+        specular: new THREE.Color(0x334466),        // Subtle ocean reflections
+        shininess: 15,
+        emissive: new THREE.Color(0x020815),
+        emissiveIntensity: 0.08,
       });
       if (globeMesh) scene.remove(globeMesh);
       globeMesh = new THREE.Mesh(globeGeo, mat);
@@ -704,13 +704,13 @@
     // Grid overlay
     scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.001, 24, 12), new THREE.MeshBasicMaterial({ color: 0x000a14, wireframe: true, transparent: true, opacity: 0.025 })));
 
-    // ── LIGHTING — brighter for visibility but still dark navy oceans
-    scene.add(new THREE.AmbientLight(0x1a2840, 1.0));           // Boosted ambient
-    const sun = new THREE.DirectionalLight(0xfff5ee, 2.0);        // Bright sun
+    // ── LIGHTING — bright natural earth
+    scene.add(new THREE.AmbientLight(0x334455, 1.2));           // Strong ambient for visibility
+    const sun = new THREE.DirectionalLight(0xfff8ee, 2.5);      // Bright warm sun
     sun.position.set(6, 2, 4); scene.add(sun);
-    const fill = new THREE.DirectionalLight(0x1a2a40, 0.5);       // Visible fill
+    const fill = new THREE.DirectionalLight(0x2a3a50, 0.8);     // Strong fill for dark side
     fill.position.set(-6, -2, -4); scene.add(fill);
-    const rim = new THREE.DirectionalLight(0x1a2535, 0.5);        // Visible rim
+    const rim = new THREE.DirectionalLight(0x2a3545, 0.6);      // Rim light
     rim.position.set(-2, 1, -5); scene.add(rim);
 
     // ── STARS
