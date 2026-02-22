@@ -54,7 +54,7 @@ new TradingView.widget({{
   "allow_symbol_change":true,"save_image":false,
   "container_id":"tv_c_{symbol.replace(':','_').replace('-','_')}",
   "backgroundColor":"rgba(0,0,0,1)","gridColor":"rgba(20,20,20,1)",
-  "studies":["RSI@tv-basicstudies","MASimple@tv-basicstudies|length=60"],
+  "studies":["RSI@tv-basicstudies","MASimple@tv-basicstudies"],
   "show_popup_button":true,"popup_width":"1000","popup_height":"650"
 }});
 </script></div></body></html>"""
