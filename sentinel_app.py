@@ -599,13 +599,20 @@ def crypto_global(key=""):
     except Exception:
         return {}
 
+def _is_english(text):
+    if not text: return False
+    ascii_c = sum(1 for c in text if ord(c) < 128)
+    return ascii_c / max(len(text),1) > 0.72
+
 @st.cache_data(ttl=600)
-def gdelt_news(query, max_rec=12):
+def gdelt_news(query, max_rec=20):
     try:
+        eng_query = query + " sourcelang:english"
         r = requests.get("https://api.gdeltproject.org/api/v2/doc/doc",
-            params={"query": query, "mode": "artlist", "maxrecords": max_rec,
-                    "format": "json", "timespan": "24h"}, timeout=12)
-        return r.json().get("articles", [])
+            params={"query": eng_query, "mode": "artlist", "maxrecords": max_rec,
+                    "format": "json", "timespan": "48h"}, timeout=12)
+        arts = r.json().get("articles", [])
+        return [a for a in arts if _is_english(a.get("title",""))][:12]
     except Exception:
         return []
 
@@ -947,6 +954,24 @@ def render_watchlist_row(q):
   <span class="wl-vol">{vol_k}</span>
 </div>"""
 
+def _safe_int(v):
+    """Convert value to int safely, handling NaN/None/float."""
+    try:
+        import math
+        f = float(v) if v is not None else 0.0
+        return 0 if math.isnan(f) or math.isinf(f) else int(f)
+    except Exception:
+        return 0
+
+def _safe_float(v, default=0.0):
+    """Convert value to float safely, handling NaN/None."""
+    try:
+        import math
+        f = float(v) if v is not None else default
+        return default if math.isnan(f) or math.isinf(f) else f
+    except Exception:
+        return default
+
 def render_options_table(df, side="calls", current_price=None):
     if df is None or df.empty:
         return "<p style='color:#555;font-family:IBM Plex Mono;font-size:11px'>No data</p>"
@@ -954,13 +979,13 @@ def render_options_table(df, side="calls", current_price=None):
     color_cls = "opt-call" if side == "calls" else "opt-put"
     rows_html = ""
     for _, row in df.iterrows():
-        strike = row.get("strike", 0)
-        last   = row.get("lastPrice", 0)
-        bid    = row.get("bid", 0)
-        ask    = row.get("ask", 0)
-        vol    = int(row.get("volume", 0) or 0)
-        oi     = int(row.get("openInterest", 0) or 0)
-        iv     = row.get("impliedVolatility", 0)
+        strike = _safe_float(row.get("strike", 0))
+        last   = _safe_float(row.get("lastPrice", 0))
+        bid    = _safe_float(row.get("bid", 0))
+        ask    = _safe_float(row.get("ask", 0))
+        vol    = _safe_int(row.get("volume", 0))
+        oi     = _safe_int(row.get("openInterest", 0))
+        iv     = _safe_float(row.get("impliedVolatility", 0))
         
         # ITM highlight
         itm = ""
@@ -968,7 +993,7 @@ def render_options_table(df, side="calls", current_price=None):
             if side == "calls" and strike < current_price: itm = " opt-itm"
             if side == "puts"  and strike > current_price: itm = " opt-itm"
         
-        high_vol = " opt-high-vol" if vol and oi and oi > 0 and vol / oi > 0.5 else ""
+        high_vol = " opt-high-vol" if vol > 0 and oi > 0 and vol / oi > 0.5 else ""
         
         rows_html += f"""
         <tr class="{itm}">
@@ -1001,9 +1026,8 @@ def render_insider_cards(data):
     
     html = ""
     for tx in data[:10]:
-        name    = tx.get("name", "Unknown")[:20]
-        chg     = int(tx.get("change", 0) or 0)
-        shares  = int(tx.get("share", 0) or 0)
+        name    = _esc(tx.get("name", "Unknown")[:20])
+        chg     = _safe_int(tx.get("change", 0))
         date    = str(tx.get("transactionDate", ""))[:10]
         code    = tx.get("transactionCode", "?")
         lbl, cls = code_map.get(code, (code, "insider-date"))
@@ -1018,51 +1042,66 @@ def render_insider_cards(data):
 </div>"""
     return html
 
+def _esc(text):
+    """Escape HTML special characters in user-supplied text."""
+    if not text:
+        return ""
+    return (str(text)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;"))
+
 def render_poly_card(m, clickable=True):
-    title  = m.get("question", m.get("title", "Unknown"))
-    url    = m.get("url", "") or m.get("marketMakerAddress", "")
-    # Try to build polymarket URL
-    slug   = m.get("slug", "")
-    if slug:
-        url = f"https://polymarket.com/event/{slug}"
-    
-    v24    = float(m.get("volume24hr", 0) or 0)
-    vtot   = float(m.get("volume", 0) or 0)
-    
-    prob_html = ""
-    outcomes   = m.get("outcomes", [])
+    raw_title = m.get("question", m.get("title", "Unknown")) or "Unknown"
+    title_esc  = _esc(raw_title[:90])
+
+    # Build Polymarket URL from slug
+    slug = m.get("slug", "")
+    url  = f"https://polymarket.com/event/{slug}" if slug else ""
+
+    v24  = _safe_float(m.get("volume24hr", 0))
+    vtot = _safe_float(m.get("volume", 0))
+
+    # Outcome probability bars
+    prob_rows = ""
+    outcomes   = m.get("outcomes",   [])
     out_prices = m.get("outcomePrices", [])
     if outcomes and out_prices:
         try:
             prices = json.loads(out_prices) if isinstance(out_prices, str) else out_prices
             for i, outcome in enumerate(outcomes[:2]):
-                if i < len(prices):
-                    p    = float(prices[i]) * 100
-                    bar_cls = "" if p >= 50 else " poly-bar-fill-red"
-                    prob_html += f"""
-            <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
-              <span style="color:{'#00CC44' if p>=50 else '#FF4444'};font-size:10px;min-width:40px">{p:.0f}%</span>
-              <span style="color:#777;font-size:10px;flex:1">{outcome}</span>
-              <div class="poly-bar-bg" style="width:80px">
-                <div class="poly-bar-fill{bar_cls}" style="width:{p:.0f}%"></div>
-              </div>
-            </div>"""
+                if i >= len(prices):
+                    break
+                p        = _safe_float(prices[i]) * 100
+                p_clamped = max(0.0, min(100.0, p))
+                bar_color = "#00CC44" if p >= 50 else "#FF4444"
+                out_esc   = _esc(str(outcome)[:30])
+                prob_rows += (
+                    f'<div style="display:flex;align-items:center;gap:8px;margin-top:4px">'
+                    f'<span style="color:{bar_color};font-size:10px;min-width:40px">{p_clamped:.0f}%</span>'
+                    f'<span style="color:#777;font-size:10px;flex:1">{out_esc}</span>'
+                    f'<div style="width:80px;height:4px;background:#1A1A1A;border-radius:2px;overflow:hidden">'
+                    f'<div style="width:{p_clamped:.0f}%;height:100%;background:{bar_color};border-radius:2px"></div>'
+                    f'</div></div>'
+                )
         except Exception:
             pass
-    
+
     if url:
-        title_html = f'<a href="{url}" target="_blank">{title[:85]}</a>'
+        title_html = f'<a href="{url}" target="_blank" style="color:#FFFFFF;text-decoration:none">{title_esc}</a>'
     else:
-        title_html = f'<span style="color:#CCCCCC">{title[:85]}</span>'
-    
-    return f"""
-<div class="poly-card">
-  <div style="font-size:12px;font-weight:600">{title_html}</div>
-  {prob_html}
-  <div style="color:#444;font-size:9px;margin-top:5px;letter-spacing:1px">
-    24H VOL: ${v24:,.0f} &nbsp;|&nbsp; TOTAL: ${vtot:,.0f}
-  </div>
-</div>"""
+        title_html = f'<span style="color:#CCCCCC">{title_esc}</span>'
+
+    vol_str = f"24H: ${v24:,.0f} &nbsp;|&nbsp; TOTAL: ${vtot:,.0f}"
+
+    return (
+        f'<div class="poly-card">'
+        f'<div style="font-size:12px;font-weight:600">{title_html}</div>'
+        f'{prob_rows}'
+        f'<div style="color:#444;font-size:9px;margin-top:5px;letter-spacing:1px">{vol_str}</div>'
+        f'</div>'
+    )
 
 def render_news_card(title, url, source, date_str, card_class="bb-news"):
     if url and url != "#":
@@ -1454,18 +1493,23 @@ with tabs[4]:
             st.markdown('<div class="bb-panel-header" style="color:#FF4444;border-top-color:#FF4444">🚨 UNUSUAL ACTIVITY DETECTED</div>', unsafe_allow_html=True)
             st.markdown('<p style="color:#555;font-family:IBM Plex Mono;font-size:9px">Markets where 24h vol ≥38% of total — signals recent surge in positioning</p>', unsafe_allow_html=True)
             for m in unusual:
-                title = m.get("question", m.get("title", ""))[:80]
-                v24   = float(m.get("volume24hr", 0) or 0)
-                vtot  = float(m.get("volume", 0) or 0)
+                raw_t = m.get("question", m.get("title", "")) or ""
+                title_esc = _esc(raw_t[:80])
+                v24   = _safe_float(m.get("volume24hr", 0))
+                vtot  = _safe_float(m.get("volume", 0))
                 ratio = v24 / vtot * 100 if vtot > 0 else 0
                 slug  = m.get("slug", "")
                 url   = f"https://polymarket.com/event/{slug}" if slug else "#"
-                t_html = f'<a href="{url}" target="_blank" style="color:#FF4444">{title}</a>'
-                st.markdown(f"""
-<div style="background:#0D0000;border:1px solid #FF0000;border-left:4px solid #FF0000;padding:10px 12px;margin:4px 0;font-family:IBM Plex Mono;font-size:11px">
-  🚨 {t_html}<br>
-  <span style="color:#FF6600">24h: ${v24:,.0f} ({ratio:.0f}% of total)</span> &nbsp;|&nbsp; <span style="color:#555">Total: ${vtot:,.0f}</span>
-</div>""", unsafe_allow_html=True)
+                t_html = f'<a href="{url}" target="_blank" style="color:#FF4444">{title_esc}</a>'
+                card = (
+                    f'<div style="background:#0D0000;border:1px solid #FF0000;border-left:4px solid #FF0000;'
+                    f'padding:10px 12px;margin:4px 0;font-family:IBM Plex Mono;font-size:11px">'
+                    f'🚨 {t_html}<br>'
+                    f'<span style="color:#FF6600">24h: ${v24:,.0f} ({ratio:.0f}% of total)</span>'
+                    f' &nbsp;|&nbsp; <span style="color:#555">Total: ${vtot:,.0f}</span>'
+                    f'</div>'
+                )
+                st.markdown(card, unsafe_allow_html=True)
 
             st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
