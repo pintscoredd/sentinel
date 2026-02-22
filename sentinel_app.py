@@ -26,7 +26,7 @@ from data_fetchers import (
     fear_greed_crypto, calc_stock_fear_greed,
     crypto_markets, crypto_global,
     gdelt_news, newsapi_headlines, finnhub_news, finnhub_insider, finnhub_officers,
-    vix_price, options_chain, sector_etfs, top_movers,
+    vix_price, options_chain, options_expiries, sector_etfs, top_movers,
     detect_unusual_poly, market_snapshot_str, _parse_poly_field,
     get_earnings_calendar, is_market_open,
 )
@@ -578,11 +578,17 @@ with tabs[1]:
 
             oc, ic = st.columns([1,1])
             with oc:
-                st.markdown('<div class="bb-ph">📋 OPTIONS CHAIN — NEAREST EXPIRY</div>', unsafe_allow_html=True)
+                st.markdown('<div class="bb-ph">📋 OPTIONS CHAIN</div>', unsafe_allow_html=True)
+                # Expiry selector
+                expiries = options_expiries(tkr)
+                selected_exp = None
+                if expiries:
+                    selected_exp = st.selectbox("EXPIRY DATE", expiries, index=0, key=f"exp_{tkr}")
                 with st.spinner("Loading options…"):
-                    calls, puts, exp_date = options_chain(tkr)
+                    calls, puts, exp_date = options_chain(tkr, selected_exp)
                 if calls is not None:
-                    st.markdown(f'<div style="color:#555;font-size:9px;font-family:monospace;margin-bottom:6px">EXPIRY: {exp_date} | CURRENT: {fmt_p(q["price"])}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div style="color:#888;font-size:10px;font-family:monospace;margin-bottom:6px">EXPIRY: {exp_date} | CURRENT: {fmt_p(q["price"])}</div>', unsafe_allow_html=True)
+                    st.markdown('<div style="max-height:580px;overflow-y:auto;border:1px solid #111">', unsafe_allow_html=True)
                     cc, pc = st.columns(2)
                     with cc:
                         st.markdown('<div style="color:#00CC44;font-size:9px;font-weight:700;letter-spacing:2px">▲ CALLS</div>', unsafe_allow_html=True)
@@ -590,6 +596,7 @@ with tabs[1]:
                     with pc:
                         st.markdown('<div style="color:#FF4444;font-size:9px;font-weight:700;letter-spacing:2px">▼ PUTS</div>', unsafe_allow_html=True)
                         st.markdown(render_options_table(puts,"puts",q["price"]), unsafe_allow_html=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
                 else:
                     st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Options unavailable for this ticker.</p>', unsafe_allow_html=True)
 
@@ -599,7 +606,9 @@ with tabs[1]:
                     with st.spinner("Loading insider data…"):
                         ins = finnhub_insider(tkr, st.session_state.finnhub_key)
                     if ins:
-                        st.markdown(render_insider_cards(ins, tkr, st.session_state.finnhub_key), unsafe_allow_html=True)
+                        st.markdown('<div style="max-height:580px;overflow-y:auto">', unsafe_allow_html=True)
+                        st.markdown(render_insider_cards(ins[:10], tkr, st.session_state.finnhub_key), unsafe_allow_html=True)
+                        st.markdown('</div>', unsafe_allow_html=True)
                     else:
                         st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No recent insider transactions found.</p>', unsafe_allow_html=True)
                 else:
