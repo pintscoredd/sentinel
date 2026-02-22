@@ -176,8 +176,8 @@ def options_chain(ticker, expiry=None):
         exp = expiry if expiry and expiry in exps else exps[0]
         chain = t.option_chain(exp)
         cols = ["strike", "lastPrice", "bid", "ask", "volume", "openInterest", "impliedVolatility"]
-        c = chain.calls[[x for x in cols if x in chain.calls.columns]].head(20)
-        p = chain.puts[[x for x in cols if x in chain.puts.columns]].head(20)
+        c = chain.calls[[x for x in cols if x in chain.calls.columns]].head(26)
+        p = chain.puts[[x for x in cols if x in chain.puts.columns]].head(26)
         return c, p, exp
     except:
         return None, None, None
