@@ -704,13 +704,13 @@
     // Grid overlay
     scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.001, 24, 12), new THREE.MeshBasicMaterial({ color: 0x000a14, wireframe: true, transparent: true, opacity: 0.025 })));
 
-    // ── LIGHTING — dimmer for dark navy look
-    scene.add(new THREE.AmbientLight(0x060e18, 0.5));           // Very dim cool ambient
-    const sun = new THREE.DirectionalLight(0xeee8dd, 1.2);        // Reduced sun intensity
+    // ── LIGHTING — brighter for visibility but still dark navy oceans
+    scene.add(new THREE.AmbientLight(0x1a2840, 1.0));           // Boosted ambient
+    const sun = new THREE.DirectionalLight(0xfff5ee, 2.0);        // Bright sun
     sun.position.set(6, 2, 4); scene.add(sun);
-    const fill = new THREE.DirectionalLight(0x050a12, 0.15);      // Darker fill
+    const fill = new THREE.DirectionalLight(0x1a2a40, 0.5);       // Visible fill
     fill.position.set(-6, -2, -4); scene.add(fill);
-    const rim = new THREE.DirectionalLight(0x0a1520, 0.25);       // Dimmer rim
+    const rim = new THREE.DirectionalLight(0x1a2535, 0.5);        // Visible rim
     rim.position.set(-2, 1, -5); scene.add(rim);
 
     // ── STARS
