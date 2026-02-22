@@ -149,6 +149,18 @@ section.main > div.block-container {
   padding-top: 0 !important;
 }
 
+/* Bigger metric values for brief tab prices */
+[data-testid="stMetricValue"] {
+  font-size: 22px !important;
+  font-weight: 700 !important;
+}
+[data-testid="stMetricLabel"] {
+  font-size: 11px !important;
+}
+[data-testid="stMetricDelta"] {
+  font-size: 13px !important;
+}
+
 /* ─── BLOOMBERG COMPONENT STYLES ─── */
 .bb-bar {
   background: var(--org); color: var(--blk);
@@ -192,7 +204,7 @@ section.main > div.block-container {
   transition: border-color 0.15s;
 }
 .bb-news:hover { border-left-color: var(--wht); background: var(--bg2); }
-.bb-news a { color: var(--wht); text-decoration: none; font-size: 15px; font-weight: 600; line-height: 1.5; }
+.bb-news a { color: var(--wht); text-decoration: none; font-size: 17px; font-weight: 600; line-height: 1.5; }
 .bb-news a:hover { color: var(--org2); text-decoration: underline; }
 .bb-meta { color: #AAA; font-size: 11px; margin-top: 4px; letter-spacing: 0.5px; text-align: right; }
 .bb-news-geo  { border-left-color: #FFFF00; }
@@ -539,8 +551,13 @@ font-family:monospace;font-size:9px;color:#FF6600;letter-spacing:1px;margin-bott
         with st.spinner("Loading geo feed…"):
             geo_arts = gdelt_news("geopolitical conflict oil market",8)
         if geo_arts:
-            for art in geo_arts[:5]:
+            seen_titles = set()
+            for art in geo_arts[:8]:
                 t=art.get("title","")[:90]; u=art.get("url","#"); dom=art.get("domain","GDELT"); sd=art.get("seendate","")
+                t_key = t.strip().lower()
+                if t_key in seen_titles: continue
+                seen_titles.add(t_key)
+                if len(seen_titles) > 5: break
                 d=f"{sd[:4]}-{sd[4:6]}-{sd[6:8]}" if sd and len(sd)>=8 else ""
                 st.markdown(render_news_card(t,u,dom,d,"bb-news bb-news-geo"), unsafe_allow_html=True)
         else:
@@ -573,7 +590,7 @@ with tabs[1]:
                       "BTC-USD":"COINBASE:BTCUSD","ETH-USD":"COINBASE:ETHUSD",
                       "GC=F":"COMEX:GC1!","CL=F":"NYMEX:CL1!","^TNX":"TVC:TNX","^VIX":"TVC:VIX","DXY":"TVC:DXY"}
             tv_sym = TV_MAP.get(tkr, f"NASDAQ:{tkr}")
-            st.markdown('<div class="bb-ph" style="margin-top:8px">CHART — TRADINGVIEW (RSI + SMA60)</div>', unsafe_allow_html=True)
+            st.markdown('<div class="bb-ph" style="margin-top:8px">CHART — TRADINGVIEW (RSI + SMA)</div>', unsafe_allow_html=True)
             components.html(tv_chart(tv_sym, 480), height=485, scrolling=False)
 
             oc, ic = st.columns([1,1])
