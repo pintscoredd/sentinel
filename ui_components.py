@@ -173,6 +173,12 @@ def render_wl_row(q):
 def render_options_table(df, side="calls", current_price=None):
     if df is None or df.empty: return '<p style="color:#555;font-family:monospace;font-size:11px">No data</p>'
     cls = "opt-call" if side == "calls" else "opt-put"
+    # Find ATM strike (nearest to current price)
+    atm_strike = None
+    if current_price and not df.empty:
+        strikes = df["strike"].tolist() if "strike" in df.columns else []
+        if strikes:
+            atm_strike = min(strikes, key=lambda s: abs(float(s) - current_price))
     rows = ""
     for _, row in df.iterrows():
         s = _safe_float(row.get("strike", 0))
@@ -187,7 +193,10 @@ def render_options_table(df, side="calls", current_price=None):
             if side == "calls" and s < current_price: itm = " opt-itm"
             if side == "puts" and s > current_price: itm = " opt-itm"
         hv = " opt-hvol" if v > 0 and oi > 0 and v / max(oi, 1) > 0.5 else ""
-        rows += (f'<tr class="{itm}"><td class="{cls}">{s:.2f}</td>'
+        atm_style = ""
+        if atm_strike is not None and abs(s - atm_strike) < 0.01:
+            atm_style = ' style="background:rgba(255,102,0,0.18);border-left:3px solid #FF6600"'
+        rows += (f'<tr class="{itm}"{atm_style}><td class="{cls}">{s:.2f}</td>'
                  f'<td>{lp:.2f}</td><td>{b:.2f}</td><td>{a:.2f}</td>'
                  f'<td class="{hv}">{v:,}</td><td>{oi:,}</td><td>{iv:.1%}</td></tr>')
     return (f'<table class="opt-tbl"><thead><tr>'
