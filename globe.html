@@ -2,922 +2,487 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SENTINEL GLOBE</title>
-<script src="https://cesium.com/downloads/cesiumjs/releases/1.111/Build/Cesium/Cesium.js"></script>
-<link href="https://cesium.com/downloads/cesiumjs/releases/1.111/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+<title>SENTINEL GEO</title>
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-html, body {
-  width: 100%; height: 100%; overflow: hidden;
-  background: #000;
-  font-family: 'Courier New', monospace;
-}
-
-#cesiumContainer {
-  width: 100%; height: 100vh;
-  position: relative;
-}
-
-/* Override Cesium default UI */
-.cesium-widget-credits { display: none !important; }
-.cesium-viewer-toolbar { top: 44px !important; right: 8px !important; }
-.cesium-viewer-animationContainer { display: none !important; }
-.cesium-viewer-timelineContainer { display: none !important; }
-.cesium-viewer-bottom { display: none !important; }
-
-/* ── Top Bar ── */
-#topbar {
-  position: fixed;
-  top: 0; left: 0; right: 0; height: 40px;
-  background: rgba(0,0,0,0.9);
-  border-bottom: 1px solid #FF6600;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
-  z-index: 100;
-  backdrop-filter: blur(4px);
-}
-#topbar .logo {
-  color: #FF6600;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 3px;
-}
-#topbar .status {
-  display: flex;
-  gap: 16px;
-  font-size: 10px;
-  color: #555;
-  letter-spacing: 1px;
-}
-#topbar .status .live {
-  color: #00CC44;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-#live-dot {
-  width: 6px; height: 6px;
-  background: #00CC44;
-  border-radius: 50%;
-  animation: pulse 2s infinite;
-}
-@keyframes pulse {
-  0%,100% { opacity: 1; }
-  50% { opacity: 0.3; }
-}
-
-/* ── Left Panel ── */
-#left-panel {
-  position: fixed;
-  top: 40px; left: 0; bottom: 0;
-  width: 220px;
-  background: rgba(0,0,0,0.88);
-  border-right: 1px solid #1A1A1A;
-  z-index: 50;
-  overflow-y: auto;
-  padding: 12px;
-  backdrop-filter: blur(8px);
-}
-.panel-section {
-  margin-bottom: 16px;
-}
-.panel-title {
-  color: #FF6600;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  border-bottom: 1px solid #1A1A1A;
-  padding-bottom: 5px;
-  margin-bottom: 8px;
-}
-.filter-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  margin: 2px 0;
-  cursor: pointer;
-  border-radius: 2px;
-  font-size: 10px;
-  color: #888;
-  letter-spacing: 1px;
-  transition: all 0.15s;
-  border: 1px solid transparent;
-}
-.filter-btn:hover { background: rgba(255,102,0,0.1); color: #FF8C00; }
-.filter-btn.active {
-  background: rgba(255,102,0,0.15);
-  border-color: #FF6600;
-  color: #FF8C00;
-}
-.filter-dot {
-  width: 8px; height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.theater-item {
-  padding: 5px 8px;
-  margin: 2px 0;
-  border-left: 2px solid transparent;
-  font-size: 10px;
-  color: #666;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.theater-item:hover { color: #FF8C00; background: rgba(255,102,0,0.05); }
-.theater-item.critical { border-left-color: #FF0000; }
-.theater-item.active   { border-left-color: #FF6600; }
-.theater-item.elevated { border-left-color: #FFAA00; }
-.theater-item.monitor  { border-left-color: #FFFF00; }
-
-.event-count {
-  display: inline-block;
-  background: rgba(255,102,0,0.2);
-  color: #FF6600;
-  font-size: 9px;
-  padding: 1px 5px;
-  border-radius: 2px;
-  margin-left: auto;
-}
-
-/* ── Hover Tooltip ── */
-#tooltip {
-  position: fixed;
-  display: none;
-  background: rgba(0,0,0,0.95);
-  border: 1px solid #FF6600;
-  border-left: 3px solid #FF6600;
-  padding: 12px 14px;
-  max-width: 280px;
-  min-width: 200px;
-  z-index: 200;
-  pointer-events: none;
-  backdrop-filter: blur(8px);
-}
-#tooltip .tt-category {
-  font-size: 8px;
-  font-weight: 700;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  margin-bottom: 5px;
-}
-#tooltip .tt-title {
-  color: #FFFFFF;
-  font-size: 11px;
-  line-height: 1.4;
-  margin-bottom: 6px;
-}
-#tooltip .tt-meta {
-  color: #555;
-  font-size: 9px;
-  letter-spacing: 1px;
-  margin-top: 4px;
-}
-#tooltip .tt-source {
-  color: #FF6600;
-  font-size: 9px;
-}
-#tooltip .tt-link {
-  color: #FF8C00;
-  font-size: 9px;
-  text-decoration: underline;
-  display: block;
-  margin-top: 4px;
-  cursor: pointer;
-}
-#tooltip .tt-link:hover { color: #FFFFFF; }
-
-/* ── Event Feed ── */
-#event-feed {
-  position: fixed;
-  bottom: 0; right: 0;
-  width: 300px;
-  max-height: 240px;
-  background: rgba(0,0,0,0.88);
-  border-top: 1px solid #1A1A1A;
-  border-left: 1px solid #1A1A1A;
-  z-index: 50;
-  overflow-y: auto;
-  backdrop-filter: blur(8px);
-}
-#event-feed-header {
-  padding: 7px 12px;
-  border-bottom: 1px solid #1A1A1A;
-  font-size: 9px;
-  color: #FF6600;
-  font-weight: 700;
-  letter-spacing: 2px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.feed-item {
-  padding: 6px 12px;
-  border-bottom: 1px solid #0D0D0D;
-  font-size: 9px;
-  color: #666;
-  cursor: pointer;
-  transition: background 0.15s;
-  line-height: 1.4;
-}
-.feed-item:hover { background: rgba(255,102,0,0.05); color: #FF8C00; }
-.feed-item .feed-title { color: #CCCCCC; font-size: 10px; margin-bottom: 2px; }
-.feed-item .feed-region { color: #FF6600; font-size: 8px; letter-spacing: 1px; }
-.feed-item a { color: #CCCCCC; text-decoration: none; }
-.feed-item a:hover { color: #FF8C00; text-decoration: underline; }
-
-/* ── Status bar ── */
-#statusbar {
-  position: fixed;
-  bottom: 0; left: 220px; right: 300px;
-  height: 26px;
-  background: rgba(0,0,0,0.9);
-  border-top: 1px solid #1A1A1A;
-  display: flex;
-  align-items: center;
-  padding: 0 12px;
-  gap: 20px;
-  font-size: 9px;
-  color: #444;
-  letter-spacing: 1px;
-  z-index: 50;
-}
-#statusbar span { color: #555; }
-#statusbar .highlight { color: #FF6600; }
-
-/* ── Loading overlay ── */
-#loading {
-  position: fixed;
-  inset: 0;
-  background: #000;
-  z-index: 1000;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 20px;
-}
-.loading-logo { color: #FF6600; font-size: 28px; font-weight: 900; letter-spacing: 8px; }
-.loading-sub  { color: #555; font-size: 10px; letter-spacing: 4px; }
-.loading-bar {
-  width: 200px; height: 2px;
-  background: #1A1A1A;
-  border-radius: 2px;
-  overflow: hidden;
-}
-.loading-bar-fill {
-  height: 100%;
-  background: #FF6600;
-  width: 0%;
-  animation: load 2s ease-out forwards;
-}
-@keyframes load {
-  0%   { width: 0%; }
-  60%  { width: 70%; }
-  100% { width: 100%; }
-}
-
-/* Scrollbar */
-::-webkit-scrollbar { width: 3px; }
-::-webkit-scrollbar-track { background: #000; }
-::-webkit-scrollbar-thumb { background: #FF6600; }
+*{margin:0;padding:0;box-sizing:border-box;font-family:'Courier New',monospace;}
+body{background:#000;color:#d0d3d8;overflow:hidden;user-select:none;}
+#c{display:block;width:100vw;height:100vh;}
+#overlay{position:fixed;inset:0;pointer-events:none;z-index:10;}
+/* Header */
+#hdr{position:fixed;top:0;left:0;right:0;z-index:20;background:linear-gradient(180deg,rgba(0,0,0,0.95) 0%,transparent 100%);padding:7px 14px;display:flex;justify-content:space-between;align-items:center;pointer-events:none;}
+#logo{color:#FF6600;font-size:13px;font-weight:700;letter-spacing:4px;}
+#hst{font-size:9px;color:#444;display:flex;gap:12px;}
+.hd{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;vertical-align:middle;}
+.hg{background:#00CC44;box-shadow:0 0 4px #00CC44;animation:pb 2s infinite;}
+.ha{background:#FF6600;box-shadow:0 0 4px #FF6600;}
+.hr{background:#FF4444;box-shadow:0 0 4px #FF4444;animation:pb 1s infinite;}
+@keyframes pb{0%,100%{opacity:1}50%{opacity:.25}}
+/* Filter bar */
+#fb{position:fixed;left:10px;top:46px;z-index:20;display:flex;flex-direction:column;gap:3px;pointer-events:all;}
+.fbtn{background:rgba(0,0,0,.88);border:1px solid #1a1a1a;color:#666;font-family:'Courier New',monospace;font-size:9px;letter-spacing:1px;padding:5px 10px;cursor:pointer;width:108px;text-align:left;transition:all .15s;}
+.fbtn:hover,.fbtn.on{background:rgba(255,102,0,.1);border-color:#FF6600;color:#FF6600;}
+/* Theater panel */
+#tp{position:fixed;right:0;top:46px;width:190px;background:rgba(0,0,0,.92);border:1px solid #1a1a1a;border-right:none;z-index:20;}
+.tph{padding:5px 10px;font-size:9px;letter-spacing:2px;color:#FF6600;border-bottom:1px solid #1a1a1a;}
+.tpi{padding:6px 10px;border-bottom:1px solid #111;cursor:pointer;transition:background .15s;pointer-events:all;}
+.tpi:hover{background:rgba(255,102,0,.07);}
+.tpn{font-size:10px;color:#ccc;font-weight:600;}
+.tps{font-size:9px;margin-top:2px;}
+.tc{color:#FF4444;}.te{color:#FF6600;}.tw{color:#FFCC00;}
+/* Info card */
+#ic{position:fixed;z-index:30;background:rgba(0,0,0,.97);border:1px solid #1a1a1a;border-left:3px solid #FF6600;padding:13px 15px;width:300px;display:none;pointer-events:none;}
+#ic.show{display:block;}
+#ic.critical{border-left-color:#FF4444;}
+#ic.elevated{border-left-color:#FF6600;}
+#ic.watch{border-left-color:#FFCC00;}
+.icl{font-size:8px;letter-spacing:2px;color:#444;margin-bottom:3px;}
+.ict{font-size:12px;font-weight:700;color:#fff;margin-bottom:5px;}
+.icb{font-size:10px;color:#888;line-height:1.65;}
+.icm{color:#00AAFF;margin-top:6px;font-size:10px;}
+.ictags{margin-top:7px;display:flex;gap:4px;flex-wrap:wrap;}
+.ictag{font-size:8px;padding:2px 5px;border:1px solid #222;color:#444;}
+/* Add event */
+#addbtn{position:fixed;right:200px;bottom:55px;z-index:20;background:rgba(255,102,0,.1);border:1px solid #FF6600;color:#FF6600;font-family:'Courier New',monospace;font-size:10px;padding:5px 12px;cursor:pointer;letter-spacing:1px;pointer-events:all;}
+#addbtn:hover{background:rgba(255,102,0,.22);}
+#adddlg{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);background:#0a0a0a;border:1px solid #FF6600;padding:20px;width:350px;z-index:50;display:none;pointer-events:all;}
+#adddlg.show{display:block;}
+#adddlg h3{color:#FF6600;font-size:11px;letter-spacing:2px;margin-bottom:14px;}
+#adddlg label{font-size:9px;color:#888;display:block;margin-bottom:3px;letter-spacing:1px;}
+#adddlg input,#adddlg select,#adddlg textarea{width:100%;background:#000;border:1px solid #1a1a1a;color:#ccc;font-family:'Courier New',monospace;font-size:10px;padding:5px 8px;margin-bottom:9px;}
+.dbtns{display:flex;gap:8px;margin-top:4px;}
+.dbok{flex:1;padding:6px;font-family:'Courier New',monospace;font-size:10px;cursor:pointer;border:1px solid #FF6600;background:rgba(255,102,0,.15);color:#FF6600;}
+.dbcancel{flex:1;padding:6px;font-family:'Courier New',monospace;font-size:10px;cursor:pointer;border:1px solid #222;background:transparent;color:#666;}
+/* Status bar */
+#sb{position:fixed;bottom:0;left:0;right:0;padding:4px 14px;display:flex;justify-content:space-between;background:linear-gradient(0deg,rgba(0,0,0,.95) 0%,transparent 100%);z-index:20;font-size:8px;letter-spacing:1px;color:#333;pointer-events:none;}
+/* Tooltip */
+#tt{position:fixed;z-index:25;background:rgba(0,0,0,.9);border:1px solid #FF6600;padding:4px 8px;font-size:9px;color:#FF8C00;display:none;pointer-events:none;white-space:nowrap;}
 </style>
 </head>
 <body>
+<canvas id="c"></canvas>
+<div id="overlay"></div>
 
-<!-- Loading Screen -->
-<div id="loading">
-  <div class="loading-logo">SENTINEL</div>
-  <div class="loading-sub">LOADING GEOPOLITICAL INTELLIGENCE GLOBE</div>
-  <div class="loading-bar"><div class="loading-bar-fill"></div></div>
-  <div id="loading-status" style="color:#333;font-size:9px;letter-spacing:2px">INITIALIZING CESIUM…</div>
-</div>
-
-<!-- Top Bar -->
-<div id="topbar">
-  <div class="logo">⚡ SENTINEL GEO GLOBE</div>
-  <div class="status">
-    <span id="event-count-label" style="color:#888">LOADING EVENTS…</span>
-    <span class="live"><div id="live-dot"></div> LIVE GDELT FEED</span>
-    <span id="clock">00:00:00</span>
+<div id="hdr">
+  <div><span id="logo">⚡ SENTINEL GEO</span><span style="color:#333;font-size:9px;margin-left:12px">GEOPOLITICAL INTELLIGENCE LAYER</span></div>
+  <div id="hst">
+    <span><span class="hd hg"></span>THREE.JS GLOBE</span>
+    <span><span class="hd hg"></span>GDELT LIVE</span>
+    <span><span class="hd ha"></span>AIS FEED</span>
+    <span id="clk"></span>
   </div>
 </div>
 
-<!-- Left Panel -->
-<div id="left-panel">
-  <div class="panel-section">
-    <div class="panel-title">FILTER BY CATEGORY</div>
-    <div class="filter-btn active" data-cat="all" onclick="filterCategory('all', this)">
-      <div class="filter-dot" style="background:#FF6600"></div>
-      <span>ALL EVENTS</span>
-      <span class="event-count" id="cnt-all">0</span>
-    </div>
-    <div class="filter-btn" data-cat="conflict" onclick="filterCategory('conflict', this)">
-      <div class="filter-dot" style="background:#FF0000"></div>
-      <span>CONFLICT</span>
-      <span class="event-count" id="cnt-conflict">0</span>
-    </div>
-    <div class="filter-btn" data-cat="energy" onclick="filterCategory('energy', this)">
-      <div class="filter-dot" style="background:#FF8C00"></div>
-      <span>ENERGY</span>
-      <span class="event-count" id="cnt-energy">0</span>
-    </div>
-    <div class="filter-btn" data-cat="trade" onclick="filterCategory('trade', this)">
-      <div class="filter-dot" style="background:#00AAFF"></div>
-      <span>TRADE</span>
-      <span class="event-count" id="cnt-trade">0</span>
-    </div>
-    <div class="filter-btn" data-cat="political" onclick="filterCategory('political', this)">
-      <div class="filter-dot" style="background:#AA44FF"></div>
-      <span>POLITICAL</span>
-      <span class="event-count" id="cnt-political">0</span>
-    </div>
-    <div class="filter-btn" data-cat="economic" onclick="filterCategory('economic', this)">
-      <div class="filter-dot" style="background:#00CC44"></div>
-      <span>ECONOMIC</span>
-      <span class="event-count" id="cnt-economic">0</span>
-    </div>
-    <div class="filter-btn" data-cat="natural" onclick="filterCategory('natural', this)">
-      <div class="filter-dot" style="background:#FFFF00"></div>
-      <span>NATURAL</span>
-      <span class="event-count" id="cnt-natural">0</span>
-    </div>
-  </div>
+<div id="fb">
+  <button class="fbtn on" onclick="setFilter('all',this)">● ALL EVENTS</button>
+  <button class="fbtn" onclick="setFilter('conflict',this)">◆ CONFLICT</button>
+  <button class="fbtn" onclick="setFilter('energy',this)">⬡ ENERGY</button>
+  <button class="fbtn" onclick="setFilter('shipping',this)">◈ SHIPPING</button>
+  <button class="fbtn" onclick="setFilter('minerals',this)">⬟ MINERALS</button>
+  <button class="fbtn" onclick="setFilter('trade',this)">◇ TRADE/TECH</button>
+  <button class="fbtn" onclick="setFilter('custom',this)">+ MY EVENTS</button>
+</div>
 
-  <div class="panel-section">
-    <div class="panel-title">THEATERS</div>
-    <div class="theater-item critical" onclick="flyTo(35, 36, 2500000)">🔴 Middle East</div>
-    <div class="theater-item active"   onclick="flyTo(48, 31, 3000000)">🔴 Ukraine</div>
-    <div class="theater-item active"   onclick="flyTo(20, 45, 3000000)">🔴 Red Sea</div>
-    <div class="theater-item elevated" onclick="flyTo(14, 2, 3500000)">🟠 Sahel</div>
-    <div class="theater-item elevated" onclick="flyTo(26, 56, 2800000)">🟠 Hormuz</div>
-    <div class="theater-item monitor"  onclick="flyTo(23, 120, 2500000)">🟡 Taiwan Strait</div>
-    <div class="theater-item monitor"  onclick="flyTo(15, 115, 3000000)">🟡 S. China Sea</div>
-    <div class="theater-item monitor"  onclick="flyTo(35, 130, 4000000)">🟡 Korean Peninsula</div>
-  </div>
+<div id="tp">
+  <div class="tph">THEATER STATUS</div>
+  <div class="tpi" onclick="flyTo(31.5,34.8)"><div class="tpn">MIDDLE EAST</div><div class="tps tc">CRITICAL</div></div>
+  <div class="tpi" onclick="flyTo(49,31)"><div class="tpn">UKRAINE</div><div class="tps tc">ACTIVE</div></div>
+  <div class="tpi" onclick="flyTo(14,43)"><div class="tpn">RED SEA</div><div class="tps tc">DISRUPTED</div></div>
+  <div class="tpi" onclick="flyTo(26.5,56)"><div class="tpn">HORMUZ</div><div class="tps te">ELEVATED</div></div>
+  <div class="tpi" onclick="flyTo(14,2)"><div class="tpn">SAHEL</div><div class="tps te">ELEVATED</div></div>
+  <div class="tpi" onclick="flyTo(25,121)"><div class="tpn">TAIWAN</div><div class="tps tw">MONITORING</div></div>
+  <div class="tpi" onclick="flyTo(12,115)"><div class="tpn">S. CHINA SEA</div><div class="tps tw">MONITORING</div></div>
+</div>
 
-  <div class="panel-section">
-    <div class="panel-title">LEGEND</div>
-    <div style="font-size:9px;color:#555;line-height:2">
-      <div><span style="color:#FF0000">●</span> Conflict / Military</div>
-      <div><span style="color:#FF8C00">●</span> Energy / Resources</div>
-      <div><span style="color:#00AAFF">●</span> Trade / Economic</div>
-      <div><span style="color:#AA44FF">●</span> Political / Diplomatic</div>
-      <div><span style="color:#00CC44">●</span> Economic Signal</div>
-      <div><span style="color:#FFFF00">●</span> Natural / Humanitarian</div>
-      <br>
-      <div style="color:#666">HOVER markers for detail</div>
-      <div style="color:#666">CLICK to open source</div>
-    </div>
-  </div>
+<div id="ic"><div class="icl" id="ic-sev"></div><div class="ict" id="ic-ttl"></div><div class="icb" id="ic-body"></div><div class="icm" id="ic-mkt"></div><div class="ictags" id="ic-tags"></div></div>
+<div id="tt"></div>
 
-  <div class="panel-section">
-    <div class="panel-title">CONTROLS</div>
-    <div style="font-size:9px;color:#555;line-height:2">
-      <div>🖱 Drag — Rotate</div>
-      <div>🖱 Scroll — Zoom</div>
-      <div>🖱 Right drag — Tilt</div>
-      <div>🖱 Middle — Pan</div>
-    </div>
-    <div style="margin-top:8px">
-      <button onclick="resetView()" style="width:100%;background:#0A0A0A;color:#FF6600;border:1px solid #FF6600;padding:5px;font-size:9px;cursor:pointer;font-family:Courier New;letter-spacing:1px">
-        ↺ RESET VIEW
-      </button>
-    </div>
-    <div style="margin-top:4px">
-      <button onclick="toggleNight()" id="night-btn" style="width:100%;background:#0A0A0A;color:#555;border:1px solid #333;padding:5px;font-size:9px;cursor:pointer;font-family:Courier New;letter-spacing:1px">
-        ☾ TOGGLE NIGHT
-      </button>
-    </div>
+<button id="addbtn" onclick="document.getElementById('adddlg').classList.add('show')">＋ ADD EVENT</button>
+<div id="adddlg">
+  <h3>ADD CUSTOM EVENT</h3>
+  <label>TITLE</label><input id="ae-title" placeholder="e.g. Belarus Border Tensions">
+  <label>LAT / LON</label>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px"><input id="ae-lat" placeholder="e.g. 52.0"><input id="ae-lon" placeholder="e.g. 28.0"></div>
+  <label>DESCRIPTION</label><textarea id="ae-desc" placeholder="Brief intel summary…"></textarea>
+  <label>SEVERITY</label>
+  <select id="ae-sev"><option value="critical">CRITICAL</option><option value="elevated">ELEVATED</option><option value="watch">WATCH</option></select>
+  <label>MARKET IMPACT</label><input id="ae-mkt" placeholder="e.g. XLE, WTI Crude">
+  <div class="dbtns">
+    <button class="dbok" onclick="addCustomEvent()">CONFIRM</button>
+    <button class="dbcancel" onclick="document.getElementById('adddlg').classList.remove('show')">CANCEL</button>
   </div>
 </div>
 
-<!-- Tooltip -->
-<div id="tooltip">
-  <div class="tt-category" id="tt-cat">LOADING…</div>
-  <div class="tt-title" id="tt-title">Event title</div>
-  <div class="tt-source" id="tt-source">Source</div>
-  <div class="tt-meta" id="tt-meta">Region · Date</div>
-  <a class="tt-link" id="tt-link" target="_blank" href="#">↗ Open source article</a>
+<div id="sb">
+  <div><span class="hd hr" style="display:inline-block"></span>3 CRITICAL &nbsp;&nbsp;<span class="hd ha" style="display:inline-block"></span>4 ELEVATED</div>
+  <div>DRAG TO ROTATE · SCROLL TO ZOOM · CLICK MARKERS FOR INTEL</div>
+  <div>SOURCES: THREE.JS · GDELT · AIS · NASA BLUE MARBLE</div>
 </div>
 
-<!-- Cesium Globe -->
-<div id="cesiumContainer"></div>
-
-<!-- Event Feed -->
-<div id="event-feed">
-  <div id="event-feed-header">
-    <span>LIVE EVENT FEED</span>
-    <span id="feed-count" style="color:#555;font-size:8px">0 events</span>
-  </div>
-  <div id="feed-items"></div>
-</div>
-
-<!-- Status Bar -->
-<div id="statusbar">
-  <span>DRAG TO ROTATE</span>
-  <span>SCROLL TO ZOOM</span>
-  <span>HOVER MARKERS FOR INTEL</span>
-  <span class="highlight" id="last-update">UPDATING…</span>
-  <span>AUTO-REFRESH: 5 MIN</span>
-</div>
-
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
-// ── CesiumJS Token ────────────────────────────────────────────────────────────
-// Using default anonymous access (limited but functional for globe)
-Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJlYWE1OWUxNy1mMWZiLTQzYjYtYTQ0OS1kMWFjYmFkNjc4ZTYiLCJpZCI6NTc3MzMsImlhdCI6MTYyNzg0NTE4Mn0.XcKpgANiY19MC4bdFUXMVEBToBmqS8kuYpUlxJHYZxk';
+// ── CLOCK ─────────────────────────────────────────────────────────────────────
+setInterval(()=>{
+  const d=new Date();
+  document.getElementById('clk').textContent=d.toUTCString().slice(17,25)+' UTC';
+},1000);
 
-// ── Global State ──────────────────────────────────────────────────────────────
-let viewer, allEvents = [], entities = [], currentFilter = 'all', nightMode = false;
+// ── SCENE ─────────────────────────────────────────────────────────────────────
+const W=window.innerWidth, H=window.innerHeight;
+const renderer=new THREE.WebGLRenderer({canvas:document.getElementById('c'),antialias:true});
+renderer.setSize(W,H); renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+renderer.setClearColor(0x000000);
 
-// ── Category Config ────────────────────────────────────────────────────────────
-const CATEGORIES = {
-  conflict:  { color: Cesium.Color.fromCssColorString('#FF2200').withAlpha(0.9), pulse: true,  size: 14 },
-  energy:    { color: Cesium.Color.fromCssColorString('#FF8C00').withAlpha(0.85),pulse: false, size: 12 },
-  trade:     { color: Cesium.Color.fromCssColorString('#00AAFF').withAlpha(0.85),pulse: false, size: 11 },
-  political: { color: Cesium.Color.fromCssColorString('#BB44FF').withAlpha(0.85),pulse: false, size: 11 },
-  economic:  { color: Cesium.Color.fromCssColorString('#00DD55').withAlpha(0.85),pulse: false, size: 11 },
-  natural:   { color: Cesium.Color.fromCssColorString('#FFFF00').withAlpha(0.85),pulse: false, size: 10 },
-};
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(45,W/H,0.1,1000);
+camera.position.set(0,0,2.8);
 
-// ── GDELT Geo Query Config ─────────────────────────────────────────────────────
-const GEO_QUERIES = [
-  { q: 'conflict military attack war',         cat: 'conflict',  regions: GEO_CONFLICT_LOCS  },
-  { q: 'oil gas energy pipeline sanction',     cat: 'energy',    regions: GEO_ENERGY_LOCS    },
-  { q: 'trade tariff sanction economy import', cat: 'trade',     regions: GEO_TRADE_LOCS     },
-  { q: 'election coup government protest',     cat: 'political', regions: GEO_POLITICAL_LOCS },
-  { q: 'GDP inflation rate central bank',      cat: 'economic',  regions: GEO_ECONOMIC_LOCS  },
-  { q: 'earthquake flood disaster humanitarian',cat:'natural',   regions: GEO_NATURAL_LOCS   },
+// ── GLOBE ─────────────────────────────────────────────────────────────────────
+const loader=new THREE.TextureLoader();
+// Use a simple procedural earth appearance since external textures may be blocked
+const globeGeo=new THREE.SphereGeometry(1,64,64);
+
+// Load earth texture - use multiple fallbacks
+const TEXTURES=[
+  'https://raw.githubusercontent.com/turban/webgl-earth/master/images/2_no_clouds_4k.jpg',
+  'https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg',
 ];
 
-// ── Geo-coordinate lookup tables (major news hotspots) ─────────────────────────
-const REGION_COORDS = {
-  // Middle East
-  'israel': [31.5, 34.9], 'iran': [32.0, 53.0], 'iraq': [33.0, 44.0],
-  'syria': [35.0, 38.5], 'lebanon': [33.9, 35.5], 'yemen': [15.5, 47.5],
-  'saudi': [24.0, 45.0], 'uae': [24.0, 54.0], 'qatar': [25.3, 51.2],
-  'jordan': [31.0, 36.0], 'egypt': [26.0, 30.0], 'turkey': [38.9, 35.2],
-  // Europe
-  'ukraine': [49.0, 31.0], 'russia': [61.5, 90.0], 'poland': [52.0, 19.0],
-  'germany': [51.2, 10.5], 'france': [46.2, 2.2], 'uk': [54.0, -2.0],
-  'nato': [50.9, 4.3],
-  // Asia Pacific
-  'china': [35.0, 103.0], 'taiwan': [23.7, 121.0], 'japan': [36.2, 138.3],
-  'korea': [37.6, 127.0], 'india': [20.6, 79.0], 'pakistan': [30.4, 69.3],
-  'myanmar': [17.1, 96.2], 'thailand': [15.9, 100.9],
-  // Africa
-  'nigeria': [9.1, 8.7], 'ethiopia': [9.1, 40.5], 'somalia': [5.2, 46.2],
-  'sudan': [12.9, 30.2], 'mali': [17.6, -4.0], 'niger': [13.5, 2.1],
-  'drc': [-4.0, 21.8], 'mozambique': [-18.7, 35.5], 'ghana': [7.9, -1.0],
-  // Americas
-  'venezuela': [6.4, -66.6], 'colombia': [4.6, -74.1], 'brazil': [-14.2, -51.9],
-  'mexico': [23.6, -102.6], 'haiti': [18.9, -72.3],
-  // Shipping
-  'red sea': [20.0, 44.0], 'hormuz': [26.6, 56.3], 'suez': [30.5, 32.3],
-  'panama': [8.5, -79.5], 'south china sea': [15.0, 115.0],
-  'taiwan strait': [24.0, 119.0], 'bosphorus': [41.1, 29.0],
-};
-
-function coordsForArticle(title, url, domain) {
-  const text = (title + ' ' + domain).toLowerCase();
-  for (const [keyword, coords] of Object.entries(REGION_COORDS)) {
-    if (text.includes(keyword)) {
-      // Add slight jitter to avoid exact stacking
-      return [
-        coords[0] + (Math.random() - 0.5) * 2,
-        coords[1] + (Math.random() - 0.5) * 2
-      ];
-    }
+let globeMesh;
+function createGlobe(texture){
+  const mat=new THREE.MeshPhongMaterial({
+    map: texture||null,
+    color: texture?0xffffff:0x1a3a5c,
+    emissive: 0x000308,
+    specular: 0x222244,
+    shininess: 8,
+  });
+  if(!texture){
+    // Draw continents procedurally via canvas
+    const cv=document.createElement('canvas'); cv.width=1024; cv.height=512;
+    const ctx=cv.getContext('2d');
+    // Ocean
+    ctx.fillStyle='#0a1628'; ctx.fillRect(0,0,1024,512);
+    // Simple continent blobs
+    ctx.fillStyle='#1a3a1a';
+    const continents=[
+      [200,150,120,80],[350,180,80,60],[420,200,40,30],
+      [430,140,60,50],[500,180,30,25],[530,200,20,15],
+      [80,170,90,70],[100,240,60,50],[90,300,40,35],
+      [530,100,80,60],[580,130,50,40],[620,160,30,25],
+      [700,200,50,40],[720,250,40,30],
+      [200,300,60,50],[170,350,50,40],
+      [300,380,40,30],[320,350,30,25],
+      [120,120,30,20],[140,100,25,15],
+    ];
+    continents.forEach(([x,y,w,h])=>{
+      ctx.beginPath();ctx.ellipse(x,y,w,h,0,0,Math.PI*2);ctx.fill();
+    });
+    // Ice caps
+    ctx.fillStyle='#3a5a6a';
+    ctx.fillRect(0,0,1024,30); ctx.fillRect(0,480,1024,32);
+    const t=new THREE.CanvasTexture(cv);
+    mat.map=t; mat.needsUpdate=true;
   }
-  return null;
+  globeMesh=new THREE.Mesh(globeGeo,mat);
+  scene.add(globeMesh);
 }
 
-// ── GDELT Fetch ─────────────────────────────────────────────────────────────
-async function fetchGDELT(query, maxRecords = 12) {
-  const url = `https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(query)}&mode=artlist&maxrecords=${maxRecords}&format=json&timespan=24h`;
-  try {
-    const r = await fetch(url);
-    const d = await r.json();
-    return d.articles || [];
-  } catch(e) {
-    return [];
-  }
+// Try loading real texture
+loader.load(TEXTURES[0], t=>createGlobe(t), undefined, ()=>{
+  loader.load(TEXTURES[1], t=>createGlobe(t), undefined, ()=>createGlobe(null));
+});
+
+// Atmosphere glow
+const atmGeo=new THREE.SphereGeometry(1.015,64,64);
+const atmMat=new THREE.MeshPhongMaterial({
+  color:0x002244,transparent:true,opacity:0.12,side:THREE.FrontSide,depthWrite:false
+});
+scene.add(new THREE.Mesh(atmGeo,atmMat));
+
+// Wireframe overlay (subtle grid)
+const wfGeo=new THREE.SphereGeometry(1.001,32,16);
+const wfMat=new THREE.MeshBasicMaterial({color:0x001122,wireframe:true,transparent:true,opacity:0.06});
+scene.add(new THREE.Mesh(wfGeo,wfMat));
+
+// Lighting
+scene.add(new THREE.AmbientLight(0x223344,1.2));
+const sun=new THREE.DirectionalLight(0xffffff,1.0);
+sun.position.set(5,3,5); scene.add(sun);
+const fill=new THREE.DirectionalLight(0x112244,0.4);
+fill.position.set(-5,-3,-5); scene.add(fill);
+
+// Stars
+const starGeo=new THREE.BufferGeometry();
+const starPos=[];
+for(let i=0;i<2000;i++){
+  const theta=Math.random()*Math.PI*2; const phi=Math.acos(2*Math.random()-1);
+  const r=50+Math.random()*100;
+  starPos.push(r*Math.sin(phi)*Math.cos(theta),r*Math.cos(phi),r*Math.sin(phi)*Math.sin(theta));
+}
+starGeo.setAttribute('position',new THREE.Float32BufferAttribute(starPos,3));
+scene.add(new THREE.Points(starGeo,new THREE.PointsMaterial({color:0x445566,size:0.15})));
+
+// ── HOTSPOT DATA ──────────────────────────────────────────────────────────────
+const HOTSPOTS=[
+  {lat:31.5,lon:34.8,label:'GAZA/ISRAEL',sev:'critical',type:'conflict',
+   title:'Gaza — Active Conflict Zone',
+   body:'Ongoing operations. Regional escalation risk involves Hezbollah and IRGC. Iran-backed proxy involvement continues.',
+   mkt:'WTI Crude (CL=F), XLE, ITA',tags:['OIL RISK','ESCALATION']},
+  {lat:14,lon:43,label:'RED SEA',sev:'critical',type:'shipping',
+   title:'Red Sea — Houthi Shipping Attacks',
+   body:'Houthi attacks on commercial vessels ongoing. Ships rerouting around Cape of Good Hope (+12-14 days voyage time).',
+   mkt:'Container rates, XLE, European CPI',tags:['SHIPPING','INFLATION']},
+  {lat:26.5,lon:56,label:'HORMUZ',sev:'elevated',type:'energy',
+   title:'Strait of Hormuz — Iranian Naval Presence',
+   body:'IRGC elevated naval presence. 20% of global oil transits here. Lloyd\'s war risk premium elevated.',
+   mkt:'WTI (CL=F), Brent, XLE, Airline margins',tags:['20% GLOBAL OIL','IRAN']},
+  {lat:25,lon:121,label:'TAIWAN',sev:'elevated',type:'trade',
+   title:'Taiwan Strait — PLA Military Posture',
+   body:'PLA conducting regular exercises. TSMC produces 90% of advanced chips. US carrier groups present.',
+   mkt:'SMH, NVDA, AAPL supply chain, SOXX',tags:['TSMC','SEMICONDUCTORS']},
+  {lat:49,lon:31,label:'UKRAINE',sev:'critical',type:'conflict',
+   title:'Ukraine — Active War Theater',
+   body:'Frontline active. Russia targeting energy infrastructure. NATO posture elevated.',
+   mkt:'Natural gas (NG=F), Wheat (ZW=F), European banks',tags:['NATGAS','GRAIN']},
+  {lat:14,lon:2,label:'SAHEL',sev:'elevated',type:'minerals',
+   title:'Sahel — Coups & Critical Minerals',
+   body:'Coup governments across Mali, Niger, Burkina Faso. Chinese mining rights expanding.',
+   mkt:'GDX, SIL, LIT (lithium ETF)',tags:['GOLD','LITHIUM']},
+  {lat:-5,lon:23.5,label:'DRC/COBALT',sev:'elevated',type:'minerals',
+   title:'DRC — Cobalt Supply Chain',
+   body:'DRC produces ~70% of world cobalt. Eastern DRC conflict threatening mining operations.',
+   mkt:'Cobalt, TSLA supply chain, ALB, SQM',tags:['70% COBALT','EV']},
+  {lat:12,lon:115,label:'S CHINA SEA',sev:'elevated',type:'shipping',
+   title:'South China Sea — Territorial Disputes',
+   body:'$3T+ annual trade transits here. Philippines-China confrontations escalating.',
+   mkt:'Container shipping, Asian FX, semiconductors',tags:['$3T TRADE','NAVAL']},
+  {lat:56,lon:37.6,label:'RUSSIA',sev:'elevated',type:'energy',
+   title:'Russia — Energy Export Rerouting',
+   body:'Russian oil rerouted to China and India. European LNG costs remain elevated.',
+   mkt:'European natgas, LNG stocks, UNG, XLE',tags:['LNG','SANCTIONS']},
+  {lat:35.6,lon:139.7,label:'BOJ/YEN',sev:'watch',type:'trade',
+   title:'Japan — BOJ Policy & Yen Carry Trade',
+   body:'BOJ normalizing ultra-loose policy. Yen carry trade unwind risk — trillions in positions.',
+   mkt:'USD/JPY, Nikkei, DXY, global bonds',tags:['YEN CARRY','BOJ']},
+  {lat:-20,lon:28,label:'ZIMBABWE',sev:'watch',type:'minerals',
+   title:'Zimbabwe — Lithium Export Controls',
+   body:'Zimbabwe imposed raw lithium ore export ban. Chinese firms dominate processing.',
+   mkt:'LIT, ALB (Albemarle), SQM',tags:['LITHIUM','EV']},
+];
+
+const COLORS={critical:'#FF4444',elevated:'#FF6600',watch:'#FFCC00'};
+let customEvents=[]; let activeFilter='all';
+let autoRotate=true; let dragging=false;
+let prevX=0,prevY=0; let rotX=0,rotY=0;
+let targetRotX=0,targetRotY=0;
+let currentHotspot=null;
+const markers=[];
+
+function latLonToVec3(lat,lon,r=1.012){
+  const phi=(90-lat)*Math.PI/180;
+  const theta=(lon+180)*Math.PI/180;
+  return new THREE.Vector3(
+    -r*Math.sin(phi)*Math.cos(theta),
+    r*Math.cos(phi),
+    r*Math.sin(phi)*Math.sin(theta)
+  );
 }
 
-async function loadAllEvents() {
-  const loadStatus = document.getElementById('loading-status');
-  if (loadStatus) loadStatus.textContent = 'FETCHING GDELT INTELLIGENCE…';
+function makeMarker(h){
+  const col=COLORS[h.sev]||'#FF6600';
+  const c=new THREE.Color(col);
+  const geo=new THREE.SphereGeometry(0.016,12,12);
+  const mat=new THREE.MeshBasicMaterial({color:c});
+  const mesh=new THREE.Mesh(geo,mat);
+  const pos=latLonToVec3(h.lat,h.lon);
+  mesh.position.copy(pos);
+  mesh.userData={hotspot:h};
 
-  const queries = [
-    { q: 'military conflict war attack', cat: 'conflict' },
-    { q: 'Iran Israel Gaza West Bank', cat: 'conflict' },
-    { q: 'Ukraine Russia NATO military', cat: 'conflict' },
-    { q: 'oil gas energy pipeline', cat: 'energy' },
-    { q: 'OPEC Saudi Arabia oil price', cat: 'energy' },
-    { q: 'trade tariff sanction WTO', cat: 'trade' },
-    { q: 'China Taiwan semiconductor export', cat: 'trade' },
-    { q: 'election government coup protest', cat: 'political' },
-    { q: 'central bank interest rate inflation', cat: 'economic' },
-    { q: 'earthquake flood disaster', cat: 'natural' },
-    { q: 'Red Sea Houthi shipping', cat: 'conflict' },
-    { q: 'Africa Sahel coup mining', cat: 'political' },
-  ];
+  // Pulse ring
+  const rg=new THREE.RingGeometry(0.022,0.028,24);
+  const rm=new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:0.5,side:THREE.DoubleSide});
+  const ring=new THREE.Mesh(rg,rm);
+  ring.position.copy(pos);
+  ring.lookAt(0,0,0); ring.rotateX(Math.PI/2);
+  ring.userData={pulse:true,phase:Math.random()*Math.PI*2};
+  scene.add(ring);
+  scene.add(mesh);
+  markers.push({mesh,ring,hotspot:h,basePos:pos.clone()});
+  return mesh;
+}
 
-  const rawEvents = [];
-  for (const q of queries) {
-    const arts = await fetchGDELT(q.q, 8);
-    for (const art of arts) {
-      const title  = art.title || '';
-      const url_   = art.url || '#';
-      const domain = art.domain || '';
-      const sd     = art.seendate || '';
-      const date   = sd.length >= 8 ? `${sd.slice(0,4)}-${sd.slice(4,6)}-${sd.slice(6,8)}` : '';
-      const coords = coordsForArticle(title, url_, domain);
-      if (coords) {
-        rawEvents.push({
-          title, url: url_, domain, date, cat: q.cat,
-          lat: coords[0], lon: coords[1]
-        });
-      }
-    }
+function renderMarkers(){
+  // Remove old
+  markers.forEach(({mesh,ring})=>{scene.remove(mesh);scene.remove(ring);});
+  markers.length=0;
+  const show=HOTSPOTS.filter(h=>activeFilter==='all'||h.type===activeFilter);
+  if(activeFilter==='custom'||activeFilter==='all') customEvents.forEach(h=>show.push(h));
+  show.forEach(makeMarker);
+}
+renderMarkers();
+
+// ── INTERACTION ───────────────────────────────────────────────────────────────
+const canvas=document.getElementById('c');
+const raycaster=new THREE.Raycaster();
+const mouse=new THREE.Vector2();
+let lastMouse={x:0,y:0};
+
+function getMousePos(e){
+  const r=canvas.getBoundingClientRect();
+  return{x:e.clientX-r.left,y:e.clientY-r.top};
+}
+
+canvas.addEventListener('mousedown',e=>{
+  dragging=true; autoRotate=false;
+  const p=getMousePos(e); prevX=p.x; prevY=p.y;
+});
+canvas.addEventListener('mouseup',()=>{dragging=false;});
+canvas.addEventListener('mousemove',e=>{
+  const p=getMousePos(e);
+  lastMouse={x:e.clientX,y:e.clientY};
+  if(dragging){
+    const dx=p.x-prevX; const dy=p.y-prevY;
+    targetRotY+=dx*0.005; targetRotX+=dy*0.004;
+    targetRotX=Math.max(-Math.PI/2.2,Math.min(Math.PI/2.2,targetRotX));
+    prevX=p.x; prevY=p.y; autoRotate=false;
   }
+  // Hover detection
+  mouse.x=(p.x/W)*2-1; mouse.y=-(p.y/H)*2+1;
+  raycaster.setFromCamera(mouse,camera);
+  const hits=raycaster.intersectObjects(markers.map(m=>m.mesh));
+  const tt=document.getElementById('tt');
+  if(hits.length){
+    const h=hits[0].object.userData.hotspot;
+    tt.style.display='block';
+    tt.style.left=(e.clientX+12)+'px';
+    tt.style.top=(e.clientY-8)+'px';
+    tt.textContent=h.label+' — '+h.sev.toUpperCase();
+    canvas.style.cursor='pointer';
+  }else{
+    tt.style.display='none';
+    canvas.style.cursor='default';
+  }
+});
+canvas.addEventListener('click',e=>{
+  mouse.x=((e.clientX)/W)*2-1; mouse.y=-((e.clientY)/H)*2+1;
+  raycaster.setFromCamera(mouse,camera);
+  const hits=raycaster.intersectObjects(markers.map(m=>m.mesh));
+  const ic=document.getElementById('ic');
+  if(hits.length){
+    const h=hits[0].object.userData.hotspot;
+    showCard(h,e.clientX,e.clientY);
+  }else{
+    ic.style.display='none';
+  }
+});
 
-  // Deduplicate by URL
-  const seen = new Set();
-  allEvents = rawEvents.filter(e => {
-    if (seen.has(e.url)) return false;
-    seen.add(e.url);
-    return true;
+function showCard(h,cx,cy){
+  const ic=document.getElementById('ic');
+  document.getElementById('ic-sev').textContent=h.sev.toUpperCase()+' — '+h.type.toUpperCase();
+  document.getElementById('ic-ttl').textContent=h.title||h.label;
+  document.getElementById('ic-body').textContent=h.body||'';
+  document.getElementById('ic-mkt').textContent=h.mkt?'📊 MARKET EXPOSURE: '+h.mkt:'';
+  const tagsEl=document.getElementById('ic-tags');
+  tagsEl.innerHTML=(h.tags||[]).map(t=>`<span class="ictag">${t}</span>`).join('');
+  ic.className='show '+(h.sev||'elevated');
+  // Position card
+  let x=cx+18,y=cy-20;
+  if(x+310>W) x=cx-325;
+  if(y+220>H) y=H-230;
+  ic.style.left=x+'px'; ic.style.top=y+'px';
+  ic.style.display='block';
+}
+
+// Scroll zoom
+canvas.addEventListener('wheel',e=>{
+  e.preventDefault();
+  camera.position.z+=e.deltaY*0.001;
+  camera.position.z=Math.max(1.4,Math.min(5.0,camera.position.z));
+},{passive:false});
+
+// ── THEATER FLY-TO ────────────────────────────────────────────────────────────
+function flyTo(lat,lon){
+  const phi=(90-lat)*Math.PI/180;
+  const theta=(lon+180)*Math.PI/180;
+  targetRotY=theta-Math.PI;
+  targetRotX=-(lat*Math.PI/180)*0.5;
+  autoRotate=false;
+}
+window.flyTo=flyTo;
+
+// ── FILTER ────────────────────────────────────────────────────────────────────
+function setFilter(f,btn){
+  activeFilter=f;
+  document.querySelectorAll('.fbtn').forEach(b=>b.classList.remove('on'));
+  if(btn) btn.classList.add('on');
+  renderMarkers();
+}
+window.setFilter=setFilter;
+
+// ── ADD CUSTOM EVENT ──────────────────────────────────────────────────────────
+function addCustomEvent(){
+  const title=document.getElementById('ae-title').value;
+  const lat=parseFloat(document.getElementById('ae-lat').value);
+  const lon=parseFloat(document.getElementById('ae-lon').value);
+  const desc=document.getElementById('ae-desc').value;
+  const sev=document.getElementById('ae-sev').value;
+  const mkt=document.getElementById('ae-mkt').value;
+  if(!title||isNaN(lat)||isNaN(lon)) return;
+  customEvents.push({lat,lon,label:title,sev,type:'custom',title,body:desc,mkt,tags:['CUSTOM']});
+  document.getElementById('adddlg').classList.remove('show');
+  renderMarkers();
+}
+window.addCustomEvent=addCustomEvent;
+
+// ── ANIMATION LOOP ────────────────────────────────────────────────────────────
+let lastT=0;
+function animate(t){
+  requestAnimationFrame(animate);
+  const dt=Math.min((t-lastT)/1000,0.05); lastT=t;
+
+  if(autoRotate) targetRotY+=dt*0.08;
+
+  rotX+=(targetRotX-rotX)*0.08;
+  rotY+=(targetRotY-rotY)*0.08;
+
+  if(globeMesh){
+    globeMesh.rotation.x=rotX;
+    globeMesh.rotation.y=rotY;
+  }
+  scene.children.forEach(obj=>{
+    if(obj.userData.pulse!==undefined&&!obj.userData.hotspot){return;}
+  });
+  // Rotate markers with globe
+  markers.forEach(({mesh,ring,hotspot,basePos})=>{
+    const euler=new THREE.Euler(rotX,rotY,0,'XYZ');
+    const quat=new THREE.Quaternion().setFromEuler(euler);
+    const rotated=basePos.clone().applyQuaternion(quat);
+    mesh.position.copy(rotated);
+    ring.position.copy(rotated);
+    ring.lookAt(camera.position);
+    // Pulse
+    const p=ring.userData.phase||0;
+    ring.userData.phase=(p||0)+dt*2;
+    ring.material.opacity=0.3+0.25*Math.sin(ring.userData.phase);
+    const scl=1+0.15*Math.sin(ring.userData.phase);
+    ring.scale.set(scl,scl,1);
+    // Hide markers on back of globe
+    const toCamera=camera.position.clone().sub(rotated).normalize();
+    const normal=rotated.clone().normalize();
+    mesh.visible=toCamera.dot(normal)>0.1;
+    ring.visible=toCamera.dot(normal)>0.1;
   });
 
-  if (loadStatus) loadStatus.textContent = `MAPPED ${allEvents.length} EVENTS`;
-  return allEvents;
+  renderer.render(scene,camera);
 }
+animate(0);
 
-// ── Cesium Globe Setup ──────────────────────────────────────────────────────
-async function initGlobe() {
-  try {
-    // Create viewer with realistic imagery
-    viewer = new Cesium.Viewer('cesiumContainer', {
-      terrainProvider: await Cesium.createWorldTerrainAsync(),
-      animation:         false,
-      timeline:          false,
-      baseLayerPicker:   false,
-      navigationHelpButton: true,
-      homeButton:        false,
-      sceneModePicker:   false,
-      geocoder:          false,
-      infoBox:           false,
-      selectionIndicator: false,
-      fullscreenButton:  false,
-      creditContainer:   document.createElement('div'), // hide credits
-    });
-
-    // Atmosphere and lighting for realism
-    viewer.scene.globe.enableLighting = true;
-    viewer.scene.atmosphere.show = true;
-    viewer.scene.skyAtmosphere.show = true;
-    viewer.scene.globe.showGroundAtmosphere = true;
-    viewer.scene.fog.enabled = true;
-    viewer.scene.fog.density = 0.00025;
-
-    // Set night lighting to see city lights
-    viewer.scene.globe.nightFadeOutDistance = 1e7;
-    viewer.scene.globe.nightFadeInDistance  = 5e6;
-
-    // Deep space background
-    viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#000005');
-
-    // Initial camera position - angled view
-    viewer.camera.setView({
-      destination: Cesium.Cartesian3.fromDegrees(20, 20, 18000000),
-      orientation: {
-        heading: Cesium.Math.toRadians(0),
-        pitch:   Cesium.Math.toRadians(-35),
-        roll:    0
-      }
-    });
-
-    // Load events
-    const loadStatus = document.getElementById('loading-status');
-    if (loadStatus) loadStatus.textContent = 'FETCHING GLOBAL INTELLIGENCE…';
-
-    await loadAllEvents();
-    renderMarkers();
-    updateCounts();
-    populateFeed();
-
-    // Hide loading screen
-    setTimeout(() => {
-      document.getElementById('loading').style.display = 'none';
-    }, 600);
-
-    // Set up hover detection
-    setupHover();
-
-    // Auto-refresh every 5 minutes
-    setInterval(async () => {
-      await loadAllEvents();
-      clearMarkers();
-      renderMarkers(currentFilter);
-      updateCounts();
-      populateFeed();
-      document.getElementById('last-update').textContent =
-        'UPDATED ' + new Date().toLocaleTimeString('en-US', {hour12:false});
-    }, 300000);
-
-    document.getElementById('last-update').textContent =
-      'UPDATED ' + new Date().toLocaleTimeString('en-US', {hour12:false});
-    document.getElementById('event-count-label').textContent =
-      `${allEvents.length} EVENTS MAPPED`;
-
-  } catch(e) {
-    console.error('Cesium init error:', e);
-    // Fallback to basic globe
-    initFallbackGlobe();
-  }
-}
-
-function renderMarkers(filter) {
-  const toRender = filter && filter !== 'all'
-    ? allEvents.filter(e => e.cat === filter)
-    : allEvents;
-
-  for (const ev of toRender) {
-    const cfg  = CATEGORIES[ev.cat] || CATEGORIES.economic;
-    const size = cfg.size;
-
-    const entity = viewer.entities.add({
-      position: Cesium.Cartesian3.fromDegrees(ev.lon, ev.lat, 0),
-      billboard: {
-        image:  createMarkerCanvas(cfg.color.toCssColorString(), size),
-        width:  size * 2,
-        height: size * 2,
-        verticalOrigin:   Cesium.VerticalOrigin.CENTER,
-        horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        heightReference: Cesium.HeightReference.NONE,
-      },
-      label: undefined,
-      properties: {
-        title:    ev.title,
-        url:      ev.url,
-        domain:   ev.domain,
-        date:     ev.date,
-        cat:      ev.cat,
-      }
-    });
-
-    // Pulse ring for conflict events
-    if (ev.cat === 'conflict') {
-      viewer.entities.add({
-        position: Cesium.Cartesian3.fromDegrees(ev.lon, ev.lat, 0),
-        ellipse: {
-          semiMajorAxis: 150000,
-          semiMinorAxis: 150000,
-          material: new Cesium.ColorMaterialProperty(
-            Cesium.Color.fromCssColorString('#FF2200').withAlpha(0.15)
-          ),
-          outline: true,
-          outlineColor: Cesium.Color.fromCssColorString('#FF2200').withAlpha(0.4),
-          outlineWidth: 1,
-          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-        }
-      });
-    }
-
-    entities.push(entity);
-  }
-}
-
-function createMarkerCanvas(color, size) {
-  const canvas = document.createElement('canvas');
-  const s = size * 2;
-  canvas.width = s; canvas.height = s;
-  const ctx = canvas.getContext('2d');
-
-  // Glow
-  const glow = ctx.createRadialGradient(s/2,s/2,0, s/2,s/2,s/2);
-  glow.addColorStop(0, color.replace(')', ',0.8)').replace('rgb','rgba'));
-  glow.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = glow;
-  ctx.fillRect(0, 0, s, s);
-
-  // Core dot
-  ctx.beginPath();
-  ctx.arc(s/2, s/2, size*0.4, 0, Math.PI*2);
-  ctx.fillStyle = color;
-  ctx.fill();
-
-  // Ring
-  ctx.beginPath();
-  ctx.arc(s/2, s/2, size*0.65, 0, Math.PI*2);
-  ctx.strokeStyle = color.replace(')', ',0.5)').replace('rgb','rgba');
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  return canvas.toDataURL();
-}
-
-function clearMarkers() {
-  entities.forEach(e => viewer.entities.remove(e));
-  entities = [];
-}
-
-function setupHover() {
-  const tooltip = document.getElementById('tooltip');
-  const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
-
-  handler.setInputAction((movement) => {
-    const picked = viewer.scene.pick(movement.endPosition);
-    if (Cesium.defined(picked) && Cesium.defined(picked.id) && picked.id.properties) {
-      const props = picked.id.properties;
-      const title  = props.title ? props.title.getValue() : '';
-      const url    = props.url   ? props.url.getValue()   : '#';
-      const domain = props.domain ? props.domain.getValue() : '';
-      const date   = props.date  ? props.date.getValue()  : '';
-      const cat    = props.cat   ? props.cat.getValue()   : '';
-
-      const catColors = {
-        conflict: '#FF0000', energy: '#FF8C00', trade: '#00AAFF',
-        political: '#BB44FF', economic: '#00DD55', natural: '#FFFF00'
-      };
-      const catLabel = cat.toUpperCase();
-      const color    = catColors[cat] || '#FF6600';
-
-      document.getElementById('tt-cat').textContent  = catLabel;
-      document.getElementById('tt-cat').style.color  = color;
-      document.getElementById('tt-title').textContent = title.length > 80
-        ? title.slice(0, 80) + '…' : title;
-      document.getElementById('tt-source').textContent = domain;
-      document.getElementById('tt-meta').textContent   = date;
-
-      const link = document.getElementById('tt-link');
-      link.href = url;
-      link.textContent = url !== '#' ? '↗ Open source article' : '(no link)';
-
-      // Position tooltip
-      const x = movement.endPosition.x;
-      const y = movement.endPosition.y;
-      const w = tooltip.offsetWidth || 280;
-      const h = tooltip.offsetHeight || 120;
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      tooltip.style.left   = (x + 220 + w > vw ? x - w - 10 : x + 220 + 16) + 'px';
-      tooltip.style.top    = (y + h > vh ? y - h - 10 : y - 10) + 'px';
-      tooltip.style.display = 'block';
-      tooltip.style.borderLeftColor = color;
-      document.body.style.cursor = 'pointer';
-    } else {
-      tooltip.style.display = 'none';
-      document.body.style.cursor = 'default';
-    }
-  }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
-
-  // Click to open link
-  handler.setInputAction((click) => {
-    const picked = viewer.scene.pick(click.position);
-    if (Cesium.defined(picked) && Cesium.defined(picked.id) && picked.id.properties) {
-      const url = picked.id.properties.url ? picked.id.properties.url.getValue() : '#';
-      if (url && url !== '#') window.open(url, '_blank');
-    }
-  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
-}
-
-function filterCategory(cat, btn) {
-  currentFilter = cat;
-  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  clearMarkers();
-  renderMarkers(cat === 'all' ? null : cat);
-}
-
-function flyTo(lat, lon, height) {
-  if (!viewer) return;
-  viewer.camera.flyTo({
-    destination: Cesium.Cartesian3.fromDegrees(lon, lat, height || 3000000),
-    duration: 2.0,
-    orientation: {
-      heading: Cesium.Math.toRadians(0),
-      pitch: Cesium.Math.toRadians(-25),
-      roll: 0
-    }
-  });
-}
-
-function resetView() {
-  if (!viewer) return;
-  viewer.camera.flyTo({
-    destination: Cesium.Cartesian3.fromDegrees(20, 20, 18000000),
-    duration: 2.0,
-    orientation: {
-      heading: 0, pitch: Cesium.Math.toRadians(-35), roll: 0
-    }
-  });
-}
-
-function toggleNight() {
-  if (!viewer) return;
-  nightMode = !nightMode;
-  viewer.scene.globe.enableLighting = nightMode;
-  const btn = document.getElementById('night-btn');
-  if (nightMode) {
-    btn.style.color = '#FF8C00';
-    btn.style.borderColor = '#FF6600';
-    btn.textContent = '☀ DAY MODE';
-    // Set to nighttime
-    viewer.clock.currentTime = Cesium.JulianDate.fromDate(new Date('2024-01-01T00:00:00Z'));
-    viewer.clock.shouldAnimate = false;
-  } else {
-    btn.style.color = '#555';
-    btn.style.borderColor = '#333';
-    btn.textContent = '☾ TOGGLE NIGHT';
-    viewer.clock.currentTime = Cesium.JulianDate.now();
-  }
-}
-
-function updateCounts() {
-  const cats = ['conflict','energy','trade','political','economic','natural'];
-  document.getElementById('cnt-all').textContent = allEvents.length;
-  for (const cat of cats) {
-    const cnt = allEvents.filter(e => e.cat === cat).length;
-    const el  = document.getElementById(`cnt-${cat}`);
-    if (el) el.textContent = cnt;
-  }
-  document.getElementById('event-count-label').textContent = `${allEvents.length} EVENTS MAPPED`;
-  document.getElementById('feed-count').textContent = `${allEvents.length} events`;
-}
-
-function populateFeed() {
-  const container = document.getElementById('feed-items');
-  container.innerHTML = '';
-  const catColors = {
-    conflict: '#FF0000', energy: '#FF8C00', trade: '#00AAFF',
-    political: '#BB44FF', economic: '#00DD55', natural: '#FFFF00'
-  };
-  const recent = [...allEvents].slice(0, 20);
-  for (const ev of recent) {
-    const color = catColors[ev.cat] || '#FF6600';
-    const div   = document.createElement('div');
-    div.className = 'feed-item';
-    div.innerHTML = `
-      <div class="feed-title">
-        ${ev.url !== '#'
-          ? `<a href="${ev.url}" target="_blank">${ev.title.slice(0,60)}${ev.title.length>60?'…':''}</a>`
-          : ev.title.slice(0,60) + (ev.title.length>60?'…':'')}
-      </div>
-      <div class="feed-region">
-        <span style="color:${color}">${ev.cat.toUpperCase()}</span>
-        &nbsp;|&nbsp; ${ev.domain} &nbsp;|&nbsp; ${ev.date}
-      </div>`;
-
-    div.addEventListener('click', () => {
-      if (viewer) {
-        viewer.camera.flyTo({
-          destination: Cesium.Cartesian3.fromDegrees(ev.lon, ev.lat, 3000000),
-          duration: 1.5,
-        });
-      }
-    });
-    container.appendChild(div);
-  }
-}
-
-// ── Clock ──────────────────────────────────────────────────────────────────
-function updateClock() {
-  const now = new Date();
-  const h   = String(now.getUTCHours()).padStart(2,'0');
-  const m   = String(now.getUTCMinutes()).padStart(2,'0');
-  const s   = String(now.getUTCSeconds()).padStart(2,'0');
-  document.getElementById('clock').textContent = `${h}:${m}:${s} UTC`;
-}
-setInterval(updateClock, 1000);
-updateClock();
-
-// ── Fallback Globe (Three.js) if Cesium fails ─────────────────────────────
-function initFallbackGlobe() {
-  document.getElementById('loading').style.display = 'none';
-  const container = document.getElementById('cesiumContainer');
-  container.innerHTML = `
-<div style="display:flex;align-items:center;justify-content:center;height:100%;background:#000;color:#FF6600;font-family:Courier New;font-size:14px;text-align:center">
-  <div>
-    <div style="font-size:24px;margin-bottom:16px">🌍</div>
-    <div>GDELT EVENTS LOADED</div>
-    <div style="color:#555;font-size:11px;margin-top:8px">Cesium globe requires network access.<br>Use the event feed on the right →</div>
-  </div>
-</div>`;
-  // Still populate event feed
-  populateFeed();
-  updateCounts();
-}
-
-// ── Init ───────────────────────────────────────────────────────────────────
-window.addEventListener('load', initGlobe);
+// Resize
+window.addEventListener('resize',()=>{
+  const w=window.innerWidth,h=window.innerHeight;
+  camera.aspect=w/h; camera.updateProjectionMatrix();
+  renderer.setSize(w,h);
+});
 </script>
 </body>
 </html>
