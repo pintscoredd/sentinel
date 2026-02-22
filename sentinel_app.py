@@ -322,8 +322,9 @@ h1,h2,h3,h4 { color: var(--org) !important; font-family: var(--mono) !important;
 def _get_secret(name, default=""):
     """Pull API key from st.secrets (secrets.toml), fallback to default."""
     try:
-        return st.secrets.get(name, default)
-    except Exception:
+        val = st.secrets[name]
+        return val if val else default
+    except (KeyError, FileNotFoundError, AttributeError, Exception):
         return default
 
 DEFAULTS = {
@@ -331,7 +332,7 @@ DEFAULTS = {
     "fred_key": _get_secret("FRED_API_KEY"),
     "finnhub_key": _get_secret("FINNHUB_API_KEY"),
     "newsapi_key": _get_secret("NEWSAPI_KEY"),
-    "coingecko_key": _get_secret("COINGECKO_KEY"),
+
     "chat_history":[],
     "watchlist":["SPY","QQQ","NVDA","AAPL","GLD","TLT","BTC-USD"],
     "macro_theses":"", "geo_watch":"",
@@ -811,7 +812,7 @@ with tabs[3]:
     st.markdown('<div class="bb-ph">💰 CRYPTO — COINGECKO + TRADINGVIEW</div>', unsafe_allow_html=True)
 
     with st.spinner("Loading crypto globals…"):
-        gdata = crypto_global(st.session_state.coingecko_key)
+        gdata = crypto_global()
     if gdata:
         g1,g2,g3,g4 = st.columns(4)
         total_cap = gdata.get("total_market_cap",{}).get("usd",0)
@@ -838,7 +839,7 @@ with tabs[3]:
     with cr1:
         st.markdown('<div class="bb-ph">💹 TOP 20 BY MARKET CAP</div>', unsafe_allow_html=True)
         with st.spinner("Loading crypto markets…"):
-            cdata = crypto_markets(st.session_state.coingecko_key)
+            cdata = crypto_markets()
         if cdata and isinstance(cdata, list):
             # Header row
             st.markdown(
@@ -859,7 +860,7 @@ with tabs[3]:
                     f'<span style="color:{color};font-weight:700">{sign}{pct:.2f}%</span>'
                     f'<span style="color:#777">${c["market_cap"]/1e9:.1f}B</span></div>', unsafe_allow_html=True)
         else:
-            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">CoinGecko data unavailable. Rate limits may apply — try adding a CoinGecko key.</p>', unsafe_allow_html=True)
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">CoinGecko data unavailable. Rate limits may apply — try again in a minute.</p>', unsafe_allow_html=True)
 
     with cr2:
         st.markdown('<div class="bb-ph">📈 BTC/USD — TRADINGVIEW</div>', unsafe_allow_html=True)
