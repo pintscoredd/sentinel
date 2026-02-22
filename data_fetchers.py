@@ -103,10 +103,10 @@ def yahoo_quote(ticker):
 def get_futures():
     """Fetch key futures contracts"""
     FUTURES = [
-        ("ES=F", "S&P 500 Fut"), ("NQ=F", "Nasdaq Fut"), ("YM=F", "Dow Fut"),
-        ("RTY=F", "Russell Fut"), ("ZN=F", "10Y Bond Fut"), ("CL=F", "WTI Crude"),
-        ("GC=F", "Gold"), ("SI=F", "Silver"), ("NG=F", "Nat Gas"),
-        ("ZW=F", "Wheat"), ("ZC=F", "Corn"), ("DX=F", "USD Index"),
+        ("ES=F", "S&P 500 Futures"), ("NQ=F", "Nasdaq 100 Futures"), ("YM=F", "Dow Jones Futures"),
+        ("RTY=F", "Russell 2000 Futures"), ("ZN=F", "10-Year Treasury Bond"), ("CL=F", "WTI Crude Oil"),
+        ("GC=F", "Gold Futures"), ("SI=F", "Silver Futures"), ("NG=F", "Natural Gas"),
+        ("ZW=F", "Wheat Futures"), ("ZC=F", "Corn Futures"), ("DX=F", "US Dollar Index"),
     ]
     rows = []
     for ticker, name in FUTURES:
@@ -160,16 +160,25 @@ def vix_price():
         return None
 
 @st.cache_data(ttl=600)
-def options_chain(ticker):
+def options_expiries(ticker):
+    """Get all available options expiry dates"""
+    try:
+        return list(yf.Ticker(ticker).options)
+    except:
+        return []
+
+@st.cache_data(ttl=600)
+def options_chain(ticker, expiry=None):
     try:
         t = yf.Ticker(ticker)
         exps = t.options
         if not exps: return None, None, None
-        chain = t.option_chain(exps[0])
+        exp = expiry if expiry and expiry in exps else exps[0]
+        chain = t.option_chain(exp)
         cols = ["strike", "lastPrice", "bid", "ask", "volume", "openInterest", "impliedVolatility"]
-        c = chain.calls[[x for x in cols if x in chain.calls.columns]].head(12)
-        p = chain.puts[[x for x in cols if x in chain.puts.columns]].head(12)
-        return c, p, exps[0]
+        c = chain.calls[[x for x in cols if x in chain.calls.columns]].head(20)
+        p = chain.puts[[x for x in cols if x in chain.puts.columns]].head(20)
+        return c, p, exp
     except:
         return None, None, None
 
