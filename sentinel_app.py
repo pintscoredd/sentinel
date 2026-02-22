@@ -192,9 +192,9 @@ section.main > div.block-container {
   transition: border-color 0.15s;
 }
 .bb-news:hover { border-left-color: var(--wht); background: var(--bg2); }
-.bb-news a { color: var(--wht); text-decoration: none; font-size: 13px; font-weight: 500; line-height: 1.5; }
+.bb-news a { color: var(--wht); text-decoration: none; font-size: 15px; font-weight: 600; line-height: 1.5; }
 .bb-news a:hover { color: var(--org2); text-decoration: underline; }
-.bb-meta { color: var(--muted); font-size: 10px; margin-top: 4px; letter-spacing: 0.5px; }
+.bb-meta { color: var(--muted); font-size: 10px; margin-top: 4px; letter-spacing: 0.5px; text-align: right; }
 .bb-news-geo  { border-left-color: #FFFF00; }
 .bb-news-macro{ border-left-color: var(--blu); }
 .bb-news-poly { border-left-color: var(--pur); }
@@ -255,7 +255,7 @@ section.main > div.block-container {
 
 /* GAINERS/LOSERS - wider grid */
 .mover-row {
-  display: grid; grid-template-columns: 70px 105px 80px 80px 80px;
+  display: grid; grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
   gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--bg3);
   font-family: var(--mono); font-size: 12px; align-items: center; width:100%;
 }
@@ -263,7 +263,7 @@ section.main > div.block-container {
 
 /* FUTURES ROW */
 .fut-row {
-  display: grid; grid-template-columns: 90px 130px 120px 75px 85px 85px;
+  display: grid; grid-template-columns: 1fr 1.4fr 1.2fr 0.8fr 0.9fr 0.8fr;
   gap: 6px; padding: 5px 10px; border-bottom: 1px solid var(--bg3);
   font-family: var(--mono); font-size: 12px; align-items: center; width:100%;
 }
@@ -327,6 +327,23 @@ def _get_secret(name, default=""):
     except (KeyError, FileNotFoundError, AttributeError, Exception):
         return default
 
+WATCHLIST_FILE = pathlib.Path(".streamlit/watchlist.json")
+
+def _load_watchlist():
+    try:
+        if WATCHLIST_FILE.exists():
+            return json.loads(WATCHLIST_FILE.read_text())
+    except Exception:
+        pass
+    return ["SPY","QQQ","NVDA","AAPL","GLD","TLT","BTC-USD"]
+
+def _save_watchlist(wl):
+    try:
+        WATCHLIST_FILE.parent.mkdir(exist_ok=True)
+        WATCHLIST_FILE.write_text(json.dumps(wl))
+    except Exception:
+        pass
+
 DEFAULTS = {
     "gemini_key": _get_secret("GEMINI_API_KEY"),
     "fred_key": _get_secret("FRED_API_KEY"),
@@ -334,7 +351,7 @@ DEFAULTS = {
     "newsapi_key": _get_secret("NEWSAPI_KEY"),
 
     "chat_history":[],
-    "watchlist":["SPY","QQQ","NVDA","AAPL","GLD","TLT","BTC-USD"],
+    "watchlist": _load_watchlist(),
     "macro_theses":"", "geo_watch":"",
     "wl_add_input":"", "api_panel_open": True,
 }
@@ -425,10 +442,13 @@ with tabs[0]:
         st.markdown('<div class="bb-ph">⚡ MARKET SENTIMENT</div>', unsafe_allow_html=True)
         s1,s2,s3 = st.columns(3)
         v = vix_price()
+        vix_q = yahoo_quote("^VIX")
         with s1:
             if v:
                 lbl = "LOW FEAR" if v<15 else ("MODERATE" if v<25 else ("HIGH FEAR" if v<35 else "PANIC"))
-                st.metric("VIX", f"{v:.2f}", delta=lbl)
+                vix_chg = f"{vix_q['pct']:+.2f}%" if vix_q else ""
+                vix_chg_c = pct_color(vix_q['pct']) if vix_q else "#888"
+                st.markdown(f'<div class="fg-gauge"><div class="fg-num">{v:.2f}</div><div class="fg-lbl" style="color:#FF8C00">{lbl}</div><div style="color:{vix_chg_c};font-size:13px;font-weight:700;margin-top:4px">{vix_chg}</div><div style="color:#555;font-size:8px;margin-top:2px">VIX</div></div>', unsafe_allow_html=True)
         # Stock F&G
         sfg_val, sfg_lbl = calc_stock_fear_greed()
         with s2:
@@ -439,7 +459,7 @@ with tabs[0]:
             if v:
                 posture = "RISK-ON" if v<18 else ("NEUTRAL" if v<25 else "RISK-OFF")
                 pc = {"RISK-ON":"#00CC44","NEUTRAL":"#FF8C00","RISK-OFF":"#FF4444"}[posture]
-                st.markdown(f'<div style="background:#0D0D0D;border:1px solid #222;border-top:2px solid {pc};padding:8px;text-align:center"><div style="color:#888;font-size:9px;letter-spacing:1px">POSTURE</div><div style="color:{pc};font-size:18px;font-weight:700">{posture}</div></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="fg-gauge"><div style="color:#888;font-size:9px;letter-spacing:1px">POSTURE</div><div class="fg-num" style="color:{pc};font-size:24px">{posture}</div></div>', unsafe_allow_html=True)
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
@@ -454,14 +474,16 @@ with tabs[0]:
             if st.button("＋ ADD", use_container_width=True):
                 t = new_ticker.upper().strip()
                 if t and t not in st.session_state.watchlist:
-                    st.session_state.watchlist.append(t); st.rerun()
+                    st.session_state.watchlist.append(t)
+                    _save_watchlist(st.session_state.watchlist)
+                    st.rerun()
 
         # Display watchlist with remove buttons
         wl_qs = multi_quotes(st.session_state.watchlist)
         # Header row
         st.markdown("""<div style="display:grid;grid-template-columns:90px 120px 100px 100px 90px 50px;
 gap:12px;padding:6px 10px;border-bottom:1px solid #FF6600;
-font-family:monospace;font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">
+font-family:monospace;font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:8px">
 <span>TICKER</span><span>PRICE</span><span>CHG %</span><span>CHG $</span><span>VOLUME</span><span>DEL</span>
 </div>""", unsafe_allow_html=True)
         for q in wl_qs:
@@ -477,6 +499,7 @@ font-family:monospace;font-size:9px;color:#FF6600;letter-spacing:1px;margin-bott
             with crow[5]:
                 if st.button("✕", key=f"rm_{q['ticker']}", help=f"Remove {q['ticker']}"):
                     st.session_state.watchlist = [x for x in st.session_state.watchlist if x!=q["ticker"]]
+                    _save_watchlist(st.session_state.watchlist)
                     st.rerun()
             st.markdown('<div style="border-bottom:1px solid #111;margin:0 0 2px 0"></div>', unsafe_allow_html=True)
 
@@ -796,14 +819,17 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-        # ── DXY and Gold from TradingView mini widgets
-        tc1, tc2 = st.columns(2)
-        with tc1:
-            st.markdown('<div class="bb-ph">USD INDEX — DXY</div>', unsafe_allow_html=True)
-            components.html(tv_mini("TVC:DXY", 185), height=190)
-        with tc2:
-            st.markdown('<div class="bb-ph">GOLD — COMEX</div>', unsafe_allow_html=True)
-            components.html(tv_mini("COMEX:GC1!", 185), height=190)
+        # ── DXY from Yahoo Finance (not TradingView)
+        st.markdown('<div class="bb-ph">USD INDEX — DXY (YAHOO FINANCE)</div>', unsafe_allow_html=True)
+        dxy_q = yahoo_quote("DX-Y.NYB")
+        if dxy_q:
+            dxy_c = pct_color(dxy_q["pct"])
+            st.markdown(f'<div style="background:#0D0D0D;border:1px solid #222;border-top:2px solid #FF6600;padding:14px;font-family:monospace">' 
+                        f'<div style="color:#FF6600;font-size:10px;letter-spacing:1px">DXY — US DOLLAR INDEX</div>'
+                        f'<div style="color:#FFF;font-size:28px;font-weight:700;margin-top:4px">{dxy_q["price"]:.2f}</div>'
+                        f'<div style="color:{dxy_c};font-size:14px;font-weight:600;margin-top:2px">{dxy_q["pct"]:+.2f}% ({dxy_q["change"]:+.2f})</div></div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">DXY data unavailable</p>', unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════
 # TAB 3 — CRYPTO
