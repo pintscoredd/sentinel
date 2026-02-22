@@ -32,7 +32,7 @@ from data_fetchers import (
 )
 from ui_components import (
     CHART_LAYOUT, dark_fig, tv_chart, tv_mini, tv_tape,
-    yield_curve_chart, yield_history_chart,
+    yield_curve_chart, yield_history_chart, cpi_vs_rates_chart,
     render_news_card, render_wl_row, render_options_table,
     render_insider_cards, poly_url, poly_status, unusual_side,
     render_poly_card,
@@ -194,7 +194,7 @@ section.main > div.block-container {
 .bb-news:hover { border-left-color: var(--wht); background: var(--bg2); }
 .bb-news a { color: var(--wht); text-decoration: none; font-size: 15px; font-weight: 600; line-height: 1.5; }
 .bb-news a:hover { color: var(--org2); text-decoration: underline; }
-.bb-meta { color: var(--muted); font-size: 10px; margin-top: 4px; letter-spacing: 0.5px; text-align: right; }
+.bb-meta { color: #AAA; font-size: 11px; margin-top: 4px; letter-spacing: 0.5px; text-align: right; }
 .bb-news-geo  { border-left-color: #FFFF00; }
 .bb-news-macro{ border-left-color: var(--blu); }
 .bb-news-poly { border-left-color: var(--pur); }
@@ -234,21 +234,21 @@ section.main > div.block-container {
 .ins-card {
   background: var(--bg1); border: 1px solid var(--ghost);
   border-left: 3px solid var(--muted);
-  padding: 8px 12px; margin: 3px 0; font-family: var(--mono);
+  padding: 10px 14px; margin: 3px 0; font-family: var(--mono);
 }
 .ins-card.buy  { border-left-color: var(--grn); }
 .ins-card.sell { border-left-color: var(--red); }
 .ins-card:hover { background: var(--bg2); }
-.ins-name  { color: var(--wht); font-weight: 700; font-size: 12px; }
-.ins-role  { color: var(--org2); font-size: 10px; }
-.ins-buy   { color: var(--grn); font-weight: 700; font-size: 12px; }
-.ins-sell  { color: var(--red); font-weight: 700; font-size: 12px; }
-.ins-meta  { color: var(--muted); font-size: 10px; }
+.ins-name  { color: var(--wht); font-weight: 700; font-size: 14px; }
+.ins-role  { color: var(--org2); font-size: 11px; }
+.ins-buy   { color: var(--grn); font-weight: 700; font-size: 13px; }
+.ins-sell  { color: var(--red); font-weight: 700; font-size: 13px; }
+.ins-meta  { color: #AAA; font-size: 11px; }
 
 /* SECTOR CELL */
 .sec-cell {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 6px 10px; margin: 2px 0; font-family: var(--mono); font-size: 11px;
+  padding: 7px 12px; margin: 2px 0; font-family: var(--mono); font-size: 13px;
 }
 .sec-cell.up { background: rgba(0,204,68,0.08); border-left: 3px solid var(--grn); }
 .sec-cell.dn { background: rgba(255,68,68,0.08); border-left: 3px solid var(--red); }
@@ -257,7 +257,7 @@ section.main > div.block-container {
 .mover-row {
   display: grid; grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
   gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--bg3);
-  font-family: var(--mono); font-size: 12px; align-items: center; width:100%;
+  font-family: var(--mono); font-size: 14px; align-items: center; width:100%;
 }
 .mover-row:hover { background: var(--bg2); }
 
@@ -265,7 +265,7 @@ section.main > div.block-container {
 .fut-row {
   display: grid; grid-template-columns: 1fr 1.4fr 1.2fr 0.8fr 0.9fr 0.8fr;
   gap: 6px; padding: 5px 10px; border-bottom: 1px solid var(--bg3);
-  font-family: var(--mono); font-size: 12px; align-items: center; width:100%;
+  font-family: var(--mono); font-size: 14px; align-items: center; width:100%;
 }
 .fut-row:hover { background: var(--bg2); }
 
@@ -432,7 +432,8 @@ with tabs[0]:
     qs = multi_quotes(list(KEY_T.keys()))
     cols = st.columns(len(qs))
     for col, q in zip(cols, qs):
-        with col: st.metric(KEY_T.get(q["ticker"],q["ticker"]), fmt_p(q["price"]), delta=f"{q['pct']:+.2f}%")
+        chg_str = f"{q['pct']:+.2f}% ({q['change']:+.2f})"
+        with col: st.metric(KEY_T.get(q["ticker"],q["ticker"]), fmt_p(q["price"]), delta=chg_str)
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
     L, R = st.columns([3,2])
@@ -511,16 +512,23 @@ font-family:monospace;font-size:9px;color:#FF6600;letter-spacing:1px;margin-bott
         if not sec_df.empty:
             for _, row in sec_df.sort_values("Pct",ascending=False).iterrows():
                 p = row["Pct"]; cls = "up" if p>=0 else "dn"; sign = "+" if p>=0 else ""
-                st.markdown(f'<div class="sec-cell {cls}"><span style="color:#FFF">{row["Sector"]}</span><span style="color:#555;font-size:10px">{row["ETF"]}</span><span style="color:{"#00CC44" if p>=0 else "#FF4444"};font-weight:700">{sign}{p:.2f}%</span></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="sec-cell {cls}"><span style="color:#FFF">{row["Sector"]}</span><span style="color:#888;font-size:11px">{row["ETF"]}</span><span style="color:{"#00CC44" if p>=0 else "#FF4444"};font-weight:700">{sign}{p:.2f}%</span></div>', unsafe_allow_html=True)
 
     with R:
         # ── Polymarket top
-        st.markdown('<div class="bb-ph">🎲 POLYMARKET TOP MARKETS</div>', unsafe_allow_html=True)
+        st.markdown('<div class="bb-ph">🎲 POLYMARKET ACTIVE MARKETS</div>', unsafe_allow_html=True)
         with st.spinner("Loading markets…"):
-            poly = polymarket_markets(20)
+            poly = polymarket_markets(30)
         if poly:
-            for m in poly[:5]:
+            # Separate active and closed
+            active_poly = [m for m in poly if poly_status(m)[0]=="ACTIVE"]
+            closed_poly = [m for m in poly if poly_status(m)[0] in ("RESOLVED","CLOSED","EXPIRED (pending resolve)")]
+            for m in active_poly[:5]:
                 st.markdown(render_poly_card(m), unsafe_allow_html=True)
+            if closed_poly:
+                st.markdown('<div style="color:#FF6600;font-size:10px;letter-spacing:1px;margin:8px 0 4px">RECENTLY CLOSED</div>', unsafe_allow_html=True)
+                for m in closed_poly[:3]:
+                    st.markdown(render_poly_card(m), unsafe_allow_html=True)
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Could not reach Polymarket API. Check network connectivity.</p>', unsafe_allow_html=True)
 
@@ -568,7 +576,7 @@ with tabs[1]:
             st.markdown('<div class="bb-ph" style="margin-top:8px">CHART — TRADINGVIEW (RSI + SMA60)</div>', unsafe_allow_html=True)
             components.html(tv_chart(tv_sym, 480), height=485, scrolling=False)
 
-            oc, ic = st.columns([3,2])
+            oc, ic = st.columns([1,1])
             with oc:
                 st.markdown('<div class="bb-ph">📋 OPTIONS CHAIN — NEAREST EXPIRY</div>', unsafe_allow_html=True)
                 with st.spinner("Loading options…"):
@@ -790,6 +798,13 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
                         st.markdown(f'<div style="background:#1A0000;border-left:3px solid #FF0000;padding:8px 12px;font-family:monospace;font-size:11px;color:#FF8C00">⚠️ INVERTED: 10Y-2Y = {sp:.2f}%. Recession lead: 12-18 months avg.</div>', unsafe_allow_html=True)
                     else:
                         st.markdown(f'<div style="background:#001A00;border-left:3px solid #00CC44;padding:8px 12px;font-family:monospace;font-size:11px;color:#CCC">✅ NORMAL: 10Y-2Y = +{sp:.2f}%</div>', unsafe_allow_html=True)
+
+                # CPI vs Rates chart to fill space under yield curve
+                st.markdown('<div class="bb-ph" style="margin-top:8px">📊 CPI vs FED FUNDS vs CORE PCE</div>', unsafe_allow_html=True)
+                with st.spinner("Loading inflation data…"):
+                    fig_cpi = cpi_vs_rates_chart(st.session_state.fred_key, 250)
+                if fig_cpi:
+                    st.plotly_chart(fig_cpi, width="stretch")
             else:
                 st.markdown('<p style="color:#555;font-family:monospace">Yield data loading…</p>', unsafe_allow_html=True)
 
