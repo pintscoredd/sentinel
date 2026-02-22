@@ -192,23 +192,23 @@ function makeFallback(){
   cv.width=2048; cv.height=1024;
   const ctx=cv.getContext('2d');
 
-  // Very dark deep ocean with subtle variation
+  // Very dark deep ocean — near-black for maximum contrast
   const og=ctx.createLinearGradient(0,0,0,1024);
-  og.addColorStop(0,'#020810');
-  og.addColorStop(.4,'#030d18');
-  og.addColorStop(.6,'#030d18');
-  og.addColorStop(1,'#020810');
+  og.addColorStop(0,'#000308');
+  og.addColorStop(.4,'#00050c');
+  og.addColorStop(.6,'#00050c');
+  og.addColorStop(1,'#000308');
   ctx.fillStyle=og; ctx.fillRect(0,0,2048,1024);
 
-  // Subtle ocean depth variation (darker abyssal plains, lighter shelves)
-  ctx.fillStyle='rgba(0,8,20,0.5)';
+  // Subtle ocean depth variation (nearly invisible abyssal plains)
+  ctx.fillStyle='rgba(0,4,12,0.4)';
   // Pacific deep
   ctx.fillRect(850,150,500,700);
   // Atlantic deep
   ctx.fillRect(400,200,120,600);
 
-  // Continental shelf highlights (slightly lighter near coasts)
-  ctx.fillStyle='rgba(5,25,50,0.3)';
+  // Continental shelf highlights (very subtle near coasts)
+  ctx.fillStyle='rgba(2,12,30,0.25)';
 
   // Continents — realistic shapes
   ctx.fillStyle='#1d3c18';
