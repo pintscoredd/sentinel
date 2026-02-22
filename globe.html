@@ -578,11 +578,11 @@
     const camera = new THREE.PerspectiveCamera(42, CW / CH, 0.1, 1000);
     camera.position.set(0, 0, 2.65);
 
-    // ── GLOBE SETUP
-    const globeGeo = new THREE.SphereGeometry(1, 96, 96);
+    // ── GLOBE SETUP (reduced poly for performance)
+    const globeGeo = new THREE.SphereGeometry(1, 64, 64);
     const loader = new THREE.TextureLoader();
-    let globeMesh = null, cloudMesh = null;
-    let earthTex = null, specTex = null, cloudTex = null;
+    let globeMesh = null;
+    let earthTex = null;
 
     // ── REALISTIC DARK OCEAN FALLBACK TEXTURE
     function makeFallback() {
@@ -680,52 +680,28 @@
     function buildGlobe() {
       const mat = new THREE.MeshPhongMaterial({
         map: earthTex || makeFallback(),
-        color: new THREE.Color(0x1a2a40),          // Dark navy tint — darkens bright blue oceans
-        specularMap: specTex || null,
-        specular: new THREE.Color(0x05101a),        // Very subtle dark specular
+        color: new THREE.Color(0x1a2a40),
+        specular: new THREE.Color(0x05101a),
         shininess: 6,
-        emissive: new THREE.Color(0x000510),        // Near-black emissive
+        emissive: new THREE.Color(0x000510),
         emissiveIntensity: 0.12,
       });
       if (globeMesh) scene.remove(globeMesh);
       globeMesh = new THREE.Mesh(globeGeo, mat);
       scene.add(globeMesh);
-
-      if (cloudTex && !cloudMesh) {
-        const cm = new THREE.MeshLambertMaterial({
-          map: cloudTex, transparent: true, opacity: 0.18,
-          depthWrite: false, blending: THREE.AdditiveBlending,
-        });
-        cloudMesh = new THREE.Mesh(new THREE.SphereGeometry(1.007, 64, 64), cm);
-        scene.add(cloudMesh);
-      }
       document.getElementById('ls').classList.add('gone');
     }
 
-    // Earth textures with fallbacks
-    const ET = [
-      'https://raw.githubusercontent.com/turban/webgl-earth/master/images/2_no_clouds_4k.jpg',
-      'https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg',
-    ];
-    const ST = ['https://raw.githubusercontent.com/turban/webgl-earth/master/images/8081_earthspec10k.jpg'];
-    const CT = ['https://raw.githubusercontent.com/turban/webgl-earth/master/images/fair_clouds_4k.png'];
+    // Build immediately with fallback, upgrade if texture loads
+    buildGlobe();
+    loader.load('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg',
+      t => { earthTex = t; buildGlobe(); }, undefined, () => { });
+    setTimeout(() => document.getElementById('ls').classList.add('gone'), 2000);
 
-    let earthReady = false;
-    function tryEarth(i) {
-      if (i >= ET.length) { buildGlobe(); return; }
-      loader.load(ET[i], t => { earthTex = t; earthReady = true; buildGlobe(); }, undefined, () => tryEarth(i + 1));
-    }
-    tryEarth(0);
-    loader.load(ST[0], t => { specTex = t; if (earthReady) buildGlobe(); }, undefined, () => { });
-    loader.load(CT[0], t => { cloudTex = t; if (earthReady) buildGlobe(); }, undefined, () => { });
-    setTimeout(() => document.getElementById('ls').classList.add('gone'), 5000);
-
-    // ── ATMOSPHERE — dark navy glow layers
-    const atm1 = new THREE.MeshPhongMaterial({ color: 0x000d1f, transparent: true, opacity: 0.12, side: THREE.FrontSide, depthWrite: false, blending: THREE.AdditiveBlending });
-    scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.018, 64, 64), atm1));
-    const atm2 = new THREE.MeshPhongMaterial({ color: 0x000812, transparent: true, opacity: 0.06, side: THREE.FrontSide, depthWrite: false, blending: THREE.AdditiveBlending });
-    scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.04, 64, 64), atm2));
-    // Subtle grid overlay
+    // ── ATMOSPHERE — single dark navy glow (reduced from 2 layers)
+    const atm1 = new THREE.MeshPhongMaterial({ color: 0x000d1f, transparent: true, opacity: 0.10, side: THREE.FrontSide, depthWrite: false, blending: THREE.AdditiveBlending });
+    scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.02, 32, 32), atm1));
+    // Grid overlay
     scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.001, 24, 12), new THREE.MeshBasicMaterial({ color: 0x000a14, wireframe: true, transparent: true, opacity: 0.025 })));
 
     // ── LIGHTING — dimmer for dark navy look
@@ -739,7 +715,7 @@
 
     // ── STARS
     const sg = new THREE.BufferGeometry(), sp = [], sc = [];
-    for (let i = 0; i < 4500; i++) {
+    for (let i = 0; i < 2000; i++) {
       const th = Math.random() * Math.PI * 2, ph = Math.acos(2 * Math.random() - 1), r = 65 + Math.random() * 85;
       sp.push(r * Math.sin(ph) * Math.cos(th), r * Math.cos(ph), r * Math.sin(ph) * Math.sin(th));
       const t = Math.random();
@@ -1045,7 +1021,7 @@
       rotX += (targetRotX - rotX) * 0.08;
       rotY += (targetRotY - rotY) * 0.08;
       if (globeMesh) { globeMesh.rotation.x = rotX; globeMesh.rotation.y = rotY; }
-      if (cloudMesh) { cloudMesh.rotation.x = rotX; cloudMesh.rotation.y = rotY + t * 0.000035; }
+      // clouds removed for performance
 
       _euler.set(rotX, rotY, 0, 'XYZ');
       _quat.setFromEuler(_euler);
