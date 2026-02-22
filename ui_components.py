@@ -332,7 +332,7 @@ def render_poly_card(m, show_unusual=False):
                     f'<div style="display:flex;align-items:center;gap:8px;margin-top:6px">'
                     f'<span style="color:{bar_c};font-size:11px;min-width:44px;font-weight:700">{p:.0f}%</span>'
                     f'<span style="color:#888;font-size:10px;flex:1">{outcome_name}{winner_tag}</span>'
-                    f'<div style="width:90px;height:5px;background:#1A1A1A;border-radius:1px;overflow:hidden">'
+                    f'<div style="width:180px;height:5px;background:#1A1A1A;border-radius:1px;overflow:hidden">'
                     f'<div style="width:{p:.0f}%;height:100%;background:{bar_c};border-radius:1px"></div>'
                     f'</div></div>')
         except:
