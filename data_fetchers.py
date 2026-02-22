@@ -176,8 +176,8 @@ def options_chain(ticker):
 @st.cache_data(ttl=600)
 def sector_etfs():
     S = {"Technology": "XLK", "Financials": "XLF", "Energy": "XLE", "Healthcare": "XLV",
-         "Cons Staples": "XLP", "Utilities": "XLU", "Cons Disc": "XLY", "Materials": "XLB",
-         "Comm Svcs": "XLC", "Real Estate": "XLRE", "Industrials": "XLI"}
+         "Consumer Staples": "XLP", "Utilities": "XLU", "Consumer Discretionary": "XLY", "Materials": "XLB",
+         "Communication Services": "XLC", "Real Estate": "XLRE", "Industrials": "XLI"}
     rows = []
     for name, tkr in S.items():
         q = yahoo_quote(tkr)
