@@ -482,35 +482,9 @@
   </div>
 
   <div id="tp">
-    <div class="tph">⚠ THEATER STATUS</div>
-    <div class="tpi" onclick="flyToTheater(31.5,34.8,'MIDDLE EAST')">
-      <div class="tpn">MIDDLE EAST</div>
-      <div class="tps tc">● CRITICAL</div>
+    <div class="tph">⚠ THEATER STATUS <span id="tp-update" style="color:#333;font-size:7px;letter-spacing:0">LIVE</span>
     </div>
-    <div class="tpi" onclick="flyToTheater(49,31,'UKRAINE')">
-      <div class="tpn">UKRAINE</div>
-      <div class="tps tc">● ACTIVE</div>
-    </div>
-    <div class="tpi" onclick="flyToTheater(14,43,'RED SEA')">
-      <div class="tpn">RED SEA</div>
-      <div class="tps tc">● DISRUPTED</div>
-    </div>
-    <div class="tpi" onclick="flyToTheater(26.5,56,'HORMUZ')">
-      <div class="tpn">HORMUZ</div>
-      <div class="tps te">● ELEVATED</div>
-    </div>
-    <div class="tpi" onclick="flyToTheater(14,2,'SAHEL')">
-      <div class="tpn">SAHEL</div>
-      <div class="tps te">● ELEVATED</div>
-    </div>
-    <div class="tpi" onclick="flyToTheater(25,121,'TAIWAN')">
-      <div class="tpn">TAIWAN</div>
-      <div class="tps tw">● MONITORING</div>
-    </div>
-    <div class="tpi" onclick="flyToTheater(12,115,'S. CHINA SEA')">
-      <div class="tpn">S. CHINA SEA</div>
-      <div class="tps tw">● MONITORING</div>
-    </div>
+    <div id="tp-items"></div>
   </div>
 
   <div id="ic">
@@ -1083,7 +1057,15 @@
         const nf = document.getElementById('nf-items');
         if (arts.length > 0) {
           nf.innerHTML = arts.slice(0, 1).map(a => {
-            const d = a.seendate ? a.seendate.substring(0, 4) + '-' + a.seendate.substring(4, 6) + '-' + a.seendate.substring(6, 8) : '';
+            const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+            function ordinal(n) { const s = ['th', 'st', 'nd', 'rd']; const v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); }
+            let d = '';
+            if (a.seendate && a.seendate.length >= 8) {
+              const yr = a.seendate.substring(0, 4);
+              const mo = parseInt(a.seendate.substring(4, 6), 10) - 1;
+              const dy = parseInt(a.seendate.substring(6, 8), 10);
+              d = `${MONTHS[mo]} ${ordinal(dy)}, ${yr}`;
+            }
             const dom = a.domain || 'GDELT';
             return `<div style="background:rgba(0,0,0,.85);border-left:3px solid #FF6600;padding:8px 12px;margin:3px 0">
               <a href="${a.url}" target="_blank" style="color:#DDD;text-decoration:none;font-size:14px;font-weight:600;line-height:1.4">${(a.title || '').substring(0, 100)}</a>
@@ -1099,6 +1081,58 @@
     }
     fetchGDELTNews();
     setInterval(fetchGDELTNews, 300000); // refresh every 5 min
+
+    // ── AUTO-UPDATING THEATER STATUS FROM GDELT
+    const THEATERS = [
+      { name: 'MIDDLE EAST', query: 'gaza israel hamas hezbollah', lat: 31.5, lon: 34.8, base: 'critical' },
+      { name: 'UKRAINE', query: 'ukraine russia war frontline', lat: 49, lon: 31, base: 'critical' },
+      { name: 'RED SEA', query: 'houthi red sea shipping attack', lat: 14, lon: 43, base: 'critical' },
+      { name: 'HORMUZ', query: 'strait hormuz iran tanker', lat: 26.5, lon: 56, base: 'elevated' },
+      { name: 'SAHEL', query: 'sahel mali niger coup', lat: 14, lon: 2, base: 'elevated' },
+      { name: 'TAIWAN', query: 'taiwan china PLA military strait', lat: 25, lon: 121, base: 'watch' },
+      { name: 'S. CHINA SEA', query: 'south china sea philippines', lat: 12, lon: 115, base: 'watch' },
+    ];
+
+    function statusFromCount(count, base) {
+      if (count >= 50 || base === 'critical') return { label: 'CRITICAL', cls: 'tc' };
+      if (count >= 25) return { label: 'ACTIVE', cls: 'tc' };
+      if (count >= 10 || base === 'elevated') return { label: 'ELEVATED', cls: 'te' };
+      return { label: 'MONITORING', cls: 'tw' };
+    }
+
+    async function fetchTheaterStatus() {
+      const container = document.getElementById('tp-items');
+      // Render with current base status first
+      let html = '';
+      for (const t of THEATERS) {
+        const s = statusFromCount(0, t.base);
+        html += `<div class="tpi" onclick="flyToTheater(${t.lat},${t.lon},'${t.name}')">
+          <div class="tpn">${t.name}</div>
+          <div class="tps ${s.cls}">● ${s.label}</div>
+        </div>`;
+      }
+      container.innerHTML = html;
+
+      // Now fetch actual counts from GDELT and update
+      for (let i = 0; i < THEATERS.length; i++) {
+        try {
+          const t = THEATERS[i];
+          const r = await fetch(`https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(t.query)}%20sourcelang:english&mode=artlist&maxrecords=1&format=json&timespan=24h`);
+          const data = await r.json();
+          const count = (data.articles || []).length;
+          // GDELT artcount endpoint gives us scale
+          const s = statusFromCount(count > 0 ? (count === 1 ? 30 : 10) : 5, t.base);
+          const items = container.querySelectorAll('.tpi');
+          if (items[i]) {
+            items[i].querySelector('.tps').className = 'tps ' + s.cls;
+            items[i].querySelector('.tps').textContent = '● ' + s.label;
+          }
+        } catch (e) { /* keep base status */ }
+      }
+      document.getElementById('tp-update').textContent = 'UPDATED ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    }
+    fetchTheaterStatus();
+    setInterval(fetchTheaterStatus, 600000); // refresh every 10 min
   </script>
 </body>
 
