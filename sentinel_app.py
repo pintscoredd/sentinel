@@ -1,1014 +1,845 @@
 #!/usr/bin/env python3
-"""
-⚡ SENTINEL — Free Bloomberg/PLTR Terminal
-Built with Streamlit | Powered by free APIs + Google Gemini
-"""
-
-import streamlit as st
-import streamlit.components.v1 as components
-
-# ── SAFE IMPORTS (show helpful error if missing) ──────────────────────────────
+"""SENTINEL — Bloomberg Intelligence Terminal"""
+import streamlit as st, streamlit.components.v1 as components
 try:
     import yfinance as yf
 except ImportError:
-    st.error("⚠️ Missing package: yfinance. Check your requirements.txt is in the root of your repo.")
-    st.stop()
-
-try:
-    import plotly.graph_objects as go
-except ImportError:
-    st.error("⚠️ Missing package: plotly. Check your requirements.txt.")
-    st.stop()
-
-import requests
-import pandas as pd
-import json
-import pathlib
+    st.error("yfinance missing. Check requirements.txt in repo root."); st.stop()
+import requests, pandas as pd, json, pathlib
 from datetime import datetime
 import pytz
 
-# ── PAGE CONFIG ─────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="⚡ SENTINEL",
-    page_icon="⚡",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="SENTINEL",page_icon="⚡",layout="wide",initial_sidebar_state="expanded")
+PST=pytz.timezone("US/Pacific")
+def now_pst(): return datetime.now(PST).strftime("%Y-%m-%d %H:%M:%S")
+def date_pst(): return datetime.now(PST).strftime("%A, %B %d %Y")
 
-PST = pytz.timezone("US/Pacific")
-
-def now_pst():
-    return datetime.now(PST).strftime("%Y-%m-%d %H:%M PST")
-
-# ── DARK TERMINAL CSS ────────────────────────────────────────────────────────
-st.markdown("""
+# ── BLOOMBERG CSS ─────────────────────────────────────────────────────────────
+CSS = """
 <style>
-  .stApp,[data-testid="stAppViewContainer"]{background:#060810!important;color:#c9d1d9!important}
-  [data-testid="stSidebar"]{background:#0d1117!important;border-right:1px solid #1f2937!important}
-  h1,h2,h3{color:#58a6ff!important}
-  [data-testid="stMetric"]{background:#0d1117;border:1px solid #1f2937;border-radius:6px;padding:10px}
-  .stTabs [data-baseweb="tab-list"]{background:#0d1117;border-bottom:1px solid #1f2937}
-  .stTabs [data-baseweb="tab"]{color:#8b949e}
-  .stTabs [aria-selected="true"]{color:#58a6ff!important;border-bottom:2px solid #58a6ff}
-  .stButton>button{background:#1f2937;color:#58a6ff;border:1px solid #374151;border-radius:4px}
-  .stButton>button:hover{background:#374151;border-color:#58a6ff}
-  .stTextInput>div>div>input,.stTextArea>div>div>textarea{background:#0d1117!important;color:#c9d1d9!important;border:1px solid #374151!important}
-  .stSelectbox>div>div{background:#0d1117!important;color:#c9d1d9!important}
-  .sentinel-alert{background:#1a1f2e;border-left:3px solid #f85149;padding:12px 16px;margin:6px 0;border-radius:0 4px 4px 0;font-family:'Courier New',monospace;font-size:13px}
-  .sentinel-signal{background:#0d1f2d;border-left:3px solid #58a6ff;padding:12px 16px;margin:6px 0;border-radius:0 4px 4px 0;font-family:'Courier New',monospace;font-size:13px}
-  .sentinel-geo{background:#1a1a0d;border-left:3px solid #e3b341;padding:12px 16px;margin:6px 0;border-radius:0 4px 4px 0;font-family:'Courier New',monospace;font-size:13px}
-  .sentinel-poly{background:#1a0d1f;border-left:3px solid #bc8cff;padding:12px 16px;margin:6px 0;border-radius:0 4px 4px 0;font-family:'Courier New',monospace;font-size:13px}
-  .sentinel-green{background:#0d1f0d;border-left:3px solid #3fb950;padding:12px 16px;margin:6px 0;border-radius:0 4px 4px 0;font-family:'Courier New',monospace;font-size:13px}
-  .term-header{font-family:'Courier New',monospace;color:#58a6ff;font-size:11px;letter-spacing:2px;text-transform:uppercase;border-bottom:1px solid #1f2937;padding-bottom:6px;margin-bottom:14px}
-  .chat-user{background:#1f2937;border-radius:8px;padding:10px 14px;margin:6px 0;border-left:3px solid #58a6ff}
-  .chat-ai{background:#0d1f0d;border-radius:8px;padding:10px 14px;margin:6px 0;border-left:3px solid #3fb950;font-family:'Courier New',monospace;font-size:13px;white-space:pre-wrap}
-  .stDataFrame{background:#0d1117!important}
-  div[data-testid="stDecoration"]{display:none}
-</style>
-""", unsafe_allow_html=True)
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+:root{--bg:#070809;--bg2:#0d0e10;--bg3:#111316;--border:#1e2025;--amber:#f5a623;
+  --red:#ff3b3b;--green:#00e676;--blue:#4fc3f7;--text:#d0d3d8;--text2:#8a8f99;
+  --text3:#444851;--white:#f0f2f5;}
+*{font-family:'IBM Plex Mono','Courier New',monospace!important;}
+.stApp,[data-testid="stAppViewContainer"]{background:var(--bg)!important;color:var(--text)!important;}
+[data-testid="stHeader"]{background:var(--bg)!important;}
+[data-testid="stSidebar"]{background:var(--bg2)!important;border-right:1px solid var(--border)!important;}
+[data-testid="stSidebar"] *{font-size:11px!important;}
+[data-testid="stSidebar"] h1,[data-testid="stSidebar"] h2,[data-testid="stSidebar"] h3{color:var(--amber)!important;font-size:10px!important;letter-spacing:2px;}
+.stTabs [data-baseweb="tab-list"]{background:var(--bg2)!important;border-bottom:1px solid var(--amber)!important;gap:0!important;padding:0!important;}
+.stTabs [data-baseweb="tab"]{color:var(--text2)!important;font-size:11px!important;letter-spacing:1px!important;padding:6px 16px!important;border-right:1px solid var(--border)!important;border-radius:0!important;background:transparent!important;}
+.stTabs [aria-selected="true"]{color:var(--bg)!important;background:var(--amber)!important;font-weight:600!important;}
+[data-testid="stMetric"]{background:var(--bg2)!important;border:1px solid var(--border)!important;border-top:2px solid var(--amber)!important;border-radius:0!important;padding:8px!important;}
+[data-testid="stMetricLabel"]{color:var(--text2)!important;font-size:9px!important;letter-spacing:1px;}
+[data-testid="stMetricValue"]{color:var(--white)!important;font-size:17px!important;font-weight:600!important;}
+.stTextInput>div>div>input,.stTextArea>div>div>textarea,.stSelectbox>div>div{background:var(--bg2)!important;color:var(--text)!important;border:1px solid #2a2d33!important;border-radius:0!important;font-size:11px!important;}
+.stButton>button{background:var(--bg2)!important;color:var(--amber)!important;border:1px solid var(--amber)!important;border-radius:0!important;font-size:10px!important;letter-spacing:1px!important;padding:4px 12px!important;}
+.stButton>button:hover{background:var(--amber)!important;color:var(--bg)!important;}
+hr{border-color:var(--border)!important;margin:8px 0!important;}
+.streamlit-expanderHeader{background:var(--bg2)!important;border:1px solid var(--border)!important;border-radius:0!important;color:var(--amber)!important;font-size:10px!important;}
+#MainMenu,footer,[data-testid="stDecoration"],[data-testid="stToolbar"]{display:none!important;}
+h1,h2,h3,h4{color:var(--amber)!important;font-size:11px!important;letter-spacing:2px!important;font-weight:600!important;}
+p,li{font-size:11px!important;}
+.bb-sec{border:1px solid var(--border);background:var(--bg2);margin-bottom:8px;}
+.bb-sec-t{background:var(--bg3);border-bottom:1px solid var(--border);padding:4px 10px;font-size:9px;letter-spacing:2px;color:var(--amber);text-transform:uppercase;}
+.bb-sec-b{padding:8px 10px;}
+.bb-ni{display:flex;gap:10px;padding:5px 0;border-bottom:1px solid var(--border);align-items:flex-start;}
+.bb-ni:last-child{border-bottom:none;}
+.bb-nn{color:var(--text3);font-size:9px;min-width:16px;}
+.bb-nd{color:var(--amber);font-size:9px;min-width:55px;}
+.bb-nl{color:var(--text);font-size:11px;text-decoration:none;line-height:1.4;}
+.bb-nl:hover{color:var(--amber);}
+.bb-ns{color:var(--text3);font-size:9px;margin-top:2px;}
+.bb-tbl{width:100%;border-collapse:collapse;font-size:11px;}
+.bb-tbl th{color:var(--amber);font-size:9px;letter-spacing:1px;padding:4px 8px;border-bottom:1px solid var(--border);text-align:left;}
+.bb-tbl td{padding:4px 8px;border-bottom:1px solid var(--border);}
+.bb-tbl tr:hover td{background:rgba(245,166,35,0.04);}
+.bb-tbl td.up{color:var(--green);}.bb-tbl td.dn{color:var(--red);}.bb-tbl td.kk{color:var(--amber);}.bb-tbl td.dm{color:var(--text2);}
+.bb-mr{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);font-size:11px;}
+.bb-mr:last-child{border-bottom:none;}
+.bb-poly{padding:7px 0;border-bottom:1px solid var(--border);}
+.bb-poly:last-child{border-bottom:none;}
+.bb-pty{font-size:10px;color:var(--text);margin-bottom:4px;}
+.bb-pla{text-decoration:none;color:inherit;}
+.bb-pla:hover .bb-pty{color:var(--amber);}
+.bb-pm{display:flex;justify-content:space-between;font-size:9px;color:var(--text2);}
+.yp{color:var(--green);font-weight:600;}.np{color:var(--red);font-weight:600;}
+.bb-ac{border-left:3px solid var(--red);background:rgba(255,59,59,0.06);padding:8px 10px;margin:4px 0;font-size:10px;}
+.bb-ae{border-left:3px solid var(--amber);background:rgba(245,166,35,0.06);padding:8px 10px;margin:4px 0;font-size:10px;}
+.bb-ai{border-left:3px solid var(--blue);background:rgba(79,195,247,0.06);padding:8px 10px;margin:4px 0;font-size:10px;}
+.bb-ag{border-left:3px solid var(--green);background:rgba(0,230,118,0.06);padding:8px 10px;margin:4px 0;font-size:10px;}
+.bb-og{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);border:1px solid var(--border);}
+.bb-oc{background:var(--bg2);}
+.bb-oh{background:var(--bg3);padding:4px 8px;font-size:9px;letter-spacing:2px;text-align:center;border-bottom:1px solid var(--border);}
+.bb-ch{color:var(--green);}.bb-ph{color:var(--red);}
+.bb-or{display:grid;grid-template-columns:1.2fr 0.8fr 0.8fr 1fr;padding:3px 8px;border-bottom:1px solid var(--border);font-size:10px;}
+.bb-or:hover{background:rgba(245,166,35,0.05);}
+.bb-ol{color:var(--text2);font-size:9px;}.bb-os{color:var(--amber);font-weight:600;}.bb-oo{color:var(--white);}.bb-ov{color:var(--text2);}.bb-oiv{color:var(--blue);}
+.bb-in{display:grid;grid-template-columns:2fr 1fr 0.7fr 0.9fr;padding:5px 8px;border-bottom:1px solid var(--border);font-size:10px;align-items:center;}
+.bb-in:hover{background:rgba(245,166,35,0.04);}
+.bb-inb{color:var(--green);font-weight:600;}.bb-ins{color:var(--red);font-weight:600;}
+.bb-cu{background:var(--bg3);border-left:2px solid var(--amber);padding:8px 12px;margin:6px 0;font-size:11px;}
+.bb-ca{background:var(--bg2);border-left:2px solid var(--green);padding:10px 12px;margin:6px 0;font-size:11px;white-space:pre-wrap;line-height:1.7;}
+.bb-cl{font-size:9px;letter-spacing:1px;margin-bottom:4px;}
+.bb-sr{display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid var(--border);font-size:10px;}
+.bb-sn{min-width:115px;color:var(--text);}
+.bb-sbw{flex:1;height:9px;background:var(--bg3);}
+.bb-sbf{height:9px;}
+.bb-sv{min-width:52px;text-align:right;}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;}
+.dot-g{background:var(--green);box-shadow:0 0 5px var(--green);}
+.dot-a{background:var(--amber);box-shadow:0 0 5px var(--amber);}
+.dot-r{background:var(--red);box-shadow:0 0 5px var(--red);animation:bk 1s infinite;}
+.dot-x{background:var(--text3);}
+@keyframes bk{0%,100%{opacity:1}50%{opacity:0.2}}
+.tc{color:var(--red);font-weight:600;font-size:9px;}
+.te{color:var(--amber);font-weight:600;font-size:9px;}
+.tw{color:var(--blue);font-weight:600;font-size:9px;}
+</style>"""
+st.markdown(CSS, unsafe_allow_html=True)
 
-# ── SESSION STATE ────────────────────────────────────────────────────────────
-DEFAULTS = {
-    "gemini_key": "", "fred_key": "", "finnhub_key": "",
-    "alphavantage_key": "", "newsapi_key": "", "coingecko_key": "",
-    "chat_history": [],
-    "watchlist": ["SPY", "QQQ", "NVDA", "AAPL", "GLD", "TLT", "BTC-USD"],
-    "macro_theses": "", "geo_watch": "",
+# ── SESSION STATE ─────────────────────────────────────────────────────────────
+DEFS = {
+    "gemini_key":"", "fred_key":"", "finnhub_key":"",
+    "newsapi_key":"", "coingecko_key":"", "chat_history":[],
+    "watchlist":["SPY","QQQ","NVDA","AAPL","GLD","TLT","BTC-USD"],
+    "macro_theses":"", "geo_watch":""
 }
-for k, v in DEFAULTS.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+for k,v in DEFS.items():
+    if k not in st.session_state: st.session_state[k]=v
 
-# ── SIDEBAR ──────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("## ⚡ SENTINEL")
-    st.markdown(f"`{now_pst()}`")
-    st.divider()
+# ── TRADINGVIEW HELPERS ───────────────────────────────────────────────────────
+def tv_chart(symbol="NASDAQ:SPY", height=460):
+    sid = symbol.replace(":","_").replace("-","_").replace("!","x")
+    components.html(f"""<div id="tv_{sid}" style="height:{height}px;background:#070809"></div>
+<script src="https://s3.tradingview.com/tv.js"></script>
+<script>new TradingView.widget({{"autosize":true,"symbol":"{symbol}","interval":"D",
+"timezone":"America/Los_Angeles","theme":"dark","style":"1","locale":"en",
+"toolbar_bg":"#0d0e10","backgroundColor":"rgba(7,8,9,1)",
+"gridColor":"rgba(30,32,37,0.8)","enable_publishing":false,"withdateranges":true,
+"allow_symbol_change":true,"container_id":"tv_{sid}",
+"studies":["RSI@tv-basicstudies","MACD@tv-basicstudies","Volume@tv-basicstudies"]}});
+</script>""", height=height+10, scrolling=False)
 
-    st.markdown("### 🔑 API KEYS")
-    st.caption("All free. Click links to register.")
+def tv_mini(symbol, height=180):
+    components.html(f"""<iframe scrolling="no" allowtransparency="true" frameborder="0"
+style="width:100%;height:{height}px;border:1px solid #1e2025"
+src="https://s.tradingview.com/embed-widget/mini-symbol-overview/?locale=en#%7B%22symbol%22%3A%22{symbol}%22%2C%22dateRange%22%3A%221M%22%2C%22colorTheme%22%3A%22dark%22%2C%22trendLineColor%22%3A%22%23f5a623%22%2C%22underLineColor%22%3A%22rgba(245%2C166%2C35%2C0.08)%22%2C%22isTransparent%22%3Atrue%2C%22width%22%3A%22100%25%22%2C%22height%22%3A{height}%7D">
+</iframe>""", height=height+4, scrolling=False)
 
-    with st.expander("🤖 Gemini (Required for AI Chat)", expanded=not st.session_state.gemini_key):
-        st.caption("[Get free key → aistudio.google.com](https://aistudio.google.com/app/apikey)")
-        st.session_state.gemini_key = st.text_input("Gemini API Key", value=st.session_state.gemini_key, type="password", key="gin")
+def tv_tape():
+    components.html("""<iframe scrolling="no" allowtransparency="true" frameborder="0"
+style="width:100%;height:46px;border:none;background:#0d0e10"
+src="https://s.tradingview.com/embed-widget/ticker-tape/?locale=en#%7B%22symbols%22%3A%5B%7B%22proName%22%3A%22FOREXCOM%3ASPXUSD%22%2C%22title%22%3A%22S%26P+500%22%7D%2C%7B%22proName%22%3A%22FOREXCOM%3ANSXUSD%22%2C%22title%22%3A%22Nasdaq%22%7D%2C%7B%22proName%22%3A%22BITSTAMP%3ABTCUSD%22%7D%2C%7B%22proName%22%3A%22BITSTAMP%3AETHUSD%22%7D%2C%7B%22description%22%3A%22Gold%22%2C%22proName%22%3A%22OANDA%3AXAUUSD%22%7D%2C%7B%22description%22%3A%22Oil%22%2C%22proName%22%3A%22NYMEX%3ACL1%21%22%7D%2C%7B%22description%22%3A%22DXY%22%2C%22proName%22%3A%22TVC%3ADXY%22%7D%5D%2C%22colorTheme%22%3A%22dark%22%2C%22isTransparent%22%3Atrue%2C%22showSymbolLogo%22%3Atrue%2C%22displayMode%22%3A%22compact%22%2C%22locale%22%3A%22en%22%7D">
+</iframe>""", height=48, scrolling=False)
 
-    with st.expander("📊 Market — Finnhub + Alpha Vantage"):
-        st.caption("[Finnhub free key → finnhub.io](https://finnhub.io/register)")
-        st.session_state.finnhub_key = st.text_input("Finnhub Key", value=st.session_state.finnhub_key, type="password", key="fh")
-        st.caption("[Alpha Vantage → alphavantage.co](https://www.alphavantage.co/support/#api-key)")
-        st.session_state.alphavantage_key = st.text_input("Alpha Vantage Key", value=st.session_state.alphavantage_key, type="password", key="av")
+def tv_forex(height=280):
+    components.html(f"""<iframe scrolling="no" allowtransparency="true" frameborder="0"
+style="width:100%;height:{height}px;border:1px solid #1e2025"
+src="https://s.tradingview.com/embed-widget/forex-cross-rates/?locale=en#%7B%22currencies%22%3A%5B%22EUR%22%2C%22USD%22%2C%22JPY%22%2C%22GBP%22%2C%22CHF%22%2C%22AUD%22%2C%22CAD%22%2C%22CNY%22%5D%2C%22colorTheme%22%3A%22dark%22%2C%22width%22%3A%22100%25%22%2C%22height%22%3A{height}%7D">
+</iframe>""", height=height+4, scrolling=False)
 
-    with st.expander("📈 Macro — FRED"):
-        st.caption("[FRED free key → fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html)")
-        st.session_state.fred_key = st.text_input("FRED Key", value=st.session_state.fred_key, type="password", key="fr")
-
-    with st.expander("📰 News — NewsAPI"):
-        st.caption("[NewsAPI free → newsapi.org](https://newsapi.org/register)")
-        st.session_state.newsapi_key = st.text_input("NewsAPI Key", value=st.session_state.newsapi_key, type="password", key="na")
-
-    with st.expander("💰 Crypto — CoinGecko"):
-        st.caption("[CoinGecko Demo (optional) → coingecko.com](https://www.coingecko.com/en/api/pricing)")
-        st.session_state.coingecko_key = st.text_input("CoinGecko Demo Key", value=st.session_state.coingecko_key, type="password", key="cg")
-
-    st.divider()
-    st.markdown("### 📡 CONNECTION STATUS")
-    STATUS = {
-        "Yahoo Finance": True,
-        "Polymarket": True,
-        "GDELT": True,
-        "Fear & Greed": True,
-        "FRED": bool(st.session_state.fred_key),
-        "Finnhub": bool(st.session_state.finnhub_key),
-        "Alpha Vantage": bool(st.session_state.alphavantage_key),
-        "NewsAPI": bool(st.session_state.newsapi_key),
-        "CoinGecko": True,
-        "Gemini AI": bool(st.session_state.gemini_key),
-    }
-    for api, ok in STATUS.items():
-        st.markdown(f"{'🟢' if ok else '🔴'} `{api}`")
-
-    st.divider()
-    st.markdown("### 🧠 MY CONTEXT")
-    st.session_state.macro_theses = st.text_area("Active macro theses", value=st.session_state.macro_theses, placeholder="e.g. Watching Fed pivot, cautious on tech...", height=70)
-    st.session_state.geo_watch = st.text_area("Geo situations watching", value=st.session_state.geo_watch, placeholder="e.g. Red Sea, Taiwan strait...", height=55)
-    wl_raw = st.text_input("Watchlist (comma-separated)", value=",".join(st.session_state.watchlist))
-    st.session_state.watchlist = [t.strip().upper() for t in wl_raw.split(",") if t.strip()]
-
-# ── DATA FETCHERS ────────────────────────────────────────────────────────────
-
+# ── DATA FETCHERS ─────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
-def yahoo_quote(ticker):
+def yquote(t):
     try:
-        hist = yf.Ticker(ticker).history(period="2d")
-        if hist.empty: return None
-        price = hist["Close"].iloc[-1]
-        prev  = hist["Close"].iloc[-2] if len(hist) > 1 else price
-        chg   = price - prev
-        pct   = chg / prev * 100
-        vol   = int(hist["Volume"].iloc[-1]) if "Volume" in hist.columns else 0
-        return {"ticker": ticker, "price": round(price, 4), "change": round(chg, 4), "pct": round(pct, 2), "volume": vol}
-    except Exception:
-        return None
+        h = yf.Ticker(t).history(period="2d")
+        if h.empty: return None
+        p = h["Close"].iloc[-1]; prev = h["Close"].iloc[-2] if len(h)>1 else p
+        return {"ticker":t, "price":round(p,4), "change":round(p-prev,4),
+                "pct":round((p-prev)/prev*100,2), "volume":int(h["Volume"].iloc[-1]) if "Volume" in h.columns else 0}
+    except: return None
 
 @st.cache_data(ttl=300)
-def multi_quotes(tickers):
-    return [q for t in tickers if (q := yahoo_quote(t))]
+def multi_q(tickers): return [q for t in tickers if (q:=yquote(t))]
 
 @st.cache_data(ttl=600)
-def fred_series(series_id, key, limit=36):
+def fred_fetch(sid, key, lim=36):
     if not key: return None
     try:
         r = requests.get("https://api.stlouisfed.org/fred/series/observations",
-            params={"series_id": series_id, "api_key": key, "sort_order": "desc",
-                    "limit": limit, "file_type": "json"}, timeout=10)
-        obs = r.json().get("observations", [])
-        df = pd.DataFrame(obs)
-        df["value"] = pd.to_numeric(df["value"], errors="coerce")
+            params={"series_id":sid,"api_key":key,"sort_order":"desc","limit":lim,"file_type":"json"},timeout=10)
+        df = pd.DataFrame(r.json().get("observations",[]))
+        df["value"] = pd.to_numeric(df["value"],errors="coerce")
         df["date"]  = pd.to_datetime(df["date"])
         return df.dropna(subset=["value"]).sort_values("date")
-    except Exception:
-        return None
+    except: return None
 
 @st.cache_data(ttl=300)
-def polymarket_markets(limit=60):
+def poly_mkt(lim=80):
     try:
-        r = requests.get("https://gamma-api.polymarket.com/markets",
-            params={"limit": limit, "order": "volume24hr", "ascending": "false", "active": "true"}, timeout=10)
-        return r.json()
-    except Exception:
-        return []
+        return requests.get("https://gamma-api.polymarket.com/markets",
+            params={"limit":lim,"order":"volume24hr","ascending":"false","active":"true"},timeout=10).json()
+    except: return []
 
 @st.cache_data(ttl=300)
 def fear_greed():
     try:
-        d = requests.get("https://api.alternative.me/fng/?limit=1", timeout=8).json()
+        d = requests.get("https://api.alternative.me/fng/?limit=1",timeout=8).json()
         return int(d["data"][0]["value"]), d["data"][0]["value_classification"]
-    except Exception:
-        return None, None
+    except: return None, None
 
 @st.cache_data(ttl=600)
-def crypto_markets(key=""):
+def cg_markets(key=""):
     try:
-        headers = {"x-cg-demo-api-key": key} if key else {}
-        r = requests.get("https://api.coingecko.com/api/v3/coins/markets",
-            params={"vs_currency": "usd", "order": "market_cap_desc", "per_page": 15,
-                    "page": 1, "price_change_percentage": "24h"},
-            headers=headers, timeout=10)
-        return r.json()
-    except Exception:
-        return []
+        h = {"x-cg-demo-api-key":key} if key else {}
+        return requests.get("https://api.coingecko.com/api/v3/coins/markets",
+            params={"vs_currency":"usd","order":"market_cap_desc","per_page":20,"page":1,"price_change_percentage":"24h"},
+            headers=h, timeout=10).json()
+    except: return []
 
 @st.cache_data(ttl=600)
-def crypto_global(key=""):
+def cg_global(key=""):
     try:
-        headers = {"x-cg-demo-api-key": key} if key else {}
-        return requests.get("https://api.coingecko.com/api/v3/global",
-            headers=headers, timeout=8).json().get("data", {})
-    except Exception:
-        return {}
+        h = {"x-cg-demo-api-key":key} if key else {}
+        return requests.get("https://api.coingecko.com/api/v3/global",headers=h,timeout=8).json().get("data",{})
+    except: return {}
 
 @st.cache_data(ttl=600)
-def gdelt_news(query, max_rec=12):
+def gdelt_news(q, n=12):
     try:
         r = requests.get("https://api.gdeltproject.org/api/v2/doc/doc",
-            params={"query": query, "mode": "artlist", "maxrecords": max_rec,
-                    "format": "json", "timespan": "24h"}, timeout=12)
-        return r.json().get("articles", [])
-    except Exception:
-        return []
+            params={"query":q,"mode":"artlist","maxrecords":n,"format":"json","timespan":"24h"},timeout=12)
+        return r.json().get("articles",[])
+    except: return []
 
 @st.cache_data(ttl=300)
-def newsapi_headlines(key, query="stock market finance"):
+def newsapi_fetch(key, q="finance"):
     if not key: return []
     try:
-        r = requests.get("https://newsapi.org/v2/everything",
-            params={"q": query, "language": "en", "sortBy": "publishedAt",
-                    "pageSize": 10, "apiKey": key}, timeout=10)
-        return r.json().get("articles", [])
-    except Exception:
-        return []
+        return requests.get("https://newsapi.org/v2/everything",
+            params={"q":q,"language":"en","sortBy":"publishedAt","pageSize":10,"apiKey":key},timeout=10).json().get("articles",[])
+    except: return []
 
 @st.cache_data(ttl=300)
-def finnhub_news(key, category="general"):
+def fh_news(key):
     if not key: return []
     try:
         return requests.get("https://finnhub.io/api/v1/news",
-            params={"category": category, "token": key}, timeout=10).json()[:10]
-    except Exception:
-        return []
+            params={"category":"general","token":key},timeout=10).json()[:15]
+    except: return []
 
 @st.cache_data(ttl=600)
-def finnhub_insider(ticker, key):
+def fh_insider(ticker, key):
     if not key: return []
     try:
         r = requests.get("https://finnhub.io/api/v1/stock/insider-transactions",
-            params={"symbol": ticker, "token": key}, timeout=10)
-        return r.json().get("data", [])[:8]
-    except Exception:
-        return []
+            params={"symbol":ticker,"token":key},timeout=10)
+        return r.json().get("data",[])[:10]
+    except: return []
 
 @st.cache_data(ttl=300)
-def vix_price():
+def get_vix():
     try:
         h = yf.Ticker("^VIX").history(period="2d")
-        return round(h["Close"].iloc[-1], 2) if not h.empty else None
-    except Exception:
-        return None
+        return round(h["Close"].iloc[-1],2) if not h.empty else None
+    except: return None
 
 @st.cache_data(ttl=600)
-def options_chain(ticker):
+def opt_chain(ticker):
     try:
-        t = yf.Ticker(ticker)
-        exps = t.options
+        t = yf.Ticker(ticker); exps = t.options
         if not exps: return None, None
-        chain = t.option_chain(exps[0])
-        cols = ["strike", "lastPrice", "volume", "openInterest", "impliedVolatility"]
-        return chain.calls[cols].head(10), chain.puts[cols].head(10)
-    except Exception:
-        return None, None
+        ch = t.option_chain(exps[0])
+        cols = ["strike","lastPrice","volume","openInterest","impliedVolatility"]
+        return ch.calls[cols].head(8), ch.puts[cols].head(8)
+    except: return None, None
 
 @st.cache_data(ttl=600)
-def sector_etfs():
-    SECTORS = {"Technology": "XLK", "Financials": "XLF", "Energy": "XLE",
-                "Healthcare": "XLV", "Consumer Staples": "XLP", "Utilities": "XLU",
-                "Consumer Disc.": "XLY", "Materials": "XLB", "Comm. Services": "XLC",
-                "Real Estate": "XLRE", "Industrials": "XLI"}
+def sector_data():
+    S = {"Tech":"XLK","Fins":"XLF","Energy":"XLE","Health":"XLV","Staples":"XLP",
+         "Utils":"XLU","C.Disc":"XLY","Matls":"XLB","Comm":"XLC","R.Est":"XLRE","Indust":"XLI"}
     rows = []
-    for name, tkr in SECTORS.items():
-        q = yahoo_quote(tkr)
-        if q: rows.append({"Sector": name, "ETF": tkr, "Price": q["price"], "Change %": q["pct"]})
+    for name,tkr in S.items():
+        q = yquote(tkr)
+        if q: rows.append({"Sector":name,"ETF":tkr,"Price":q["price"],"Pct":q["pct"]})
     return pd.DataFrame(rows)
 
-def detect_unusual_poly(markets):
+def unusual_poly(mks):
     out = []
-    for m in markets:
+    for m in mks:
         try:
-            v24 = float(m.get("volume24hr", 0) or 0)
-            vtot = float(m.get("volume", 0) or 0)
-            if vtot > 0 and v24 / vtot > 0.38 and v24 > 5000:
-                out.append(m)
-        except Exception:
-            pass
-    return out[:6]
+            v24=float(m.get("volume24hr",0) or 0); vtot=float(m.get("volume",0) or 0)
+            if vtot>0 and v24/vtot>0.38 and v24>5000: out.append(m)
+        except: pass
+    return out[:8]
 
-def market_snapshot_str():
+def poly_pct(m):
     try:
-        qs = multi_quotes(["SPY", "QQQ", "DXY", "GLD", "TLT", "BTC-USD"])
-        parts = [f"{q['ticker']}: ${q['price']:,.2f} ({q['pct']:+.2f}%)" for q in qs]
-        v = vix_price()
-        if v: parts.append(f"VIX: {v}")
-        fv, fl = fear_greed()
-        if fv: parts.append(f"Crypto F&G: {fv} ({fl})")
+        pp = m.get("outcomePrices",[])
+        p = json.loads(pp) if isinstance(pp,str) else pp
+        return float(p[0])*100 if p else 50
+    except: return 50
+
+def msnap():
+    try:
+        parts = [f"{q['ticker']} {q['price']:,.2f}({q['pct']:+.2f}%)" for q in multi_q(["SPY","QQQ","GLD","CL=F","BTC-USD"])]
+        v = get_vix()
+        if v: parts.append(f"VIX {v}")
         return " | ".join(parts)
-    except Exception:
-        return ""
+    except: return ""
 
-# ── GEMINI SYSTEM PROMPT ─────────────────────────────────────────────────────
-SENTINEL_PROMPT = """
-You are SENTINEL — a personal financial and geopolitical intelligence terminal for a retail power investor in PST timezone.
+def quotecard(label, price, pct, amber_top=True):
+    c = "#00e676" if pct>=0 else "#ff3b3b"
+    s = "+" if pct>=0 else ""
+    border_color = "#f5a623" if amber_top else c
+    return f"""<div style="background:#0d0e10;border:1px solid #1e2025;border-top:2px solid {border_color};padding:7px;text-align:center">
+  <div style="color:#8a8f99;font-size:8px;letter-spacing:1px">{label}</div>
+  <div style="color:#f0f2f5;font-size:15px;font-weight:600">{price}</div>
+  <div style="color:{c};font-size:10px">{s}{pct:.2f}%</div></div>"""
 
-PERSONA: Adaptive — match the user's tone. Simple language, deep analysis. Define jargon on first use. Data-first, narrative-second.
+# ── GEMINI — AUTO MODEL SELECTION ─────────────────────────────────────────────
+SYS = """You are SENTINEL — a Bloomberg-grade financial and geopolitical intelligence terminal for a retail power investor in PST.
+VOICE: Adaptive. Simple language, deep analysis. Define jargon on first use. Trace second and third-order effects always.
+DATA: Yahoo Finance, FRED (CPI/PCE/rates/GDP/M2/spreads), Polymarket, GDELT, CoinGecko, Finnhub, NewsAPI, CBOE, Fear & Greed.
+ASSETS: US Equities/ETFs, Options, Crypto (BTC/ETH/alts/dominance), Commodities (WTI/Gold/Silver/Copper/Wheat), Fixed Income, Forex.
+GEO: Middle East/Iran/Houthi, China/Taiwan/TSMC, Russia/Ukraine, Sub-Saharan Africa/minerals, Red Sea/Suez shipping.
+RULES: Never fabricate. Always bear case. Label confidence HIGH/MEDIUM/LOW/UNCONFIRMED. Timestamp PST. Full ripple chains. Polymarket=crowd odds. Trade ideas=research only.
+FORMATS: /brief /flash [ticker] /scenario [asset] /geo [region] /poly [topic] /rotate /sentiment /idea [theme]"""
 
-CAPABILITIES:
-- Macro analysis: CPI, PCE, Fed rates, GDP, yield curve, M2, credit spreads (FRED data)
-- Equity analysis: sectors, ETFs, options flow interpretation, rotation signals
-- Crypto: BTC dominance, ETH/BTC ratio, Fear & Greed, macro correlations
-- Geopolitical intelligence: Middle East, China/Taiwan, Russia/Ukraine, Sub-Saharan Africa, shipping routes
-- Polymarket: prediction market analysis, unusual flow detection, convergence signals
-- Cross-asset correlation detection and second/third-order effect chains
-- Historical analog matching
-- Scenario trees (Bull/Base/Bear with probabilities)
-- Narrative vs. positioning divergence detection
-
-RULES:
-1. Never fabricate data. If unknown, say so and say where to find it.
-2. Always include a bear case with any bullish idea.
-3. Label confidence: HIGH / MEDIUM / LOW / UNCONFIRMED
-4. Separate facts from interpretation — label clearly.
-5. Polymarket = crowd odds, not guaranteed outcomes.
-6. Everything = research, not financial advice.
-7. Trace ripple chains: never stop at first-order effects.
-8. When asked about a ticker: price context, catalyst, cross-asset implications.
-9. When asked about a macro event: second and third-order effects.
-10. Geopolitical events: confidence level, competing accounts, market exposure.
-
-OUTPUT FORMATS:
-/brief → Full morning briefing (macro, geo, Polymarket, markets, sector rotation, SENTINEL signal)
-/flash [ticker] → Quick snapshot: price, catalyst, options pulse, SENTINEL read
-/geo [region] → Geopolitical dashboard: status, confidence, market exposure, second-order chain
-/scenario [asset] → Bull/base/bear scenario tree with probabilities
-/poly [topic] → Polymarket analysis with unusual activity scan
-/rotate → Sector rotation read with cycle position
-/sentiment → Market sentiment dashboard
-
-Always timestamp in PST. Always end trade ideas with: ⚠️ Research only, not financial advice.
-""".strip()
-
-def gemini_response(user_msg, history, context=""):
+def gemini_chat(msg, history, ctx=""):
     if not st.session_state.gemini_key:
-        return "⚠️ Please add your Gemini API key in the sidebar to activate SENTINEL AI."
+        return "Add Gemini API key in sidebar.\nFree: https://aistudio.google.com/app/apikey"
     try:
         import google.generativeai as genai
         genai.configure(api_key=st.session_state.gemini_key)
-        model = genai.GenerativeModel(model_name="gemini-2.0-flash-exp",
-                                      system_instruction=SENTINEL_PROMPT)
-        ctx = ""
-        if st.session_state.macro_theses: ctx += f"\nUser macro theses: {st.session_state.macro_theses}"
-        if st.session_state.geo_watch:    ctx += f"\nUser geo watch: {st.session_state.geo_watch}"
-        if st.session_state.watchlist:    ctx += f"\nWatchlist: {', '.join(st.session_state.watchlist)}"
-        if context:                        ctx += f"\nLive market snapshot: {context}"
-
-        gemini_history = []
-        for msg in history[-12:]:
-            role = "user" if msg["role"] == "user" else "model"
-            gemini_history.append({"role": role, "parts": [msg["content"]]})
-
-        chat = model.start_chat(history=gemini_history)
-        full = f"{ctx}\n\nQuery: {user_msg}" if ctx else user_msg
-        return chat.send_message(full).text
+        model = None
+        for mn in ["gemini-2.0-flash","gemini-1.5-flash","gemini-1.5-pro","gemini-pro"]:
+            try: model = genai.GenerativeModel(model_name=mn, system_instruction=SYS); break
+            except: continue
+        if not model:
+            return ("No Gemini model available. List your models:\n"
+                    "curl \"https://generativelanguage.googleapis.com/v1beta/models?key=YOUR_KEY\"\n\n"
+                    "Or Python:\nimport google.generativeai as genai\n"
+                    "genai.configure(api_key='YOUR_KEY')\n"
+                    "for m in genai.list_models():\n"
+                    "  if 'generateContent' in m.supported_generation_methods:\n"
+                    "    print(m.name)")
+        full_ctx = ""
+        if st.session_state.macro_theses: full_ctx += f"\nMacro theses: {st.session_state.macro_theses}"
+        if st.session_state.geo_watch:    full_ctx += f"\nGeo watch: {st.session_state.geo_watch}"
+        if st.session_state.watchlist:    full_ctx += f"\nWatchlist: {', '.join(st.session_state.watchlist)}"
+        if ctx: full_ctx += f"\nLive market: {ctx}"
+        gh = []
+        for m in history[-12:]:
+            role = "user" if m["role"]=="user" else "model"
+            gh.append({"role":role,"parts":[m["content"]]})
+        chat = model.start_chat(history=gh)
+        return chat.send_message(f"{full_ctx}\n\n{msg}" if full_ctx else msg).text
     except ImportError:
-        return "⚠️ google-generativeai not installed. Run: pip install google-generativeai"
+        return "google-generativeai not in requirements.txt"
     except Exception as e:
-        return f"⚠️ Gemini error: {e}"
+        err = str(e)
+        if "404" in err or "not found" in err.lower():
+            return (f"Model not found (404). To list YOUR available models:\n\n"
+                    f"curl \"https://generativelanguage.googleapis.com/v1beta/models?key=YOUR_KEY\"\n\n"
+                    f"Python:\nimport google.generativeai as genai\n"
+                    f"genai.configure(api_key='YOUR_KEY')\n"
+                    f"for m in genai.list_models():\n"
+                    f"  if 'generateContent' in m.supported_generation_methods:\n"
+                    f"    print(m.name)\n\n"
+                    f"SENTINEL auto-tries: gemini-2.0-flash → gemini-1.5-flash → gemini-1.5-pro\n"
+                    f"Original: {err}")
+        return f"Gemini error: {err}"
 
-# ── CHART THEME ──────────────────────────────────────────────────────────────
-CHART = dict(paper_bgcolor="#060810", plot_bgcolor="#0d1117",
-             font=dict(color="#c9d1d9"),
-             xaxis=dict(gridcolor="#1f2937"),
-             yaxis=dict(gridcolor="#1f2937"),
-             margin=dict(l=0, r=10, t=24, b=0))
+# ── SIDEBAR ───────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown(f"""<div style="background:#0d0e10;border-bottom:2px solid #f5a623;padding:8px 4px;margin-bottom:12px">
+      <div style="color:#f5a623;font-size:16px;font-weight:700;letter-spacing:4px">⚡ SENTINEL</div>
+      <div style="color:#444851;font-size:9px;letter-spacing:1px">{date_pst()}</div>
+      <div style="color:#f5a623;font-size:10px;margin-top:2px">{now_pst()}</div>
+    </div>""", unsafe_allow_html=True)
 
-def dark_fig(height=300):
-    fig = go.Figure()
-    fig.update_layout(**CHART, height=height, showlegend=False)
-    return fig
+    st.markdown('<div style="color:#f5a623;font-size:9px;letter-spacing:2px;margin-bottom:8px">▶ API KEYS</div>', unsafe_allow_html=True)
+    with st.expander("🤖 Gemini AI — Required"):
+        st.caption("[aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)")
+        st.session_state.gemini_key = st.text_input("Key",value=st.session_state.gemini_key,type="password",key="gk")
+    with st.expander("📊 Finnhub"):
+        st.caption("[finnhub.io/register](https://finnhub.io/register)")
+        st.session_state.finnhub_key = st.text_input("Key",value=st.session_state.finnhub_key,type="password",key="fhk")
+    with st.expander("📈 FRED Macro"):
+        st.caption("[fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html)")
+        st.session_state.fred_key = st.text_input("Key",value=st.session_state.fred_key,type="password",key="frk")
+    with st.expander("📰 NewsAPI"):
+        st.caption("[newsapi.org/register](https://newsapi.org/register)")
+        st.session_state.newsapi_key = st.text_input("Key",value=st.session_state.newsapi_key,type="password",key="nak")
+    with st.expander("💰 CoinGecko (optional)"):
+        st.caption("[coingecko.com](https://www.coingecko.com/en/api/pricing)")
+        st.session_state.coingecko_key = st.text_input("Key",value=st.session_state.coingecko_key,type="password",key="cgk")
 
-# ════════════════════════════════════════════════════════════════════════════
-# ── MAIN APP ────────────────────────────────────────────────────────────────
-# ════════════════════════════════════════════════════════════════════════════
+    st.divider()
+    st.markdown('<div style="color:#f5a623;font-size:9px;letter-spacing:2px;margin-bottom:8px">▶ CONNECTION STATUS</div>', unsafe_allow_html=True)
+    STATUS = [
+        ("Yahoo Finance", True), ("Polymarket", True), ("GDELT", True), ("TradingView", True),
+        ("FRED", bool(st.session_state.fred_key)),
+        ("Finnhub", bool(st.session_state.finnhub_key)),
+        ("NewsAPI", bool(st.session_state.newsapi_key)),
+        ("Gemini AI", bool(st.session_state.gemini_key)),
+    ]
+    for api, ok in STATUS:
+        d = "dot-g" if ok else "dot-x"
+        st.markdown(f'<div style="font-size:10px;padding:2px 0"><span class="dot {d}"></span>{api}</div>', unsafe_allow_html=True)
 
-st.markdown("""
-<div style="display:flex;align-items:center;gap:14px;margin-bottom:4px">
-  <h1 style="margin:0;font-family:'Courier New',monospace;letter-spacing:4px;color:#58a6ff">⚡ SENTINEL</h1>
-  <span style="color:#8b949e;font-family:'Courier New',monospace;font-size:11px">FREE BLOOMBERG / PLTR TERMINAL</span>
-</div>
-""", unsafe_allow_html=True)
-st.markdown(f'<p style="color:#374151;font-family:Courier New;font-size:10px;margin-top:-8px">'
-            f'{now_pst()} | Yahoo Finance • FRED • Polymarket • GDELT • CoinGecko • Finnhub • NewsAPI</p>',
-            unsafe_allow_html=True)
+    st.divider()
+    st.markdown('<div style="color:#f5a623;font-size:9px;letter-spacing:2px;margin-bottom:8px">▶ SESSION CONTEXT</div>', unsafe_allow_html=True)
+    st.session_state.macro_theses = st.text_area("Macro theses",value=st.session_state.macro_theses,placeholder="e.g. Watching Fed pivot...",height=60,key="mth")
+    st.session_state.geo_watch = st.text_area("Geo watch",value=st.session_state.geo_watch,placeholder="e.g. Red Sea, Taiwan...",height=50,key="gww")
+    wl = st.text_input("Watchlist (comma-separated)",value=",".join(st.session_state.watchlist),key="wlin")
+    st.session_state.watchlist = [t.strip().upper() for t in wl.split(",") if t.strip()]
 
-tabs = st.tabs(["🌅 Brief", "📊 Markets", "📈 Macro", "💰 Crypto", "🎲 Polymarket", "🌍 Geo", "🤖 SENTINEL AI"])
+# ── TICKER TAPE + HEADER ──────────────────────────────────────────────────────
+tv_tape()
+st.markdown(f"""<div style="background:#0d0e10;border-bottom:1px solid #f5a623;padding:5px 16px;display:flex;justify-content:space-between;align-items:center">
+  <div style="display:flex;align-items:center;gap:16px">
+    <span style="color:#f5a623;font-size:17px;font-weight:700;letter-spacing:5px">⚡ SENTINEL</span>
+    <span style="color:#444851">|</span>
+    <span style="color:#8a8f99;font-size:9px;letter-spacing:1px">INTELLIGENCE TERMINAL</span>
+    <span class="dot dot-g"></span><span style="color:#00e676;font-size:9px">LIVE</span>
+  </div>
+  <div style="font-size:9px;color:#8a8f99">{now_pst()} PST</div>
+</div>""", unsafe_allow_html=True)
 
-# ════════════════════════════════════════
-# TAB 1 — MORNING BRIEF
-# ════════════════════════════════════════
+tabs = st.tabs(["  BRIEF  ","  MARKETS  ","  MACRO  ","  CRYPTO  ","  POLYMARKET  ","  GEO GLOBE  ","  SENTINEL AI  "])
+
+# ════════════ BRIEF TAB ════════════
 with tabs[0]:
-    st.markdown('<div class="term-header">⚡ SENTINEL MORNING BRIEF</div>', unsafe_allow_html=True)
+    if st.button("⟳  REFRESH ALL", key="ref"): st.cache_data.clear(); st.rerun()
 
-    if st.button("🔄 Refresh All Data"):
-        st.cache_data.clear()
-        st.rerun()
-
-    # ── Market Snapshot ──
-    st.markdown("### 📊 MARKET SNAPSHOT")
-    KEY_TICKERS = {
-        "SPY": "S&P 500", "QQQ": "Nasdaq", "DIA": "Dow",
-        "IWM": "Russell 2K", "^TNX": "10Y Yield", "DXY": "USD Index",
-        "GLD": "Gold ETF", "CL=F": "WTI Crude", "BTC-USD": "Bitcoin"
-    }
-    qs = multi_quotes(list(KEY_TICKERS.keys()))
+    KEY = {"SPY":"S&P 500","QQQ":"NASDAQ","DIA":"DOW","IWM":"RUSS 2K",
+           "^TNX":"10Y YLD","DXY":"USD IDX","GLD":"GOLD","CL=F":"WTI","BTC-USD":"BITCOIN"}
+    qs = multi_q(list(KEY.keys()))
     cols = st.columns(len(qs))
     for col, q in zip(cols, qs):
-        label = KEY_TICKERS.get(q["ticker"], q["ticker"])
         with col:
-            st.metric(label, f"${q['price']:,.2f}", delta=f"{q['pct']:+.2f}%")
+            st.markdown(quotecard(KEY[q["ticker"]], f"{q['price']:,.2f}", q["pct"]), unsafe_allow_html=True)
 
-    st.divider()
+    st.markdown("<br>", unsafe_allow_html=True)
+    L, R = st.columns([3, 2])
 
-    col_l, col_r = st.columns([3, 2])
+    with L:
+        # Watchlist
+        st.markdown('<div class="bb-sec"><div class="bb-sec-t">WATCHLIST</div><div class="bb-sec-b">', unsafe_allow_html=True)
+        st.markdown('<table class="bb-tbl"><tr><th>TICKER</th><th>PRICE</th><th>CHG</th><th>%</th><th>VOL</th></tr>', unsafe_allow_html=True)
+        for q in multi_q(st.session_state.watchlist):
+            cls = "up" if q["pct"]>=0 else "dn"; s = "+" if q["pct"]>=0 else ""
+            vol = f"{q['volume']/1e6:.1f}M" if q["volume"]>1e6 else f"{q['volume']/1e3:.0f}K"
+            st.markdown(f'<tr><td class="kk">{q["ticker"]}</td><td>{q["price"]:,.4f}</td><td class="{cls}">{s}{q["change"]:.4f}</td><td class="{cls}">{s}{q["pct"]:.2f}%</td><td class="dm">{vol}</td></tr>', unsafe_allow_html=True)
+        st.markdown("</table></div></div>", unsafe_allow_html=True)
 
-    with col_l:
-        # ── Sentiment Pulse ──
-        st.markdown("### ⚡ SENTIMENT PULSE")
-        s1, s2, s3 = st.columns(3)
-        v = vix_price()
-        with s1:
-            if v:
-                lbl = "LOW FEAR" if v < 15 else ("MODERATE" if v < 25 else ("HIGH FEAR" if v < 35 else "PANIC"))
-                st.metric("VIX", f"{v:.2f}", delta=lbl)
-        fg_val, fg_lbl = fear_greed()
-        with s2:
-            if fg_val: st.metric("Crypto Fear & Greed", f"{fg_val}/100", delta=fg_lbl)
-        with s3:
-            if v:
-                posture = "🟢 RISK-ON" if v < 18 else ("🟡 NEUTRAL" if v < 25 else "🔴 RISK-OFF")
-                st.metric("SENTINEL Posture", posture)
+        st.markdown("<br>", unsafe_allow_html=True)
 
-        st.divider()
+        # Sector Rotation
+        st.markdown('<div class="bb-sec"><div class="bb-sec-t">SECTOR ROTATION</div><div class="bb-sec-b">', unsafe_allow_html=True)
+        sec = sector_data()
+        if not sec.empty:
+            ss = sec.sort_values("Pct", ascending=False); mx = sec["Pct"].abs().max() or 1
+            for _, row in ss.iterrows():
+                p = row["Pct"]; c = "#00e676" if p>=0 else "#ff3b3b"; bw = abs(p)/mx*100; s = "+" if p>=0 else ""
+                st.markdown(f"""<div class="bb-sr">
+                  <span class="bb-sn">{row['Sector']} <span style="color:#444851">({row['ETF']})</span></span>
+                  <div class="bb-sbw"><div class="bb-sbf" style="width:{bw}%;background:{c};opacity:0.7"></div></div>
+                  <span class="bb-sv" style="color:{c}">{s}{p:.2f}%</span></div>""", unsafe_allow_html=True)
+        st.markdown("</div></div>", unsafe_allow_html=True)
 
-        # ── Watchlist ──
-        st.markdown("### 👁 WATCHLIST")
-        wl_qs = multi_quotes(st.session_state.watchlist)
-        if wl_qs:
-            wl_df = pd.DataFrame([{
-                "Ticker": q["ticker"],
-                "Price": f"${q['price']:,.4f}" if q["price"] < 5 else f"${q['price']:,.2f}",
-                "Change": f"${q['change']:+.2f}",
-                "% Chg": f"{q['pct']:+.2f}%",
-            } for q in wl_qs])
-            st.dataframe(wl_df, use_container_width=True, hide_index=True)
+    with R:
+        # Sentiment
+        v = get_vix(); fgv, fgl = fear_greed()
+        vc = "#00e676" if v and v<15 else ("#f5a623" if v and v<25 else "#ff3b3b")
+        pos = "RISK-ON" if v and v<18 else ("NEUTRAL" if v and v<25 else "RISK-OFF")
+        pc = {"RISK-ON":"#00e676","NEUTRAL":"#f5a623","RISK-OFF":"#ff3b3b"}[pos]
+        st.markdown(f"""<div class="bb-sec"><div class="bb-sec-t">SENTIMENT PULSE</div><div class="bb-sec-b">
+          <div class="bb-mr"><span>VIX</span><span style="color:{vc};font-weight:600">{v if v else 'N/A'}</span></div>
+          <div class="bb-mr"><span>CRYPTO F&G</span><span>{fgv}/100 — {fgl or ''}</span></div>
+          <div class="bb-mr"><span>POSTURE</span><span style="color:{pc};font-weight:700">{pos}</span></div>
+          </div></div>""", unsafe_allow_html=True)
 
-        st.divider()
+        st.markdown("<br>", unsafe_allow_html=True)
 
-        # ── Sector Leaders / Laggards ──
-        st.markdown("### 🔄 SECTOR PULSE")
-        sec_df = sector_etfs()
-        if not sec_df.empty:
-            top = sec_df.nlargest(3, "Change %")[["Sector", "ETF", "Change %"]]
-            bot = sec_df.nsmallest(3, "Change %")[["Sector", "ETF", "Change %"]]
-            tc, bc = st.columns(2)
-            with tc:
-                st.markdown("**🟢 Leading**")
-                st.dataframe(top, use_container_width=True, hide_index=True)
-            with bc:
-                st.markdown("**🔴 Lagging**")
-                st.dataframe(bot, use_container_width=True, hide_index=True)
+        # Polymarket
+        st.markdown('<div class="bb-sec"><div class="bb-sec-t">POLYMARKET — TOP MARKETS</div><div class="bb-sec-b">', unsafe_allow_html=True)
+        for m in poly_mkt(8)[:5]:
+            title = m.get("question", m.get("title",""))[:65]
+            v24 = float(m.get("volume24hr",0) or 0)
+            slug = m.get("slug",""); url = f"https://polymarket.com/event/{slug}" if slug else "https://polymarket.com"
+            yp = poly_pct(m); np_ = 100-yp
+            st.markdown(f"""<div class="bb-poly"><a href="{url}" target="_blank" class="bb-pla">
+              <div class="bb-pty">{title}</div></a>
+              <div style="display:flex;height:3px;margin:3px 0"><div style="flex:{yp};background:#00e676"></div><div style="flex:{np_};background:#ff3b3b"></div></div>
+              <div class="bb-pm"><span><span class="yp">YES {yp:.0f}%</span> / <span class="np">NO {np_:.0f}%</span></span><span>24h ${v24:,.0f}</span></div></div>""", unsafe_allow_html=True)
+        st.markdown("</div></div>", unsafe_allow_html=True)
 
-    with col_r:
-        # ── Polymarket Top ──
-        st.markdown("### 🎲 POLYMARKET TOP")
-        poly = polymarket_markets(20)
-        for m in poly[:6]:
-            title = m.get("question", m.get("title", ""))[:65]
-            v24 = float(m.get("volume24hr", 0) or 0)
-            st.markdown(f'<div class="sentinel-poly"><strong>{title}…</strong><br>'
-                        f'<span style="color:#8b949e;font-size:11px">24h Vol: ${v24:,.0f}</span></div>',
-                        unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
 
-        st.divider()
+        # Geo Feed
+        st.markdown('<div class="bb-sec"><div class="bb-sec-t">GEO INTELLIGENCE</div><div class="bb-sec-b">', unsafe_allow_html=True)
+        for i, a in enumerate(gdelt_news("geopolitical conflict oil market", 6)[:5]):
+            t = a.get("title","")[:65]; u = a.get("url","#"); sd = a.get("seendate","")
+            ds = f"{sd[4:6]}/{sd[6:8]}" if sd and len(sd)>=8 else "--"
+            st.markdown(f'<div class="bb-ni"><span class="bb-nn">{i+1}</span><span class="bb-nd">{ds}</span><div><a href="{u}" target="_blank" class="bb-nl">{t}</a></div></div>', unsafe_allow_html=True)
+        st.markdown("</div></div>", unsafe_allow_html=True)
 
-        # ── GDELT Geo Headlines ──
-        st.markdown("### 🌍 GEO WATCH")
-        geo_arts = gdelt_news("geopolitical conflict oil market", max_rec=5)
-        for art in geo_arts[:4]:
-            t = art.get("title", "")[:70]
-            u = art.get("url", "#")
-            st.markdown(f'<div class="sentinel-geo"><a href="{u}" target="_blank" '
-                        f'style="color:#e3b341;text-decoration:none">{t}…</a></div>',
-                        unsafe_allow_html=True)
-
-# ════════════════════════════════════════
-# TAB 2 — MARKETS
-# ════════════════════════════════════════
+# ════════════ MARKETS TAB ════════════
 with tabs[1]:
-    st.markdown('<div class="term-header">📊 MARKETS — EQUITIES, OPTIONS & ROTATION</div>', unsafe_allow_html=True)
-
-    # Flash lookup
+    TV_MAP = {"SPY":"AMEX:SPY","QQQ":"NASDAQ:QQQ","NVDA":"NASDAQ:NVDA","AAPL":"NASDAQ:AAPL",
+              "TSLA":"NASDAQ:TSLA","MSFT":"NASDAQ:MSFT","GOOGL":"NASDAQ:GOOGL","AMZN":"NASDAQ:AMZN",
+              "META":"NASDAQ:META","GLD":"AMEX:GLD","TLT":"NASDAQ:TLT","IWM":"AMEX:IWM",
+              "BTC-USD":"BITSTAMP:BTCUSD","ETH-USD":"BITSTAMP:ETHUSD","GC=F":"COMEX:GC1!",
+              "CL=F":"NYMEX:CL1!","SI=F":"COMEX:SI1!","^TNX":"TVC:TNX","^VIX":"TVC:VIX","DXY":"TVC:DXY"}
     fc, _ = st.columns([2, 2])
     with fc:
-        flash_ticker = st.text_input("⚡ Flash Lookup — Ticker", placeholder="NVDA, AAPL, TSLA, SPY…", key="flash")
+        flash = st.text_input("SYMBOL LOOKUP", placeholder="NVDA  AAPL  TSLA  SPY  GLD  BTC-USD  CL=F", key="fl")
 
-    if flash_ticker:
-        tkr = flash_ticker.upper().strip()
-        q = yahoo_quote(tkr)
+    if flash:
+        sym = flash.upper().strip()
+        tv_sym = TV_MAP.get(sym, f"NASDAQ:{sym}")
+        q = yquote(sym)
         if q:
-            st.markdown(f"#### ⚡ FLASH: {tkr}")
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Price",  f"${q['price']:,.2f}", delta=f"{q['pct']:+.2f}%")
-            m2.metric("Change", f"${q['change']:+.4f}")
-            m3.metric("Volume", f"{q['volume']:,}")
+            c = "#00e676" if q["pct"]>=0 else "#ff3b3b"; s = "+" if q["pct"]>=0 else ""
+            vol = f"{q['volume']/1e6:.1f}M" if q["volume"]>1e6 else f"{q['volume']/1e3:.0f}K"
+            for col, (lbl, val, clr) in zip(st.columns(4), [
+                ("LAST PRICE", f"{q['price']:,.4f}", "#f5a623"),
+                ("CHANGE",     f"{s}{q['change']:,.4f}", c),
+                ("% CHANGE",   f"{s}{q['pct']:.2f}%", c),
+                ("VOLUME",     vol, "#8a8f99")]):
+                with col:
+                    st.markdown(f"""<div style="background:#0d0e10;border:1px solid #1e2025;border-top:2px solid {clr};padding:10px;margin-bottom:8px">
+                      <div style="color:#8a8f99;font-size:9px">{lbl}</div>
+                      <div style="color:{clr};font-size:22px;font-weight:600">{val}</div></div>""", unsafe_allow_html=True)
+        else:
+            st.warning(f"No data for {sym}. Check the ticker symbol.")
 
-            # Candlestick chart
-            try:
-                hist = yf.Ticker(tkr).history(period="3mo")
-                if not hist.empty:
-                    fig = dark_fig(height=300)
-                    fig.add_trace(go.Candlestick(
-                        x=hist.index, open=hist["Open"], high=hist["High"],
-                        low=hist["Low"], close=hist["Close"],
-                        increasing_line_color="#3fb950", decreasing_line_color="#f85149",
-                        name=tkr
-                    ))
-                    fig.update_layout(xaxis_rangeslider_visible=False)
-                    st.plotly_chart(fig, use_container_width=True)
-            except Exception:
-                pass
+        st.markdown(f'<div class="bb-sec-t" style="padding:4px 0;margin-bottom:4px">TRADINGVIEW CHART — {sym if flash else "SPY"}</div>', unsafe_allow_html=True)
+        tv_chart(tv_sym, height=500)
+        st.markdown("<br>", unsafe_allow_html=True)
 
-            # Insider transactions
-            if st.session_state.finnhub_key:
-                ins = finnhub_insider(tkr, st.session_state.finnhub_key)
-                if ins:
-                    st.markdown("##### 🔍 Insider Transactions (Finnhub)")
-                    ins_df = pd.DataFrame(ins)
-                    show_cols = [c for c in ["name", "change", "share", "transactionDate", "transactionCode"] if c in ins_df.columns]
-                    if show_cols:
-                        st.dataframe(ins_df[show_cols].rename(columns={
-                            "name": "Name", "change": "Chg Shares", "share": "Total Shares",
-                            "transactionDate": "Date", "transactionCode": "Type"
-                        }), use_container_width=True, hide_index=True)
-
-            # Options chain
-            st.markdown("##### 📋 Options Chain (Nearest Expiry)")
-            calls, puts = options_chain(tkr)
+        cc, ic = st.columns(2)
+        with cc:
+            st.markdown('<div class="bb-sec-t">OPTIONS CHAIN — NEAREST EXPIRY</div>', unsafe_allow_html=True)
+            calls, puts = opt_chain(sym)
             if calls is not None:
-                oc1, oc2 = st.columns(2)
-                with oc1:
-                    st.markdown("**CALLS**")
-                    c2 = calls.copy()
-                    c2["impliedVolatility"] = c2["impliedVolatility"].apply(lambda x: f"{x:.1%}")
-                    st.dataframe(c2, use_container_width=True, hide_index=True)
-                with oc2:
-                    st.markdown("**PUTS**")
-                    p2 = puts.copy()
-                    p2["impliedVolatility"] = p2["impliedVolatility"].apply(lambda x: f"{x:.1%}")
-                    st.dataframe(p2, use_container_width=True, hide_index=True)
-        else:
-            st.error(f"Could not fetch data for {tkr}. Check the ticker symbol.")
+                st.markdown("""<div class="bb-og"><div class="bb-oc">
+                  <div class="bb-oh bb-ch">▲ CALLS</div>
+                  <div class="bb-or" style="background:#111316">
+                    <span class="bb-ol">STRIKE</span><span class="bb-ol">LAST</span><span class="bb-ol">VOL</span><span class="bb-ol">IV</span></div>""", unsafe_allow_html=True)
+                for _, row in calls.iterrows():
+                    iv = f"{row['impliedVolatility']:.0%}" if row['impliedVolatility'] else "-"
+                    vo = f"{int(row['volume']):,}" if row['volume'] else "-"
+                    st.markdown(f'<div class="bb-or"><span class="bb-os">{row["strike"]:.1f}</span><span class="bb-oo">{row["lastPrice"]:.2f}</span><span class="bb-ov">{vo}</span><span class="bb-oiv">{iv}</span></div>', unsafe_allow_html=True)
+                st.markdown("""</div><div class="bb-oc">
+                  <div class="bb-oh bb-ph">▼ PUTS</div>
+                  <div class="bb-or" style="background:#111316">
+                    <span class="bb-ol">STRIKE</span><span class="bb-ol">LAST</span><span class="bb-ol">VOL</span><span class="bb-ol">IV</span></div>""", unsafe_allow_html=True)
+                for _, row in puts.iterrows():
+                    iv = f"{row['impliedVolatility']:.0%}" if row['impliedVolatility'] else "-"
+                    vo = f"{int(row['volume']):,}" if row['volume'] else "-"
+                    st.markdown(f'<div class="bb-or"><span class="bb-os" style="color:#ff3b3b">{row["strike"]:.1f}</span><span class="bb-oo">{row["lastPrice"]:.2f}</span><span class="bb-ov">{vo}</span><span class="bb-oiv">{iv}</span></div>', unsafe_allow_html=True)
+                st.markdown("</div></div>", unsafe_allow_html=True)
+            else:
+                st.info("No options data available for this symbol.")
 
-    st.divider()
+        with ic:
+            st.markdown('<div class="bb-sec-t">INSIDER TRANSACTIONS</div>', unsafe_allow_html=True)
+            if st.session_state.finnhub_key:
+                ins = fh_insider(sym, st.session_state.finnhub_key)
+                if ins:
+                    st.markdown('<div style="border:1px solid #1e2025"><div class="bb-in" style="background:#111316"><span style="color:#f5a623;font-size:9px">NAME</span><span style="color:#f5a623;font-size:9px">DATE</span><span style="color:#f5a623;font-size:9px">TYPE</span><span style="color:#f5a623;font-size:9px">SHARES</span></div>', unsafe_allow_html=True)
+                    for tx in ins[:8]:
+                        name = str(tx.get("name","—"))[:18]; date = tx.get("transactionDate","—")[:10]
+                        code = tx.get("transactionCode","—"); chg = tx.get("change",0) or 0
+                        is_buy = chg>0 or code in ["P","A"]
+                        typ = '<span class="bb-inb">▲ BUY</span>' if is_buy else '<span class="bb-ins">▼ SELL</span>'
+                        sh = f"{abs(chg):,.0f}" if chg else "—"
+                        st.markdown(f'<div class="bb-in"><span style="color:#d0d3d8">{name}</span><span style="color:#8a8f99;font-size:9px">{date}</span><span>{typ}</span><span style="color:#f0f2f5">{sh}</span></div>', unsafe_allow_html=True)
+                    st.markdown("</div>", unsafe_allow_html=True)
+                else:
+                    st.info("No recent insider transactions.")
+            else:
+                st.info("Add Finnhub key in sidebar for insider transaction data.")
 
-    # Sector Heatmap
-    st.markdown("### 🔄 SECTOR ROTATION HEATMAP")
-    sec_df = sector_etfs()
-    if not sec_df.empty:
-        sec_sorted = sec_df.sort_values("Change %")
-        colors = ["#3fb950" if x >= 0 else "#f85149" for x in sec_sorted["Change %"]]
-        fig2 = go.Figure(go.Bar(
-            x=sec_sorted["Change %"], y=sec_sorted["Sector"], orientation="h",
-            marker=dict(color=colors),
-            text=sec_sorted["Change %"].apply(lambda x: f"{x:+.2f}%"),
-            textposition="outside"
-        ))
-        fig2.update_layout(**CHART, height=380)
-        fig2.update_layout(xaxis_title="% Change", margin=dict(l=0, r=60, t=10, b=0))
-        st.plotly_chart(fig2, use_container_width=True)
-
-        # Rotation signal
-        top_sec = sec_df.nlargest(1, "Change %")["Sector"].values[0]
-        DEFENSIVE = {"Utilities", "Consumer Staples", "Healthcare"}
-        OFFENSIVE = {"Technology", "Consumer Disc.", "Comm. Services"}
-        if top_sec in DEFENSIVE:
-            sig = "🔴 DEFENSIVE ROTATION — Late-cycle signal. Consider de-risking."
-            cls = "sentinel-alert"
-        elif top_sec in OFFENSIVE:
-            sig = "🟢 OFFENSIVE ROTATION — Early/mid-cycle. Risk appetite intact."
-            cls = "sentinel-green"
-        elif top_sec == "Energy":
-            sig = "🟠 ENERGY LEADING — Inflation regime. Watch CPI. Oil stocks may outperform."
-            cls = "sentinel-geo"
-        else:
-            sig = f"🟡 MIXED — {top_sec} leading. No clear rotation signal yet."
-            cls = "sentinel-signal"
-        st.markdown(f'<div class="{cls}">🔄 ROTATION SIGNAL: {sig}</div>', unsafe_allow_html=True)
-
-    # Finnhub Market News
+    st.markdown("<br>", unsafe_allow_html=True)
     if st.session_state.finnhub_key:
-        st.divider()
-        st.markdown("### 📰 MARKET NEWS (Finnhub)")
-        fh_news = finnhub_news(st.session_state.finnhub_key, "general")
-        for art in fh_news[:5]:
-            title = art.get("headline", "")[:90]
-            url   = art.get("url", "#")
-            src   = art.get("source", "")
-            st.markdown(f'<div class="sentinel-signal"><a href="{url}" target="_blank" '
-                        f'style="color:#58a6ff;text-decoration:none">{title}</a><br>'
-                        f'<span style="color:#8b949e;font-size:10px">{src}</span></div>',
-                        unsafe_allow_html=True)
+        st.markdown('<div class="bb-sec"><div class="bb-sec-t">MARKET NEWS — FINNHUB LIVE</div><div class="bb-sec-b">', unsafe_allow_html=True)
+        for i, a in enumerate(fh_news(st.session_state.finnhub_key)[:12]):
+            title = a.get("headline","")[:90]; url = a.get("url","#"); src = a.get("source","")
+            try: ds = datetime.fromtimestamp(a.get("datetime",0)).strftime("%m/%d")
+            except: ds = "--"
+            st.markdown(f'<div class="bb-ni"><span class="bb-nn">{i+1}</span><span class="bb-nd">{ds}</span><div><a href="{url}" target="_blank" class="bb-nl">{title}</a><div class="bb-ns">{src}</div></div></div>', unsafe_allow_html=True)
+        st.markdown("</div></div>", unsafe_allow_html=True)
 
-# ════════════════════════════════════════
-# TAB 3 — MACRO (FRED)
-# ════════════════════════════════════════
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<div class="bb-sec-t">FOREX CROSS RATES</div>', unsafe_allow_html=True)
+    tv_forex(280)
+
+# ════════════ MACRO TAB ════════════
 with tabs[2]:
-    st.markdown('<div class="term-header">📈 MACRO — FRED DATA DASHBOARD</div>', unsafe_allow_html=True)
-
     if not st.session_state.fred_key:
-        st.warning("⚠️ Add your FRED API key in the sidebar to unlock this dashboard.")
-        st.info("[Get your free FRED key in 30 seconds → fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html)")
+        st.markdown('<div class="bb-ae">⚠ Add FRED API key in sidebar to unlock macro dashboard. Free at fred.stlouisfed.org/docs/api/api_key.html</div>', unsafe_allow_html=True)
     else:
-        # Yield Curve
-        st.markdown("### 📉 YIELD CURVE")
-        YC = {"3M": "DTB3", "2Y": "DGS2", "5Y": "DGS5", "10Y": "DGS10", "30Y": "DGS30"}
-        yc_vals = {}
-        for lbl, code in YC.items():
-            df = fred_series(code, st.session_state.fred_key, 5)
-            if df is not None and not df.empty:
-                yc_vals[lbl] = df["value"].iloc[-1]
-
-        if yc_vals:
-            fig_yc = dark_fig(280)
-            fig_yc.add_trace(go.Scatter(
-                x=list(yc_vals.keys()), y=list(yc_vals.values()),
-                mode="lines+markers", line=dict(color="#58a6ff", width=2.5),
-                marker=dict(size=9, color="#58a6ff")
-            ))
-            fig_yc.add_hline(y=0, line_dash="dash", line_color="#f85149", opacity=0.6,
-                             annotation_text="0% (inversion line)")
-            fig_yc.update_layout(yaxis_title="Yield (%)", xaxis_title="Maturity")
-            st.plotly_chart(fig_yc, use_container_width=True)
-
-            if "2Y" in yc_vals and "10Y" in yc_vals:
-                spread = yc_vals["10Y"] - yc_vals["2Y"]
-                if spread < 0:
-                    st.markdown(f'<div class="sentinel-alert">⚠️ YIELD CURVE INVERTED: 10Y-2Y = {spread:.2f}%. '
-                                f'Historical recession signal. Avg lead time: 12-18 months.</div>',
-                                unsafe_allow_html=True)
-                else:
-                    st.markdown(f'<div class="sentinel-green">✅ Yield curve normal: 10Y-2Y = +{spread:.2f}%.'
-                                f' No inversion signal.</div>', unsafe_allow_html=True)
-
-        st.divider()
-
-        # Key metrics
-        st.markdown("### 📊 KEY MACRO INDICATORS")
-        MACRO = {
-            "CPI (All Urban)": "CPIAUCSL",
-            "Core PCE (%)": "PCEPILFE",
-            "Fed Funds Rate": "FEDFUNDS",
-            "Unemployment U3": "UNRATE",
-            "Unemployment U6": "U6RATE",
-            "M2 Money Supply": "M2SL",
-            "HY Credit Spread": "BAMLH0A0HYM2",
-            "IG Credit Spread": "BAMLC0A0CM",
-        }
-        mc = st.columns(4)
-        for i, (name, code) in enumerate(MACRO.items()):
-            df = fred_series(code, st.session_state.fred_key, 5)
-            with mc[i % 4]:
+        MSERIES = {"CPI":"CPIAUCSL","Core PCE":"PCEPILFE","Fed Funds":"FEDFUNDS","10Y Yld":"DGS10",
+                   "2Y Yld":"DGS2","10Y-2Y":"T10Y2Y","U3 Unemp":"UNRATE","U6 Unemp":"U6RATE",
+                   "M2 Money":"M2SL","HY Spread":"BAMLH0A0HYM2"}
+        mc = st.columns(5)
+        for i, (name, code) in enumerate(MSERIES.items()):
+            df = fred_fetch(code, st.session_state.fred_key, 5)
+            with mc[i%5]:
                 if df is not None and not df.empty:
-                    cur  = df["value"].iloc[-1]
-                    prev = df["value"].iloc[-2] if len(df) > 1 else cur
-                    st.metric(name, f"{cur:.2f}", delta=f"{cur-prev:+.2f}")
+                    cur = df["value"].iloc[-1]; prev = df["value"].iloc[-2] if len(df)>1 else cur
+                    d = cur-prev; c = "#00e676" if d>=0 else "#ff3b3b"; s = "+" if d>=0 else ""
+                    st.markdown(f"""<div style="background:#0d0e10;border:1px solid #1e2025;border-top:2px solid #f5a623;padding:8px;margin-bottom:6px">
+                      <div style="color:#8a8f99;font-size:9px;letter-spacing:1px">{name}</div>
+                      <div style="color:#f0f2f5;font-size:17px;font-weight:600">{cur:.2f}</div>
+                      <div style="color:{c};font-size:10px">{s}{d:.3f}</div></div>""", unsafe_allow_html=True)
                 else:
-                    st.metric(name, "N/A")
+                    st.markdown(f'<div style="background:#0d0e10;border:1px solid #1e2025;padding:8px;margin-bottom:6px"><div style="color:#8a8f99;font-size:9px">{name}</div><div style="color:#444851">N/A</div></div>', unsafe_allow_html=True)
 
-        st.divider()
+        df2 = fred_fetch("T10Y2Y", st.session_state.fred_key, 5)
+        if df2 is not None and not df2.empty:
+            sp = df2["value"].iloc[-1]
+            if sp < 0:
+                st.markdown(f'<div class="bb-ac" style="margin:8px 0">⚠ YIELD CURVE INVERTED: 10Y-2Y = {sp:.2f}%. Historical recession signal. Avg lead time 12-18 months.</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="bb-ag" style="margin:8px 0">✓ YIELD CURVE NORMAL: 10Y-2Y = +{sp:.2f}%. No inversion signal currently.</div>', unsafe_allow_html=True)
 
-        # CPI Trend
-        st.markdown("### 📈 CPI TREND — YEAR-OVER-YEAR")
-        cpi_df = fred_series("CPIAUCSL", st.session_state.fred_key, 30)
-        if cpi_df is not None and len(cpi_df) > 13:
-            cpi_df["yoy"] = cpi_df["value"].pct_change(12) * 100
-            recent = cpi_df.dropna(subset=["yoy"]).tail(18)
-            fig_cpi = dark_fig(260)
-            fig_cpi.add_trace(go.Scatter(
-                x=recent["date"], y=recent["yoy"], fill="tozeroy",
-                line=dict(color="#f85149", width=2),
-                fillcolor="rgba(248,81,73,0.12)"
-            ))
-            fig_cpi.add_hline(y=2.0, line_dash="dash", line_color="#3fb950",
-                             annotation_text="Fed 2% target", annotation_font_color="#3fb950")
-            fig_cpi.update_layout(yaxis_title="YoY %")
-            st.plotly_chart(fig_cpi, use_container_width=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+        a, b = st.columns(2)
+        with a:
+            st.markdown('<div class="bb-sec-t">10Y TREASURY YIELD</div>', unsafe_allow_html=True)
+            tv_mini("TVC:TNX", 200)
+        with b:
+            st.markdown('<div class="bb-sec-t">US DOLLAR INDEX (DXY)</div>', unsafe_allow_html=True)
+            tv_mini("TVC:DXY", 200)
 
-        # 10Y Treasury
-        st.markdown("### 📈 10Y TREASURY YIELD TREND")
-        ty_df = fred_series("DGS10", st.session_state.fred_key, 36)
-        if ty_df is not None and not ty_df.empty:
-            recent_ty = ty_df.tail(24)
-            fig_ty = dark_fig(240)
-            fig_ty.add_trace(go.Scatter(
-                x=recent_ty["date"], y=recent_ty["value"], fill="tozeroy",
-                line=dict(color="#58a6ff", width=2),
-                fillcolor="rgba(88,166,255,0.10)"
-            ))
-            fig_ty.update_layout(yaxis_title="Yield (%)")
-            st.plotly_chart(fig_ty, use_container_width=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown('<div class="bb-sec-t">GOLD (COMEX GC1!)</div>', unsafe_allow_html=True)
+            tv_mini("COMEX:GC1!", 200)
+        with c2:
+            st.markdown('<div class="bb-sec-t">WTI CRUDE OIL (NYMEX CL1!)</div>', unsafe_allow_html=True)
+            tv_mini("NYMEX:CL1!", 200)
 
-# ════════════════════════════════════════
-# TAB 4 — CRYPTO
-# ════════════════════════════════════════
+# ════════════ CRYPTO TAB ════════════
 with tabs[3]:
-    st.markdown('<div class="term-header">💰 CRYPTO DASHBOARD — COINGECKO + YAHOO FINANCE</div>', unsafe_allow_html=True)
+    gd = cg_global(st.session_state.coingecko_key)
+    if gd:
+        tc = gd.get("total_market_cap",{}).get("usd",0)
+        btcd = gd.get("market_cap_percentage",{}).get("btc",0)
+        ethd = gd.get("market_cap_percentage",{}).get("eth",0)
+        fgv, fgl = fear_greed()
+        for col, (lbl, val) in zip(st.columns(4), [
+            ("TOTAL MARKET CAP", f"${tc/1e12:.2f}T"),
+            ("BTC DOMINANCE", f"{btcd:.1f}%"),
+            ("ETH DOMINANCE", f"{ethd:.1f}%"),
+            ("FEAR & GREED", f"{fgv}/100 — {fgl}" if fgv else "N/A")]):
+            with col:
+                st.markdown(f"""<div style="background:#0d0e10;border:1px solid #1e2025;border-top:2px solid #f5a623;padding:8px;text-align:center">
+                  <div style="color:#8a8f99;font-size:9px">{lbl}</div>
+                  <div style="color:#f0f2f5;font-size:16px;font-weight:600">{val}</div></div>""", unsafe_allow_html=True)
+        if btcd > 55:
+            st.markdown('<div class="bb-ae" style="margin-top:8px">⚠ BTC Dominance >55% — Altcoin weakness. Risk-off within crypto.</div>', unsafe_allow_html=True)
+        elif btcd < 45:
+            st.markdown('<div class="bb-ag" style="margin-top:8px">✓ BTC Dominance <45% — Altcoin season conditions may be forming.</div>', unsafe_allow_html=True)
 
-    # Global stats
-    gdata = crypto_global(st.session_state.coingecko_key)
-    if gdata:
-        g1, g2, g3, g4 = st.columns(4)
-        total_cap = gdata.get("total_market_cap", {}).get("usd", 0)
-        g1.metric("Total Market Cap", f"${total_cap/1e12:.2f}T")
-        btc_dom = gdata.get("market_cap_percentage", {}).get("btc", 0)
-        g2.metric("BTC Dominance", f"{btc_dom:.1f}%")
-        eth_dom = gdata.get("market_cap_percentage", {}).get("eth", 0)
-        g3.metric("ETH Dominance", f"{eth_dom:.1f}%")
-        fv, fl = fear_greed()
-        if fv: g4.metric("Fear & Greed", f"{fv}/100", delta=fl)
+    st.markdown("<br>", unsafe_allow_html=True)
+    ca, cb = st.columns(2)
+    with ca:
+        st.markdown('<div class="bb-sec-t">BITCOIN / USD</div>', unsafe_allow_html=True)
+        tv_chart("BITSTAMP:BTCUSD", 360)
+    with cb:
+        st.markdown('<div class="bb-sec-t">ETHEREUM / USD</div>', unsafe_allow_html=True)
+        tv_chart("BITSTAMP:ETHUSD", 360)
 
-        # BTC dominance signal
-        if btc_dom > 55:
-            st.markdown('<div class="sentinel-alert">⚠️ BTC Dominance >55% — Altcoins under pressure. Risk-off within crypto.</div>', unsafe_allow_html=True)
-        elif btc_dom < 45:
-            st.markdown('<div class="sentinel-green">✅ BTC Dominance <45% — Altcoin season conditions.</div>', unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<div class="bb-sec-t">CRYPTO MARKET TABLE — TOP 20</div>', unsafe_allow_html=True)
+    cd = cg_markets(st.session_state.coingecko_key)
+    if cd:
+        st.markdown('<table class="bb-tbl"><tr><th>#</th><th>SYM</th><th>NAME</th><th>PRICE</th><th>24H %</th><th>MKT CAP</th><th>24H VOL</th></tr>', unsafe_allow_html=True)
+        for i, c in enumerate(cd[:18]):
+            p = c.get("price_change_percentage_24h",0) or 0
+            cls = "up" if p>=0 else "dn"; s = "+" if p>=0 else ""
+            pr = f"${c['current_price']:,.4f}" if c["current_price"]<1 else f"${c['current_price']:,.2f}"
+            mc = f"${c['market_cap']/1e9:.1f}B"; vo = f"${c['total_volume']/1e9:.1f}B"
+            st.markdown(f'<tr><td class="dm">{i+1}</td><td class="kk">{c["symbol"].upper()}</td><td class="dm">{c["name"]}</td><td>{pr}</td><td class="{cls}">{s}{p:.2f}%</td><td class="dm">{mc}</td><td class="dm">{vo}</td></tr>', unsafe_allow_html=True)
+        st.markdown("</table>", unsafe_allow_html=True)
 
-    st.divider()
-
-    # Crypto price table
-    st.markdown("### 💹 TOP 15 BY MARKET CAP")
-    cdata = crypto_markets(st.session_state.coingecko_key)
-    if cdata:
-        rows = []
-        for c in cdata:
-            if not c.get("current_price"): continue
-            pct = c.get("price_change_percentage_24h", 0) or 0
-            rows.append({
-                "Coin": f"{c['name']} ({c['symbol'].upper()})",
-                "Price": f"${c['current_price']:,.4f}" if c["current_price"] < 1 else f"${c['current_price']:,.2f}",
-                "24h %": f"{pct:+.2f}%",
-                "Market Cap": f"${c['market_cap']/1e9:.1f}B",
-                "24h Volume": f"${c['total_volume']/1e9:.1f}B",
-            })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-    st.divider()
-
-    # BTC Chart
-    st.markdown("### 📈 BITCOIN — 3 MONTHS")
-    try:
-        bh = yf.Ticker("BTC-USD").history(period="3mo")
-        if not bh.empty:
-            fig_btc = dark_fig(320)
-            fig_btc.add_trace(go.Candlestick(
-                x=bh.index, open=bh["Open"], high=bh["High"], low=bh["Low"], close=bh["Close"],
-                increasing_line_color="#3fb950", decreasing_line_color="#f85149"
-            ))
-            fig_btc.update_layout(xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig_btc, use_container_width=True)
-    except Exception:
-        st.info("BTC chart unavailable right now.")
-
-    # ETH Chart
-    st.markdown("### 📈 ETHEREUM — 3 MONTHS")
-    try:
-        eh = yf.Ticker("ETH-USD").history(period="3mo")
-        if not eh.empty:
-            fig_eth = dark_fig(280)
-            fig_eth.add_trace(go.Candlestick(
-                x=eh.index, open=eh["Open"], high=eh["High"], low=eh["Low"], close=eh["Close"],
-                increasing_line_color="#3fb950", decreasing_line_color="#f85149"
-            ))
-            fig_eth.update_layout(xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig_eth, use_container_width=True)
-    except Exception:
-        pass
-
-# ════════════════════════════════════════
-# TAB 5 — POLYMARKET
-# ════════════════════════════════════════
+# ════════════ POLYMARKET TAB ════════════
 with tabs[4]:
-    st.markdown('<div class="term-header">🎲 POLYMARKET — PREDICTION INTELLIGENCE & UNUSUAL FLOW</div>', unsafe_allow_html=True)
-    st.caption("Polymarket is a public prediction market. Crowd probabilities + unusual volume may signal informed positioning.")
+    st.markdown('<div class="bb-sec-t">POLYMARKET — PREDICTION INTELLIGENCE & UNUSUAL FLOW DETECTION</div>', unsafe_allow_html=True)
+    st.markdown('<div style="color:#8a8f99;font-size:9px;margin:6px 0 10px">Click any market title to open on Polymarket.com · Unusual volume may signal informed positioning</div>', unsafe_allow_html=True)
 
-    poly_search = st.text_input("🔍 Filter markets by keyword", placeholder="Fed rate, oil, Taiwan, gold, recession…")
+    psrch = st.text_input("FILTER MARKETS", placeholder="Fed rate  oil  Taiwan  election  gold  BTC  recession...", key="ps")
+    all_p = poly_mkt(80)
+    unusual = unusual_poly(all_p)
+    filtered = [m for m in all_p if not psrch or psrch.lower() in str(m.get("question","")).lower()] if psrch else all_p
 
-    all_poly = polymarket_markets(60)
-    filtered_poly = [m for m in all_poly if not poly_search or
-                     poly_search.lower() in str(m.get("question","")).lower() or
-                     poly_search.lower() in str(m.get("title","")).lower()] if poly_search else all_poly
-
-    # Unusual activity
-    unusual = detect_unusual_poly(all_poly)
     if unusual:
-        st.markdown("### 🚨 UNUSUAL ACTIVITY DETECTED")
-        st.caption("Markets where 24h volume is ≥38% of total — signals recent surge in positioning.")
+        st.markdown('<div style="color:#ff3b3b;font-size:9px;letter-spacing:2px;padding:4px 0;border-bottom:1px solid #ff3b3b;margin-bottom:6px">⚡ UNUSUAL ACTIVITY DETECTED</div>', unsafe_allow_html=True)
         for m in unusual:
-            title = m.get("question", m.get("title", ""))[:80]
-            v24  = float(m.get("volume24hr", 0) or 0)
-            vtot = float(m.get("volume", 0) or 0)
-            ratio = v24 / vtot * 100 if vtot > 0 else 0
-            st.markdown(f'<div class="sentinel-alert">🚨 <strong>UNUSUAL:</strong> {title}…<br>'
-                        f'24h Vol: <strong>${v24:,.0f}</strong> ({ratio:.0f}% of total) | Total: ${vtot:,.0f}</div>',
-                        unsafe_allow_html=True)
-        st.divider()
+            t = m.get("question", m.get("title",""))[:80]
+            v24 = float(m.get("volume24hr",0) or 0); vtot = float(m.get("volume",0) or 0)
+            ratio = v24/vtot*100 if vtot>0 else 0
+            slug = m.get("slug",""); url = f"https://polymarket.com/event/{slug}" if slug else "https://polymarket.com"
+            st.markdown(f'<div class="bb-ac"><a href="{url}" target="_blank" style="color:#ff3b3b;text-decoration:none;font-weight:600">⚡ {t}</a><div style="color:#8a8f99;font-size:9px;margin-top:4px">24h: ${v24:,.0f} ({ratio:.0f}% of total ${vtot:,.0f})</div></div>', unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
 
-    # All markets
-    col_pm, col_guide = st.columns([3, 1])
-    with col_pm:
-        st.markdown(f"### 📋 ACTIVE MARKETS BY 24H VOLUME")
-        for m in filtered_poly[:25]:
-            title  = m.get("question", m.get("title", "Unknown"))[:90]
-            v24    = float(m.get("volume24hr", 0) or 0)
-            vtot   = float(m.get("volume", 0) or 0)
-            outcomes   = m.get("outcomes", [])
-            out_prices = m.get("outcomePrices", [])
+    pa, pb = st.columns([3, 1])
+    with pa:
+        st.markdown('<div class="bb-sec"><div class="bb-sec-t">ACTIVE MARKETS — RANKED BY 24H VOLUME</div><div class="bb-sec-b">', unsafe_allow_html=True)
+        for m in filtered[:30]:
+            t = m.get("question", m.get("title","Unknown"))[:88]
+            v24 = float(m.get("volume24hr",0) or 0); vtot = float(m.get("volume",0) or 0)
+            slug = m.get("slug",""); url = f"https://polymarket.com/event/{slug}" if slug else "https://polymarket.com"
+            yp = poly_pct(m); np_ = 100-yp
+            st.markdown(f"""<div class="bb-poly"><a href="{url}" target="_blank" class="bb-pla">
+              <div class="bb-pty">{t}</div></a>
+              <div style="display:flex;height:3px;margin:4px 0"><div style="flex:{yp};background:#00e676"></div><div style="flex:{np_};background:#ff3b3b"></div></div>
+              <div class="bb-pm"><span><span class="yp">YES {yp:.0f}%</span> &nbsp;/&nbsp; <span class="np">NO {np_:.0f}%</span></span><span style="color:#444851">24h ${v24:,.0f} | total ${vtot:,.0f}</span></div></div>""", unsafe_allow_html=True)
+        st.markdown("</div></div>", unsafe_allow_html=True)
 
-            prob_html = ""
-            if outcomes and out_prices:
-                try:
-                    prices = json.loads(out_prices) if isinstance(out_prices, str) else out_prices
-                    parts  = []
-                    for i, outcome in enumerate(outcomes[:2]):
-                        if i < len(prices):
-                            p = float(prices[i]) * 100
-                            col_str = "#3fb950" if p > 50 else "#f85149"
-                            parts.append(f'<span style="color:{col_str}">{outcome}: {p:.0f}%</span>')
-                    prob_html = " &nbsp;|&nbsp; ".join(parts) + "<br>"
-                except Exception:
-                    pass
+    with pb:
+        st.markdown("""<div class="bb-sec"><div class="bb-sec-t">SIGNAL GUIDE</div><div class="bb-sec-b" style="font-size:10px;color:#8a8f99;line-height:1.9">
+          <div style="color:#ff3b3b;margin-bottom:6px">⚡ UNUSUAL TRIGGERS</div>
+          24h vol ≥38% of total<br>
+          15pt shift in 6h no news<br>
+          Large single wallet<br>
+          Pre-event surge 12-48h<br>
+          New market + instant liquidity<br><br>
+          <div style="color:#f5a623;margin-bottom:6px">🔗 CONVERGENCE SIGNAL</div>
+          Polymarket + FRED macro<br>pointing same direction =<br>strongest free signal<br><br>
+          <div style="color:#444851;font-size:9px">⚠ Crowd odds only.<br>Not guaranteed outcomes.</div>
+        </div></div>""", unsafe_allow_html=True)
 
-            st.markdown(f'<div class="sentinel-poly"><strong>{title}</strong><br>'
-                        f'{prob_html}'
-                        f'<span style="color:#8b949e;font-size:11px">24h: ${v24:,.0f} | Total: ${vtot:,.0f}</span></div>',
-                        unsafe_allow_html=True)
-
-    with col_guide:
-        st.markdown("### 📖 HOW TO READ")
-        st.markdown("""
-<div class="sentinel-signal" style="font-size:11px">
-<strong>Unusual Activity Triggers:</strong><br><br>
-• 24h vol ≥38% of total vol<br>
-• Sudden probability shift<br>
-• New market with big instant liquidity<br>
-• Heavy pre-event positioning<br><br>
-<strong>Convergence Signal:</strong><br>
-When Polymarket + FRED data point the same direction → strongest free signal available<br><br>
-<strong>⚠️ Remember:</strong><br>
-Prediction markets = crowd odds. Not guaranteed. Use alongside macro + geo data.
-</div>
-""", unsafe_allow_html=True)
-
-
-
-# ════════════════════════════════════════
-# TAB 6 — GEO (with Interactive Globe)
-# ════════════════════════════════════════
+# ════════════ GEO GLOBE TAB ════════════
 with tabs[5]:
-    st.markdown('<div class="term-header">🌍 GEOPOLITICAL INTELLIGENCE — INTERACTIVE GLOBE + GDELT + NEWSAPI</div>', unsafe_allow_html=True)
-    st.markdown("### 🌐 SENTINEL GEOPOLITICAL GLOBE")
-    st.caption("Drag to rotate · Scroll to zoom · Click markers for intel · Use left panel to filter by category")
+    st.markdown('<div class="bb-sec-t">GEOPOLITICAL INTELLIGENCE — SENTINEL GLOBE | CESIUM SATELLITE IMAGERY</div>', unsafe_allow_html=True)
+    st.caption("Drag to rotate · Scroll to zoom · Click markers for intel · Hover for preview · Click + ADD EVENT to pin custom events")
+
     globe_path = pathlib.Path(__file__).parent / "globe.html"
     if globe_path.exists():
-        globe_html = globe_path.read_text(encoding="utf-8")
-        components.html(globe_html, height=620, scrolling=False)
+        components.html(globe_path.read_text(encoding="utf-8"), height=650, scrolling=False)
     else:
-        st.error("globe.html not found. Make sure it's in the same folder as sentinel_app.py")
-    st.divider()
-    THEATERS = {
-        "Middle East + Oil + Hormuz": "Middle East Iran oil Hormuz",
-        "China + Taiwan + Semiconductors": "China Taiwan semiconductor chips trade",
-        "Russia + Ukraine + Energy + Grain": "Russia Ukraine energy grain wheat NATO",
-        "Africa + Cobalt + Lithium + Coup": "Africa cobalt lithium coup mining Sahel",
-        "Red Sea + Suez + Shipping": "Red Sea Suez shipping Houthi container",
-        "South China Sea + Trade": "South China Sea shipping trade dispute",
-    }
-    geo_col1, geo_col2 = st.columns([3, 1])
-    with geo_col1:
-        theater_sel = st.selectbox("📡 Select Theater for News Feed", list(THEATERS.keys()) + ["Custom search…"])
-        custom_q = ""
-        if theater_sel == "Custom search…":
-            custom_q = st.text_input("Custom GDELT query")
-        query = custom_q if custom_q else THEATERS.get(theater_sel, "")
-        if query:
-            st.markdown(f"#### GDELT FEED — `{query}`")
-            arts = gdelt_news(query, max_rec=12)
-            if arts:
-                for art in arts:
-                    t = art.get("title", "")[:100]
-                    u = art.get("url", "#")
-                    dom = art.get("domain", "")
-                    sd = art.get("seendate", "")
-                    date_str = f"{sd[:4]}-{sd[4:6]}-{sd[6:8]}" if sd and len(sd) >= 8 else ""
-                    st.markdown(f'<div class="sentinel-geo"><a href="{u}" target="_blank" style="color:#e3b341;text-decoration:none;font-weight:bold">{t}</a><br><span style="color:#8b949e;font-size:10px">{dom} | {date_str}</span></div>', unsafe_allow_html=True)
-            if st.session_state.newsapi_key:
-                st.divider()
-                st.markdown("#### NEWSAPI LAYER")
-                for art in newsapi_headlines(st.session_state.newsapi_key, query)[:5]:
-                    title = art.get("title", "")
-                    if not title or "[Removed]" in title: continue
-                    u = art.get("url", "#"); src = art.get("source", {}).get("name", ""); pub = art.get("publishedAt", "")[:10]
-                    st.markdown(f'<div class="sentinel-signal"><a href="{u}" target="_blank" style="color:#58a6ff;text-decoration:none">{title[:100]}</a><br><span style="color:#8b949e;font-size:10px">{src} | {pub}</span></div>', unsafe_allow_html=True)
-    with geo_col2:
-        st.markdown("### ⚠️ THEATERS")
-        for name, status in {"🔴 Middle East":"CRITICAL","🔴 Ukraine":"ACTIVE","🔴 Red Sea":"DISRUPTED","🟠 Sahel":"ELEVATED","🟠 Hormuz":"ELEVATED","🟡 Taiwan":"MONITORING","🟡 S.China Sea":"MONITORING"}.items():
-            color = "#f85149" if status in ("ACTIVE","CRITICAL","DISRUPTED") else ("#e3b341" if status=="ELEVATED" else "#8b949e")
-            st.markdown(f'<div style="background:#0d1117;border:1px solid #1f2937;border-radius:4px;padding:6px 10px;margin:3px 0;display:flex;justify-content:space-between"><span style="font-size:11px">{name}</span><span style="color:{color};font-size:9px;font-weight:bold">{status}</span></div>', unsafe_allow_html=True)
-        st.divider()
-        st.markdown("### 📖 CONFIDENCE")
-        st.markdown("`HIGH` Multiple confirmed  \n`MEDIUM` Limited sources  \n`LOW` Single source  \n`UNCONFIRMED` Unverified")
+        st.error("globe.html not found. Place it in the same folder as sentinel_app.py")
+        st.info("Download globe.html from the SENTINEL files you were given and add it to your GitHub repo root.")
 
-# ════════════════════════════════════════
-# TAB 7 — SENTINEL AI CHAT
-# ════════════════════════════════════════
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    THMAP = {
+        "Middle East + Hormuz + Oil": "Middle East Iran oil Hormuz Houthi",
+        "China + Taiwan + Semiconductors": "China Taiwan semiconductor chips TSMC",
+        "Russia + Ukraine + Energy": "Russia Ukraine energy grain NATO",
+        "Africa + Cobalt + Lithium": "Africa cobalt lithium coup Sahel Mali",
+        "Red Sea + Suez + Shipping": "Red Sea Suez shipping Houthi container",
+        "South China Sea + Trade": "South China Sea shipping dispute Philippines",
+    }
+    g1, g2 = st.columns([3, 1])
+    with g1:
+        th = st.selectbox("NEWS FEED — SELECT THEATER", list(THMAP.keys()) + ["Custom search…"])
+        cq = "" if th != "Custom search…" else st.text_input("Custom GDELT query", key="cq")
+        q = cq if cq else THMAP.get(th, "")
+        if q:
+            st.markdown('<div class="bb-sec"><div class="bb-sec-t">GDELT LIVE FEED — 100+ LANGUAGES, UPDATES EVERY 15 MIN</div><div class="bb-sec-b">', unsafe_allow_html=True)
+            for i, a in enumerate(gdelt_news(q, 12)):
+                t = a.get("title","")[:100]; u = a.get("url","#"); dom = a.get("domain",""); sd = a.get("seendate","")
+                ds = f"{sd[:4]}-{sd[4:6]}-{sd[6:8]}" if sd and len(sd)>=8 else ""
+                st.markdown(f'<div class="bb-ni"><span class="bb-nn">{i+1}</span><span class="bb-nd" style="min-width:70px">{ds}</span><div><a href="{u}" target="_blank" class="bb-nl">{t}</a><div class="bb-ns">{dom}</div></div></div>', unsafe_allow_html=True)
+            st.markdown("</div></div>", unsafe_allow_html=True)
+
+            if st.session_state.newsapi_key:
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown('<div class="bb-sec"><div class="bb-sec-t">NEWSAPI — 150,000+ SOURCES</div><div class="bb-sec-b">', unsafe_allow_html=True)
+                for i, a in enumerate(newsapi_fetch(st.session_state.newsapi_key, q)[:8]):
+                    title = a.get("title","")
+                    if not title or "[Removed]" in title: continue
+                    u = a.get("url","#"); src = a.get("source",{}).get("name",""); pub = a.get("publishedAt","")[:10]
+                    st.markdown(f'<div class="bb-ni"><span class="bb-nn">{i+1}</span><span class="bb-nd" style="min-width:70px">{pub}</span><div><a href="{u}" target="_blank" class="bb-nl">{title[:100]}</a><div class="bb-ns">{src}</div></div></div>', unsafe_allow_html=True)
+                st.markdown("</div></div>", unsafe_allow_html=True)
+
+    with g2:
+        st.markdown('<div class="bb-sec"><div class="bb-sec-t">THEATER STATUS</div><div class="bb-sec-b">', unsafe_allow_html=True)
+        for name, status, css in [
+            ("MIDDLE EAST","CRITICAL","tc"), ("UKRAINE","ACTIVE","tc"),
+            ("RED SEA","DISRUPTED","tc"), ("HORMUZ","ELEVATED","te"),
+            ("SAHEL","ELEVATED","te"), ("TAIWAN","MONITORING","tw"), ("S CHINA SEA","MONITORING","tw")]:
+            st.markdown(f'<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e2025;font-size:10px"><span style="color:#d0d3d8">{name}</span><span class="{css}">{status}</span></div>', unsafe_allow_html=True)
+        st.markdown("</div></div>", unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("""<div class="bb-sec"><div class="bb-sec-t">CONFIDENCE SCALE</div><div class="bb-sec-b" style="font-size:10px;color:#8a8f99;line-height:2">
+          <span class="tc">HIGH</span> — Multiple confirmed<br>
+          <span class="te">MEDIUM</span> — Limited sources<br>
+          <span class="tw">LOW</span> — Single source<br>
+          <span style="color:#444851">UNCONFIRMED</span> — Unverified
+        </div></div>""", unsafe_allow_html=True)
+
+# ════════════ SENTINEL AI TAB ════════════
 with tabs[6]:
-    st.markdown('<div class="term-header">🤖 SENTINEL AI — POWERED BY GOOGLE GEMINI</div>', unsafe_allow_html=True)
+    st.markdown("""<div style="background:#0d0e10;border:1px solid #1e2025;border-top:2px solid #f5a623;padding:10px 14px;margin-bottom:10px">
+      <div style="color:#f5a623;font-size:11px;letter-spacing:2px;margin-bottom:4px">⚡ SENTINEL AI — GOOGLE GEMINI</div>
+      <div style="color:#8a8f99;font-size:9px">Commands: /brief &nbsp; /flash NVDA &nbsp; /scenario Gold &nbsp; /geo "Red Sea" &nbsp; /poly "Fed rate" &nbsp; /rotate &nbsp; /sentiment &nbsp; /idea Energy</div>
+    </div>""", unsafe_allow_html=True)
 
     if not st.session_state.gemini_key:
-        st.warning("⚠️ Add your **free Gemini API key** in the sidebar to activate SENTINEL AI.")
-        st.info("[Get a free key at Google AI Studio in 60 seconds →](https://aistudio.google.com/app/apikey)")
-        st.markdown("""
-**Once activated, you can ask things like:**
-- `/brief` — Full morning briefing
-- `/flash NVDA` — Quick stock snapshot
-- `/geo Red Sea` — Geopolitical dashboard with market impact
-- `/scenario Gold` — Bull / base / bear scenario tree
-- `/poly Fed rate` — Polymarket analysis with unusual flow
-- `/rotate` — Sector rotation read
-- `What does a yield curve inversion mean for my portfolio?`
-- `BTC just dumped 10%. Walk me through the second-order effects.`
-- `What's happening in the Middle East and how does it affect oil?`
-        """)
+        st.markdown("""<div class="bb-ae">⚠ Gemini API key required. Add it in the sidebar (free at aistudio.google.com/app/apikey)</div>""", unsafe_allow_html=True)
+        st.markdown("""<div class="bb-ai" style="margin-top:8px">
+<strong>To fix 404 model errors — list YOUR available models:</strong><br><br>
+<strong>CURL (paste in terminal):</strong><br>
+<code style="color:#f5a623">curl "https://generativelanguage.googleapis.com/v1beta/models?key=YOUR_API_KEY" | python3 -m json.tool</code><br><br>
+<strong>PYTHON:</strong><br>
+<code style="color:#f5a623">import google.generativeai as genai<br>
+genai.configure(api_key="YOUR_KEY")<br>
+for m in genai.list_models():<br>
+&nbsp;&nbsp;if "generateContent" in m.supported_generation_methods:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;print(m.name)</code><br><br>
+SENTINEL will auto-try: <span style="color:#f5a623">gemini-2.0-flash → gemini-1.5-flash → gemini-1.5-pro → gemini-pro</span><br>
+The first model that works on your account will be used automatically.
+</div>""", unsafe_allow_html=True)
     else:
-        # Chat display
         if not st.session_state.chat_history:
-            st.markdown("""
-<div class="sentinel-green">
-⚡ SENTINEL AI ONLINE — Gemini connected. Live market data injected into every response.<br><br>
-Try: &nbsp;<code>/brief</code> &nbsp; <code>/flash NVDA</code> &nbsp; <code>/scenario Gold</code> &nbsp; <code>/geo Red Sea</code> &nbsp; <code>/poly Fed</code><br>
-Or just ask anything in plain English.
-</div>
-""", unsafe_allow_html=True)
+            st.markdown('<div class="bb-ag">⚡ SENTINEL AI ONLINE — Live market data injected. Try: <code>/brief</code> &nbsp; <code>/flash NVDA</code> &nbsp; <code>/scenario Gold</code> &nbsp; <code>/geo Red Sea</code></div>', unsafe_allow_html=True)
 
         for msg in st.session_state.chat_history:
             if msg["role"] == "user":
-                st.markdown(f'<div class="chat-user">👤 &nbsp;{msg["content"]}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="bb-cu"><div class="bb-cl" style="color:#f5a623">YOU</div>{msg["content"]}</div>', unsafe_allow_html=True)
             else:
-                content = msg["content"].replace("<", "&lt;").replace(">", "&gt;")
-                st.markdown(f'<div class="chat-ai">⚡ SENTINEL<br><br>{content}</div>', unsafe_allow_html=True)
+                content = msg["content"].replace("<","&lt;").replace(">","&gt;")
+                st.markdown(f'<div class="bb-ca"><div class="bb-cl" style="color:#00e676">⚡ SENTINEL</div>{content}</div>', unsafe_allow_html=True)
 
-        # Input row
-        st.divider()
-        inp_col, btn_col = st.columns([5, 1])
-        with inp_col:
-            user_input = st.text_input("Ask SENTINEL…",
-                placeholder="/brief  |  /flash TSLA  |  /scenario Gold  |  or any question",
-                key="chat_inp", label_visibility="collapsed")
-        with btn_col:
-            send = st.button("⚡ Send", use_container_width=True)
+        st.markdown("<br>", unsafe_allow_html=True)
 
-        # Quick buttons
-        st.markdown("**Quick commands:**")
-        qb = st.columns(6)
-        QUICK = {
-            "🌅 Brief": "/brief",
-            "🔄 Rotate": "/rotate",
-            "📰 Sentiment": "/sentiment",
-            "🎲 Poly Fed": "/poly Fed rate cut",
-            "🌍 Red Sea": "/geo Red Sea",
-            "📊 Scenario BTC": "/scenario Bitcoin",
-        }
-        for col, (label, cmd) in zip(qb, QUICK.items()):
+        # Quick command buttons
+        qbc = st.columns(7)
+        QUICK = [("BRIEF","/brief"),("ROTATE","/rotate"),("SENTIMENT","/sentiment"),
+                 ("BTC SCEN","/scenario Bitcoin"),("RED SEA","/geo Red Sea"),
+                 ("POLY FED","/poly Fed rate"),("ENERGY","/idea Energy")]
+        for col, (lbl, cmd) in zip(qbc, QUICK):
             with col:
-                if st.button(label, use_container_width=True, key=f"qb_{label}"):
-                    st.session_state.chat_history.append({"role": "user", "content": cmd})
-                    with st.spinner("⚡ SENTINEL processing…"):
-                        resp = gemini_response(cmd, st.session_state.chat_history[:-1], market_snapshot_str())
-                    st.session_state.chat_history.append({"role": "assistant", "content": resp})
+                if st.button(lbl, key=f"qb_{lbl}", use_container_width=True):
+                    st.session_state.chat_history.append({"role":"user","content":cmd})
+                    with st.spinner("⚡ SENTINEL processing..."):
+                        resp = gemini_chat(cmd, st.session_state.chat_history[:-1], msnap())
+                    st.session_state.chat_history.append({"role":"assistant","content":resp})
                     st.rerun()
 
-        # Clear
-        if st.button("🗑 Clear Chat"):
-            st.session_state.chat_history = []
+        ic, bc = st.columns([6, 1])
+        with ic:
+            ui = st.text_input("", placeholder="Ask SENTINEL anything... /brief /flash NVDA /scenario Gold /geo Red Sea /poly Fed",
+                               key="ci", label_visibility="collapsed")
+        with bc:
+            send = st.button("SEND ⚡", use_container_width=True, key="sb")
+
+        if st.button("CLEAR CHAT", key="clr"):
+            st.session_state.chat_history = []; st.rerun()
+
+        if (send or ui) and ui:
+            st.session_state.chat_history.append({"role":"user","content":ui})
+            with st.spinner("⚡ SENTINEL processing..."):
+                resp = gemini_chat(ui, st.session_state.chat_history[:-1], msnap())
+            st.session_state.chat_history.append({"role":"assistant","content":resp})
             st.rerun()
 
-        # Handle send
-        if (send or user_input) and user_input:
-            st.session_state.chat_history.append({"role": "user", "content": user_input})
-            with st.spinner("⚡ SENTINEL processing…"):
-                resp = gemini_response(user_input, st.session_state.chat_history[:-1], market_snapshot_str())
-            st.session_state.chat_history.append({"role": "assistant", "content": resp})
-            st.rerun()
-
-# ── FOOTER ───────────────────────────────────────────────────────────────────
-st.divider()
-st.markdown(f'<p style="color:#1f2937;font-family:Courier New;font-size:10px;text-align:center">'
-            f'⚡ SENTINEL | {now_pst()} | Yahoo Finance • FRED • Polymarket • GDELT • CoinGecko • Finnhub • NewsAPI<br>'
-            f'Research only — not financial advice. Built for the retail power investor who refuses to pay for a Bloomberg terminal.</p>',
-            unsafe_allow_html=True)
+# ── FOOTER ────────────────────────────────────────────────────────────────────
+st.markdown(f"""<div style="background:#0d0e10;border-top:1px solid #1e2025;padding:4px 16px;
+  display:flex;justify-content:space-between;margin-top:12px;font-size:9px;color:#444851">
+  <span>⚡ SENTINEL | {now_pst()} PST</span>
+  <span>Yahoo Finance • FRED • Polymarket • GDELT • CoinGecko • Finnhub • NewsAPI • TradingView</span>
+  <span>Research only — not financial advice</span></div>""", unsafe_allow_html=True)
