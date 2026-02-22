@@ -307,23 +307,31 @@ def fear_greed_crypto():
         return None, None
 
 @st.cache_data(ttl=600)
-def crypto_markets(key=""):
-    try:
-        headers = {"x-cg-demo-api-key": key} if key else {}
-        r = requests.get("https://api.coingecko.com/api/v3/coins/markets",
-            params={"vs_currency": "usd", "order": "market_cap_desc", "per_page": 20,
-                    "page": 1, "price_change_percentage": "24h"},
-            headers=headers, timeout=10)
-        return r.json()
-    except:
-        return []
+def crypto_markets():
+    import time
+    for attempt in range(3):
+        try:
+            r = requests.get("https://api.coingecko.com/api/v3/coins/markets",
+                params={"vs_currency": "usd", "order": "market_cap_desc", "per_page": 20,
+                        "page": 1, "price_change_percentage": "24h"}, timeout=15)
+            if r.status_code == 429:
+                time.sleep(2 * (attempt + 1))
+                continue
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, list):
+                    return data
+            return []
+        except Exception:
+            if attempt < 2:
+                time.sleep(1)
+            continue
+    return []
 
 @st.cache_data(ttl=600)
-def crypto_global(key=""):
+def crypto_global():
     try:
-        headers = {"x-cg-demo-api-key": key} if key else {}
-        return requests.get("https://api.coingecko.com/api/v3/global",
-                          headers=headers, timeout=8).json().get("data", {})
+        return requests.get("https://api.coingecko.com/api/v3/global", timeout=8).json().get("data", {})
     except:
         return {}
 
