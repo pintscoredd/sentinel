@@ -587,7 +587,10 @@ with tabs[1]:
             expiries = options_expiries(tkr)
             selected_exp = None
             if expiries:
-                selected_exp = st.selectbox("EXPIRY DATE", expiries, index=0, key=f"exp_{tkr}")
+                def _fmt_exp(d):
+                    try: return datetime.strptime(str(d), "%Y-%m-%d").strftime("%B %-d %Y")
+                    except: return str(d)
+                selected_exp = st.selectbox("EXPIRY DATE", expiries, index=0, key=f"exp_{tkr}", format_func=_fmt_exp)
             with st.spinner("Loading options…"):
                 calls, puts, exp_date = options_chain(tkr, selected_exp)
             if calls is not None:
