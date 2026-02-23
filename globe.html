@@ -805,27 +805,24 @@
     }
 
     // ── MARKERS
+    // Shared geometries — create once, reuse for all markers
+    const markerGeo = new THREE.SphereGeometry(0.023, 8, 8);
+    const glowGeo = new THREE.SphereGeometry(0.042, 8, 8);
+    const ringGeo = new THREE.RingGeometry(0.030, 0.040, 24);
+    let rayTargets = []; // cached array for raycasting
+
     function makeMarker(h) {
       const col = COLORS[h.sev] || '#FF6600';
       const c = new THREE.Color(col);
       const pos = latLonToVec3(h.lat, h.lon);
 
-      const mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(0.023, 16, 16),
-        new THREE.MeshBasicMaterial({ color: c })
-      );
+      const mesh = new THREE.Mesh(markerGeo, new THREE.MeshBasicMaterial({ color: c }));
       mesh.position.copy(pos); mesh.userData = { hotspot: h };
 
-      const glow = new THREE.Mesh(
-        new THREE.SphereGeometry(0.042, 16, 16),
-        new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.10, side: THREE.FrontSide })
-      );
+      const glow = new THREE.Mesh(glowGeo, new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.10, side: THREE.FrontSide }));
       glow.position.copy(pos); glow.userData = { hotspot: h };
 
-      const ring = new THREE.Mesh(
-        new THREE.RingGeometry(0.030, 0.040, 32),
-        new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.55, side: THREE.DoubleSide })
-      );
+      const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.55, side: THREE.DoubleSide }));
       ring.position.copy(pos); ring.lookAt(0, 0, 0); ring.rotateX(Math.PI / 2);
       ring.userData = { phase: Math.random() * Math.PI * 2 };
 
@@ -838,6 +835,8 @@
       markers.length = 0;
       HOTSPOTS.filter(h => activeFilter === 'all' || h.type === activeFilter).forEach(makeMarker);
       if (activeFilter === 'custom' || activeFilter === 'all') customEvents.forEach(makeMarker);
+      // Rebuild cached ray target array
+      rayTargets = markers.flatMap(m => [m.mesh, m.glow]);
     }
     renderMarkers();
 
@@ -862,6 +861,8 @@
     });
     canvas.addEventListener('mouseup', () => { dragging = false; });
 
+    // Throttled hover — only raycast every 60ms
+    let lastHover = 0;
     canvas.addEventListener('mousemove', e => {
       const p = getCanvasXY(e);
       if (dragging) {
@@ -871,13 +872,15 @@
         targetRotY += dx * 0.005; targetRotX += dy * 0.004;
         targetRotX = Math.max(-Math.PI / 2.1, Math.min(Math.PI / 2.1, targetRotX));
         prevX = p.x; prevY = p.y;
+        return; // skip raycasting while dragging
       }
-      // Hover tooltip
+      const now = performance.now();
+      if (now - lastHover < 60) return; // throttle to ~16fps for hover
+      lastHover = now;
       const ndc = canvasToNDC(p.x, p.y);
       mouse.x = ndc.x; mouse.y = ndc.y;
       raycaster.setFromCamera(mouse, camera);
-      const allM = markers.flatMap(m => [m.mesh, m.glow]).filter(Boolean);
-      const hits = raycaster.intersectObjects(allM);
+      const hits = raycaster.intersectObjects(rayTargets);
       const tt = document.getElementById('tt');
       if (hits.length && hits[0].object.userData.hotspot) {
         const h = hits[0].object.userData.hotspot;
@@ -896,8 +899,7 @@
       const ndc = canvasToNDC(p.x, p.y);
       mouse.x = ndc.x; mouse.y = ndc.y;
       raycaster.setFromCamera(mouse, camera);
-      const allM = markers.flatMap(m => [m.mesh, m.glow]).filter(Boolean);
-      const hits = raycaster.intersectObjects(allM);
+      const hits = raycaster.intersectObjects(rayTargets);
       if (hits.length && hits[0].object.userData.hotspot) {
         showCard(hits[0].object.userData.hotspot, p.x, p.y);
       } else {
@@ -1013,10 +1015,12 @@
       markers.forEach(({ mesh, ring, glow, basePos }) => {
         _rp.copy(basePos).applyQuaternion(_quat);
         mesh.position.copy(_rp); ring.position.copy(_rp); glow.position.copy(_rp);
-        ring.lookAt(camera.position);
+        // Billboard ring toward camera using quaternion copy (cheaper than lookAt)
+        ring.quaternion.copy(camera.quaternion);
         ring.userData.phase = (ring.userData.phase || 0) + dt * 2.1;
-        ring.material.opacity = 0.18 + 0.38 * Math.sin(ring.userData.phase);
-        const s = 1 + 0.22 * Math.sin(ring.userData.phase);
+        const sinP = Math.sin(ring.userData.phase);
+        ring.material.opacity = 0.18 + 0.38 * sinP;
+        const s = 1 + 0.22 * sinP;
         ring.scale.set(s, s, 1);
         glow.material.opacity = 0.03 + 0.1 * Math.abs(Math.sin(ring.userData.phase * .6));
         _camDir.copy(camera.position).sub(_rp).normalize();
@@ -1113,22 +1117,22 @@
       }
       container.innerHTML = html;
 
-      // Now fetch actual counts from GDELT and update
-      for (let i = 0; i < THEATERS.length; i++) {
-        try {
-          const t = THEATERS[i];
-          const r = await fetch(`https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(t.query)}%20sourcelang:english&mode=artlist&maxrecords=1&format=json&timespan=24h`);
-          const data = await r.json();
-          const count = (data.articles || []).length;
-          // GDELT artcount endpoint gives us scale
-          const s = statusFromCount(count > 0 ? (count === 1 ? 30 : 10) : 5, t.base);
-          const items = container.querySelectorAll('.tpi');
-          if (items[i]) {
-            items[i].querySelector('.tps').className = 'tps ' + s.cls;
-            items[i].querySelector('.tps').textContent = '● ' + s.label;
-          }
-        } catch (e) { /* keep base status */ }
-      }
+      // Fetch ALL theater statuses in parallel (not sequentially)
+      const promises = THEATERS.map(t =>
+        fetch(`https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(t.query)}%20sourcelang:english&mode=artlist&maxrecords=1&format=json&timespan=24h`)
+          .then(r => r.json()).catch(() => null)
+      );
+      const results = await Promise.allSettled(promises);
+      results.forEach((res, i) => {
+        if (res.status !== 'fulfilled' || !res.value) return;
+        const count = (res.value.articles || []).length;
+        const s = statusFromCount(count > 0 ? (count === 1 ? 30 : 10) : 5, THEATERS[i].base);
+        const items = container.querySelectorAll('.tpi');
+        if (items[i]) {
+          items[i].querySelector('.tps').className = 'tps ' + s.cls;
+          items[i].querySelector('.tps').textContent = '● ' + s.label;
+        }
+      });
       document.getElementById('tp-update').textContent = 'UPDATED ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     }
     fetchTheaterStatus();
