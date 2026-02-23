@@ -228,7 +228,18 @@ def render_insider_cards(data, ticker="", finnhub_key=""):
     if not data:
         return '<p style="color:#555;font-family:monospace;font-size:11px">No insider data. Add Finnhub key.</p>'
     role_map = finnhub_officers(ticker, finnhub_key) if ticker and finnhub_key else {}
-    CODE = {"P": ("PURCHASE", "buy"), "S": ("SALE", "sell"), "A": ("AWARD", "buy"), "D": ("DISPOSAL", "sell")}
+    # Complete SEC transaction code mapping
+    CODE = {
+        "P": ("PURCHASE", "buy"), "S": ("SALE", "sell"),
+        "A": ("AWARD", "buy"), "D": ("DISPOSAL", "sell"),
+        "M": ("EXERCISE", "buy"), "X": ("EXERCISE", "buy"),
+        "G": ("GIFT", "sell"), "F": ("TAX WITHHOLD", "sell"),
+        "C": ("CONVERSION", "buy"), "W": ("INHERITANCE", "buy"),
+        "J": ("OTHER ACQ", "buy"), "K": ("EQUITY SWAP", "sell"),
+        "I": ("DISCRETIONARY", "buy"), "U": ("TENDER", "sell"),
+        "H": ("EXPIRATION", "sell"), "L": ("SMALL ACQ", "buy"),
+        "Z": ("TRUST", "buy"), "V": ("TRANSACTION", "buy"),
+    }
     html = ""
     for tx in data[:10]:
         name = _esc(str(tx.get("name", "Unknown"))[:24])
@@ -236,12 +247,28 @@ def render_insider_cards(data, ticker="", finnhub_key=""):
         date = str(tx.get("transactionDate", ""))[:10]
         code = tx.get("transactionCode", "?")
         shares_own = _safe_int(tx.get("share", 0))
-        lbl, cls = CODE.get(code, (code, "buy"))
+        lbl, cls = CODE.get(code, (code.upper() if code else "UNKNOWN", "buy" if chg >= 0 else "sell"))
+        # Determine buy/sell from change direction if code is ambiguous
+        if chg < 0 and cls == "buy" and code not in ("P", "A", "M", "X", "C"):
+            cls = "sell"
+        if chg > 0 and cls == "sell" and code not in ("S", "D", "G", "F"):
+            cls = "buy"
+
+        # Role detection: try filingName from tx, then role_map, then classify
         name_upper = str(tx.get("name", "")).upper()
+        filing_name = str(tx.get("filingName", "") or "")
         raw_role = role_map.get(name_upper, "")
-        role = classify_role(raw_role) if raw_role else ("Beneficial Owner" if abs(chg) > 100000 else "Insider")
+        if not raw_role and filing_name:
+            # filingName often contains role info like "HERRINGTON DOUGLAS J - CEO"
+            parts = filing_name.split(" - ")
+            if len(parts) > 1:
+                raw_role = parts[-1].strip()
+        role = classify_role(raw_role) if raw_role else classify_role(filing_name)
+        if role == "Insider" and abs(chg) > 100000:
+            role = "Beneficial Owner"
+
         chg_str = f"{abs(chg):,}"
-        own_str = f"{shares_own:,} sh owned" if shares_own else ""
+        own_str = f"{shares_own:,} sh owned" if shares_own > 0 else ""
         html += (f'<div class="ins-card {cls}">'
                  f'<div style="display:flex;justify-content:space-between;align-items:baseline">'
                  f'<span class="ins-name">{name}</span>'
