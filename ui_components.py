@@ -245,9 +245,9 @@ def render_insider_cards(data, ticker="", finnhub_key=""):
         name = _esc(str(tx.get("name", "Unknown"))[:24])
         chg = _safe_int(tx.get("change", 0))
         date = str(tx.get("transactionDate", ""))[:10]
-        code = tx.get("transactionCode", "?")
+        code = str(tx.get("transactionCode", "?") or "?").upper()
         shares_own = _safe_int(tx.get("share", 0))
-        lbl, cls = CODE.get(code, (code.upper() if code else "UNKNOWN", "buy" if chg >= 0 else "sell"))
+        lbl, cls = CODE.get(code, (code if code else "UNKNOWN", "buy" if chg >= 0 else "sell"))
         # Determine buy/sell from change direction if code is ambiguous
         if chg < 0 and cls == "buy" and code not in ("P", "A", "M", "X", "C"):
             cls = "sell"
