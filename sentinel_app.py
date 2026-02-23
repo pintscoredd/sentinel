@@ -591,7 +591,12 @@ with tabs[1]:
             with st.spinner("Loading options…"):
                 calls, puts, exp_date = options_chain(tkr, selected_exp)
             if calls is not None:
-                st.markdown(f'<div style="color:#888;font-size:10px;font-family:monospace;margin-bottom:6px">EXPIRY: {exp_date} | CURRENT: {fmt_p(q["price"])}</div>', unsafe_allow_html=True)
+                try:
+                    exp_dt = datetime.strptime(str(exp_date), "%Y-%m-%d")
+                    exp_fmt = exp_dt.strftime("%B %-d %Y")
+                except:
+                    exp_fmt = str(exp_date)
+                st.markdown(f'<div style="color:#888;font-size:10px;font-family:monospace;margin-bottom:6px">EXPIRY: {exp_fmt} | CURRENT: {fmt_p(q["price"])}</div>', unsafe_allow_html=True)
                 cc, pc = st.columns(2)
                 with cc:
                     st.markdown('<div style="color:#00CC44;font-size:9px;font-weight:700;letter-spacing:2px">▲ CALLS</div>', unsafe_allow_html=True)
