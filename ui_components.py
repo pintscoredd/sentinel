@@ -254,15 +254,37 @@ def render_insider_cards(data, ticker="", finnhub_key=""):
         if chg > 0 and cls == "sell" and code not in ("S", "D", "G", "F"):
             cls = "buy"
 
-        # Role detection: try filingName from tx, then role_map, then classify
-        name_upper = str(tx.get("name", "")).upper()
+        # Role detection: try multiple name formats against executive map
+        name_upper = str(tx.get("name", "")).upper().strip()
         filing_name = str(tx.get("filingName", "") or "")
+
+        # Try exact match first
         raw_role = role_map.get(name_upper, "")
+
+        # Try without middle initial/suffix: "KRESS COLETTE M" → "KRESS COLETTE"
+        if not raw_role and name_upper:
+            name_parts = name_upper.split()
+            if len(name_parts) >= 2:
+                # Try just first two parts (LAST FIRST)
+                raw_role = role_map.get(" ".join(name_parts[:2]), "")
+            if not raw_role and len(name_parts) >= 2:
+                # Try reversed: "KRESS COLETTE" → check "COLETTE KRESS"
+                raw_role = role_map.get(name_parts[1] + " " + name_parts[0], "")
+            if not raw_role:
+                # Partial match: check if any key in role_map contains the last name
+                last = name_parts[0] if name_parts else ""
+                first = name_parts[1] if len(name_parts) > 1 else ""
+                for k, v in role_map.items():
+                    if last in k and first in k:
+                        raw_role = v
+                        break
+
+        # Fallback: check filingName for role info
         if not raw_role and filing_name:
-            # filingName often contains role info like "HERRINGTON DOUGLAS J - CEO"
             parts = filing_name.split(" - ")
             if len(parts) > 1:
                 raw_role = parts[-1].strip()
+
         role = classify_role(raw_role) if raw_role else classify_role(filing_name)
         if role == "Insider" and abs(chg) > 100000:
             role = "Beneficial Owner"
