@@ -404,16 +404,28 @@ def finnhub_insider(ticker, key):
 
 @st.cache_data(ttl=1800)
 def finnhub_officers(ticker, key):
-    """Fetch company officers to map insider names to roles"""
+    """Fetch company executives from Finnhub /stock/executive endpoint"""
     if not key: return {}
     try:
-        r = requests.get("https://finnhub.io/api/v1/stock/profile2",
+        r = requests.get("https://finnhub.io/api/v1/stock/executive",
             params={"symbol": ticker, "token": key}, timeout=10)
         data = r.json()
         role_map = {}
-        for o in data.get("companyOfficers", []) or []:
-            name = str(o.get("name", "")).upper()
-            role_map[name] = o.get("title", "")
+        for o in data.get("executive", []) or []:
+            name = str(o.get("name", "")).strip()
+            title = str(o.get("position", "") or o.get("title", "") or "")
+            if not name or not title: continue
+            # Store with multiple name formats for fuzzy matching
+            name_upper = name.upper()
+            role_map[name_upper] = title
+            # Also store "LAST FIRST" format since Finnhub insider uses that
+            parts = name.split()
+            if len(parts) >= 2:
+                # "Colette Kress" → "KRESS COLETTE"
+                last_first = (parts[-1] + " " + " ".join(parts[:-1])).upper()
+                role_map[last_first] = title
+                # Also try just "LAST FIRST_INITIAL"
+                role_map[(parts[-1] + " " + parts[0]).upper()] = title
         return role_map
     except:
         return {}
