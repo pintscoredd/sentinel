@@ -576,8 +576,8 @@ def _parse_type_from_symbol(sym):
 
 @st.cache_data(ttl=30)
 def fetch_0dte_chain(underlying="SPY"):
-    """Fetch 0DTE options chain with Greeks from Alpaca snapshots.
-    GET https://data.alpaca.markets/v1beta1/options/snapshots/{underlying}
+    """Fetch nearest options chain with Greeks from Alpaca snapshots.
+    Gets nearest active expiry first, then fetches snapshots.
     Filters to strikes within [0.98S : 1.02S]. Returns (chain_list, status).
     """
     headers = _alpaca_headers()
@@ -592,12 +592,35 @@ def fetch_0dte_chain(underlying="SPY"):
     from datetime import date as _date
     today_str = _date.today().strftime("%Y-%m-%d")
 
+    # 1. Find nearest active expiration date
+    try:
+        url_contracts = "https://paper-api.alpaca.markets/v2/options/contracts"
+        params_c = {"underlying_symbols": underlying, "status": "active", "limit": 1000}
+        rc = requests.get(url_contracts, headers=headers, params=params_c, timeout=10)
+        if rc.status_code != 200:
+            return [], f"Alpaca API error (contracts): {rc.status_code}"
+        
+        c_data = rc.json()
+        dates = []
+        for c in c_data.get("option_contracts", []):
+            d = c.get("expiration_date")
+            if d and d >= today_str:
+                dates.append(d)
+        
+        if not dates:
+            return [], "No active option contracts found"
+            
+        target_expiry = sorted(list(set(dates)))[0]
+    except Exception as e:
+        return [], f"Error locating expiry: {str(e)}"
+
+    # 2. Fetch snapshots for the target expiry
     try:
         url = f"https://data.alpaca.markets/v1beta1/options/snapshots/{underlying}"
-        params = {"feed": "indicative", "limit": 250, "expiration_date": today_str}
+        params = {"feed": "indicative", "limit": 250, "expiration_date": target_expiry}
         r = requests.get(url, headers=headers, params=params, timeout=15)
         if r.status_code != 200:
-            return [], f"Alpaca API error: {r.status_code}"
+            return [], f"Alpaca API error (snapshots): {r.status_code}"
 
         data = r.json()
         snapshots = data.get("snapshots", {})
@@ -756,8 +779,8 @@ def parse_trade_input(text):
     return result
 
 
-def generate_recommendation(chain, spx_metrics, vix_data, bias):
-    """Generate complete trade recommendation dict."""
+def generate_recommendation(chain, spx_metrics, vix_data):
+    """Auto-generate complete trade recommendation based on confluence scoring."""
     if not chain or not spx_metrics:
         return None
     spot = spx_metrics["spot"]
@@ -770,32 +793,78 @@ def generate_recommendation(chain, spx_metrics, vix_data, bias):
     max_pain = max_pain_spy * 10 if max_pain_spy else None
     contango = vix_data.get("contango")
 
+    # Automated Scoring Logic (-4 to +4)
+    # ----------------------------------------------------------------
+    score = 0
+    met, failed = [], []
+
+    # 1. Spot vs VWAP
+    if spot > vwap:
+        score += 1
+        met.append("Spot > VWAP")
+    else:
+        score -= 1
+        failed.append("Spot < VWAP")
+
+    # 2. Spot vs Gamma Flip
+    if gamma_flip:
+        if spot > gamma_flip:
+            score += 1
+            met.append("Spot > Gamma Flip")
+        else:
+            score -= 1
+            failed.append("Spot < Gamma Flip")
+
+    # 3. Sentiment (PCR)
+    if pcr is not None:
+        if pcr < 0.8:
+            score += 1
+            met.append("PCR < 0.8 (Bullish)")
+        elif pcr > 1.0:
+            score -= 1
+            failed.append("PCR > 1.0 (Bearish)")
+
+    # 4. Volatility Term Structure
+    if contango is not None:
+        if contango:
+            score += 1
+            met.append("VIX in Contango")
+        else:
+            score -= 1
+            failed.append("VIX in Backwardation")
+
+    # Determine Bias 
+    # ----------------------------------------------------------------
+    if score >= 2:
+        bias = "bull"
+        direction = "bullish"
+    elif score <= -2:
+        bias = "bear"
+        direction = "bearish"
+        # Swap met/failed arrays for the display outpt since 'failed' just meant bear conditions
+        met, failed = failed, met
+    else:
+        # Neutral / Chop — score was -1, 0, or 1. No clear confluence.
+        return {
+            "recommendation": "NO TRADE — Mixed Signals",
+            "rationale": "The confluence score is too low (-1 to +1). Market state is mixed or choppy.",
+            "stats": "", "action": "Wait for better alignment across indicators.",
+            "conditions_met": met, "conditions_failed": failed,
+            "confidence": "LOW", "strike_spx": 0, "opt_type": "", "mid_price": 0
+        }
+
+    # Find Target Strike & Build Output
+    # ----------------------------------------------------------------
     target = find_target_strike(chain, bias)
     if not target:
         return {"recommendation": "NO TRADE — No suitable option found",
-                "rationale": "Could not find an option matching the criteria.",
-                "stats": "", "action": "", "conditions_met": [], "conditions_failed": [],
+                "rationale": f"Could not find a valid ~0.30 delta {bias} option.",
+                "stats": "", "action": "", "conditions_met": met, "conditions_failed": failed,
                 "confidence": "LOW", "strike_spx": 0, "opt_type": "", "mid_price": 0}
 
     strike_spx = round(target["strike"] * 10, 0)
     delta_pct = round(abs(target["delta"]) * 100)
     opt_label = "CALL" if target["type"] == "call" else "PUT"
-
-    met, failed = [], []
-    if bias == "bull":
-        (met if spot > vwap else failed).append("Spot > VWAP" if spot > vwap else "Spot < VWAP")
-        if gamma_flip:
-            (met if spot > gamma_flip else failed).append("Spot > Gamma Flip" if spot > gamma_flip else "Spot < Gamma Flip")
-        if pcr is not None:
-            (met if pcr < 0.8 else failed).append("PCR < 0.8" if pcr < 0.8 else f"PCR = {pcr} (need < 0.8)")
-        if contango is not None:
-            (met if contango else failed).append("VIX in Contango" if contango else "VIX in Backwardation")
-    else:
-        (met if spot < vwap else failed).append("Spot < VWAP" if spot < vwap else "Spot > VWAP")
-        if gamma_flip:
-            (met if spot < gamma_flip else failed).append("Spot < Gamma Flip" if spot < gamma_flip else "Spot > Gamma Flip")
-        if pcr is not None:
-            (met if pcr > 1.0 else failed).append("PCR > 1.0" if pcr > 1.0 else f"PCR = {pcr} (need > 1.0)")
 
     # Find hedging wall
     hedge_wall = None
@@ -806,31 +875,33 @@ def generate_recommendation(chain, spx_metrics, vix_data, bias):
                 hedge_wall = gk_spx
                 break
 
-    confidence = "HIGH" if not failed and len(met) >= 2 else ("MODERATE" if len(met) > len(failed) else "LOW")
+    confidence = "HIGH" if abs(score) >= 3 else "MODERATE"
 
-    # Rationale
+    # Rationale Texts
     parts_map = {
         "bull": {"Spot > VWAP": "SPX is trading above its daily volume-weighted average (VWAP)",
                  "Spot > Gamma Flip": "dealers are supporting the rally (Positive Gamma)",
                  "VIX in Contango": "Fear is dropping (VIX Contango)",
-                 "PCR < 0.8": "Options sentiment is bullish (low Put/Call Ratio)"},
+                 "PCR < 0.8 (Bullish)": "Options sentiment is bullish (low Put/Call Ratio)"},
         "bear": {"Spot < VWAP": "SPX is trading below its daily volume-weighted average (VWAP)",
                  "Spot < Gamma Flip": "dealers are pressuring prices lower (Negative Gamma)",
-                 "PCR > 1.0": "Options sentiment is bearish (high Put/Call Ratio)"},
+                 "PCR > 1.0 (Bearish)": "Options sentiment is bearish (high Put/Call Ratio)",
+                 "VIX in Backwardation": "Fear is elevating (VIX Backwardation)"},
     }
     rp = [parts_map.get(bias, {}).get(c, "") for c in met if c in parts_map.get(bias, {})]
-    direction = "bullish" if bias == "bull" else "bearish"
-    rationale = f"The market is showing strong {direction} momentum because " + " and ".join(rp) + "." if rp else f"{direction.title()} bias selected but conditions are mixed."
+    rationale = f"Confluence score is **{score:+d}**. The market is showing strong {direction} momentum because " + " and ".join(rp) + "."
 
     target_pts = abs(int(hedge_wall - strike_spx)) if hedge_wall else 10
     target_pts = target_pts if target_pts > 0 else 10
     stop_pts = int(abs(strike_spx - max_pain)) if max_pain else 10
+    stop_pts = stop_pts if stop_pts > 0 else 10
+    
     target_desc = f"Target the {int(hedge_wall)} Hedging Wall (+{target_pts}pts)" if hedge_wall else "Target +10pts"
     stop_desc = f"Set a strict stop-loss at Max Pain {int(max_pain)} (-{stop_pts}pts)" if max_pain else "Set a strict stop-loss at -10pts"
 
     return {
         "recommendation": f"RECOMMENDATION: BUY {int(strike_spx)} {opt_label}",
-        "rationale": f"Rationale: {rationale}",
+        "rationale": getattr(st, "empty", None) and f"Rationale: {rationale}" or f"Rationale: {rationale}",
         "stats": f"Stats: ~{delta_pct}% chance to finish In-The-Money.",
         "action": f"Action Plan: Enter now. {target_desc}. {stop_desc}. Size: 1 contract.",
         "confidence": confidence, "conditions_met": met, "conditions_failed": failed,
