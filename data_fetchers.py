@@ -471,3 +471,403 @@ def get_earnings_calendar():
             pass
     if not rows: return pd.DataFrame()
     return pd.DataFrame(rows).dropna(subset=["EarningsDate"]).sort_values("EarningsDate")
+
+# ════════════════════════════════════════════════════════════════════
+# SPX 0DTE MODULE v3
+# ════════════════════════════════════════════════════════════════════
+
+import math
+from datetime import datetime
+import pytz
+
+def _ncdf(x):
+    a = [0, 0.319381530, -0.356563782, 1.781477937, -1.821255978, 1.330274429]
+    t = 1.0 / (1.0 + 0.2316419 * abs(x))
+    p = t * (a[1] + t * (a[2] + t * (a[3] + t * (a[4] + t * a[5]))))
+    c = 1.0 - (1.0 / math.sqrt(2 * math.pi)) * math.exp(-0.5 * x * x) * p
+    return c if x >= 0 else 1.0 - c
+
+def _npdf(x):
+    return math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
+
+def sabr_iv(F, K, T, alpha, beta, rho, nu):
+    if T <= 0 or alpha <= 0:
+        return max(abs(F - K) / F, 0.001) if F > 0 else 0.20
+    try:
+        if abs(F - K) < 1e-4 * F:
+            Fb = F ** (1.0 - beta)
+            corr = (
+                (1.0 - beta)**2 / 24.0 * alpha**2 / F**(2.0 - 2.0*beta)
+                + rho * beta * nu * alpha / (4.0 * Fb)
+                + (2.0 - 3.0*rho**2) / 24.0 * nu**2
+            )
+            return max((alpha / Fb) * (1.0 + corr * T), 0.001)
+        FK   = math.sqrt(F * K)
+        FKb  = FK ** (1.0 - beta)
+        lfk  = math.log(F / K)
+        z    = (nu / alpha) * FKb * lfk
+        arg  = (math.sqrt(1.0 - 2.0*rho*z + z*z) + z - rho) / (1.0 - rho)
+        chi  = math.log(max(arg, 1e-10))
+        zchi = z / chi if abs(chi) > 1e-10 else 1.0
+        denom = FKb * (1.0 + (1.0-beta)**2/24.0*lfk**2 + (1.0-beta)**4/1920.0*lfk**4)
+        corr  = (
+            (1.0-beta)**2/24.0 * alpha**2 / FK**(2.0-2.0*beta)
+            + rho*beta*nu*alpha / (4.0*FKb)
+            + (2.0-3.0*rho**2)/24.0 * nu**2
+        )
+        return max((alpha / denom) * zchi * (1.0 + corr * T), 0.001)
+    except (ValueError, ZeroDivisionError, OverflowError):
+        return 0.20
+
+def _nelder_mead(f, x0, bounds, max_iter=500, tol=1e-8):
+    n = len(x0)
+    def clip(x):
+        return [max(bounds[i][0], min(bounds[i][1], x[i])) for i in range(n)]
+    simplex = [clip(x0)]
+    for i in range(n):
+        xi = x0[:]; xi[i] += max(0.05 * abs(x0[i]), 0.01)
+        simplex.append(clip(xi))
+    fvals = [f(s) for s in simplex]
+    for _ in range(max_iter):
+        order   = sorted(range(n+1), key=lambda i: fvals[i])
+        simplex = [simplex[i] for i in order]
+        fvals   = [fvals[i]   for i in order]
+        if fvals[-1] - fvals[0] < tol:
+            break
+        xc = [sum(simplex[i][j] for i in range(n)) / n for j in range(n)]
+        xr = clip([xc[j] + 1.0*(xc[j] - simplex[-1][j]) for j in range(n)])
+        fr = f(xr)
+        if fr < fvals[0]:
+            xe = clip([xc[j] + 2.0*(xr[j] - xc[j]) for j in range(n)])
+            fe = f(xe)
+            simplex[-1], fvals[-1] = (xe, fe) if fe < fr else (xr, fr)
+        elif fr < fvals[-2]:
+            simplex[-1], fvals[-1] = xr, fr
+        else:
+            xcon = clip([xc[j] + 0.5*(simplex[-1][j] - xc[j]) for j in range(n)])
+            fcon = f(xcon)
+            if fcon < fvals[-1]:
+                simplex[-1], fvals[-1] = xcon, fcon
+            else:
+                best = simplex[0]
+                simplex = [best] + [
+                    clip([best[j] + 0.5*(simplex[i][j]-best[j]) for j in range(n)])
+                    for i in range(1, n+1)
+                ]
+                fvals = [f(s) for s in simplex]
+    return simplex[0]
+
+def calibrate_sabr(F, T, strikes, market_ivs, beta=0.5):
+    pairs = [(k, iv) for k, iv in zip(strikes, market_ivs)
+             if iv and 0.005 < iv < 5.0 and k > 0]
+    if len(pairs) < 3:
+        atm = market_ivs[len(market_ivs)//2] if market_ivs else 0.15
+        return max(atm, 0.01) * (F**(1-beta)), beta, -0.5, 0.5
+    ks, ivs = [p[0] for p in pairs], [p[1] for p in pairs]
+    weights  = [3.0 if abs(k-F)/F < 0.005 else 1.0/(1.0 + abs(k-F)/F*8) for k in ks]
+    def obj(params):
+        a, rho, nu = params
+        if a <= 0 or nu <= 0 or abs(rho) >= 1:
+            return 1e10
+        err = 0.0
+        for k, iv, w in zip(ks, ivs, weights):
+            try:
+                err += w * (sabr_iv(F, k, T, a, beta, rho, nu) - iv)**2
+            except Exception:
+                err += w
+        return err
+    atm_iv = min(ivs, key=lambda iv: abs(ks[ivs.index(iv)] - F))
+    alpha0 = max(atm_iv * (F**(1-beta)), 0.01)
+    bounds = [(0.001, 5.0), (-0.999, -0.05), (0.05, 3.0)]
+    try:
+        a, rho, nu = _nelder_mead(obj, [alpha0, -0.5, 0.5], bounds)
+        if abs(sabr_iv(F, F, T, a, beta, rho, nu) - atm_iv) > 0.05:
+            raise ValueError("diverged")
+        return a, beta, rho, nu
+    except Exception:
+        return alpha0, beta, -0.5, 0.5
+
+def _bs_greeks(F, K, T, r, sigma, opt):
+    if T <= 0 or sigma <= 0:
+        d = (1.0 if F > K else 0.0) if opt == "call" else (-1.0 if F < K else 0.0)
+        return d, 0.0, 0.0
+    d1    = (math.log(F/K) + (r + 0.5*sigma**2)*T) / (sigma*math.sqrt(T))
+    gamma = _npdf(d1) / (F * sigma * math.sqrt(T))
+    vega  = F * _npdf(d1) * math.sqrt(T)
+    delta = _ncdf(d1) if opt == "call" else _ncdf(d1) - 1.0
+    return delta, gamma, vega
+
+def calc_sabr_greeks(F, K, T, r, alpha, beta, rho, nu, opt_type="call"):
+    if T <= 0:
+        d = (1.0 if F > K else 0.0) if opt_type=="call" else (-1.0 if F < K else 0.0)
+        return d, 0.0
+    try:
+        dF   = F * 0.001
+        s0   = sabr_iv(F,    K, T, alpha, beta, rho, nu)
+        s_up = sabr_iv(F+dF, K, T, alpha, beta, rho, nu)
+        s_dn = sabr_iv(F-dF, K, T, alpha, beta, rho, nu)
+        ds   = (s_up - s_dn) / (2.0*dF)
+        d2s  = (s_up - 2.0*s0 + s_dn) / (dF**2)
+        delta_bs, gamma_bs, vega_bs = _bs_greeks(F, K, T, r, s0, opt_type)
+        dsig = 0.001
+        d_up, _, _ = _bs_greeks(F, K, T, r, s0+dsig, opt_type)
+        d_dn, _, _ = _bs_greeks(F, K, T, r, s0-dsig, opt_type)
+        vanna = (d_up - d_dn) / (2.0*dsig)
+        delta = delta_bs + vega_bs * ds
+        gamma = gamma_bs + 2.0*vanna*ds + vega_bs*d2s
+        delta = max(0.0, min(1.0, delta)) if opt_type=="call" else max(-1.0, min(0.0, delta))
+        gamma = max(0.0, gamma)
+        return round(delta, 4), round(gamma, 8)
+    except Exception:
+        try:
+            s = sabr_iv(F, K, T, alpha, beta, rho, nu)
+            d, g, _ = _bs_greeks(F, K, T, r, s, opt_type)
+            return round(d, 4), round(max(g, 0), 8)
+        except Exception:
+            return (0.5, 0.0) if opt_type=="call" else (-0.5, 0.0)
+
+@st.cache_data(ttl=60)
+def spx_spot():
+    for tkr, scale in [("^GSPC", 1.0), ("SPY", 10.0)]:
+        try:
+            h = yf.Ticker(tkr).history(period="1d")
+            if not h.empty:
+                return round(float(h["Close"].iloc[-1]) * scale, 2)
+        except Exception:
+            pass
+    return None
+
+@st.cache_data(ttl=60)
+def spx_intraday():
+    try:
+        df = yf.Ticker("SPY").history(period="1d", interval="5m")
+        if not df.empty:
+            df = df.reset_index()
+            df.columns = [c.replace(" ", "_") for c in df.columns]
+            return df
+    except Exception:
+        pass
+    return None
+
+@st.cache_data(ttl=90)
+def spx_0dte_chain():
+    ET        = pytz.timezone("US/Eastern")
+    today_str = datetime.now(ET).strftime("%Y-%m-%d")
+    for tkr, is_spy in [("^SPX", False), ("^GSPC", False), ("SPY", True)]:
+        try:
+            t    = yf.Ticker(tkr)
+            exps = t.options
+            if not exps: continue
+            exp  = today_str if today_str in exps else next((e for e in exps if e >= today_str), None)
+            if not exp: continue
+            chain = t.option_chain(exp)
+            calls, puts = chain.calls.copy(), chain.puts.copy()
+            h = t.history(period="1d")
+            if h.empty: continue
+            raw = round(float(h["Close"].iloc[-1]), 2)
+            if is_spy:
+                calls["strike"] *= 10.0
+                puts["strike"]  *= 10.0
+                spot = raw * 10.0
+            else:
+                spot = raw
+            lo, hi = spot * 0.97, spot * 1.03
+            calls = calls[(calls["strike"] >= lo) & (calls["strike"] <= hi)].copy()
+            puts  = puts [(puts["strike"]  >= lo) & (puts["strike"]  <= hi)].copy()
+            if len(calls) < 3: continue
+            return calls, puts, spot, exp, is_spy
+        except Exception:
+            continue
+    return None, None, None, None, False
+
+def enrich_0dte_with_greeks(calls, puts, spot, expiry_str):
+    if calls is None or puts is None or spot is None:
+        return calls, puts
+    ET     = pytz.timezone("US/Eastern")
+    now_et = datetime.now(ET)
+    try:
+        exp_dt = ET.localize(datetime.strptime(expiry_str, "%Y-%m-%d").replace(hour=16, minute=0, second=0))
+        T = max((exp_dt - now_et).total_seconds() / (365.25 * 24 * 3600), 1e-7)
+    except Exception:
+        T = 1.0 / 365.0
+    r, beta, F = 0.053, 0.5, spot
+    ks, ivs = [], []
+    for df in [calls, puts]:
+        for _, row in df.iterrows():
+            k  = float(row.get("strike", 0))
+            iv = float(row.get("impliedVolatility", 0) or 0)
+            if k > 0 and 0.005 < iv < 5.0:
+                ks.append(k); ivs.append(iv)
+    alpha, beta, rho, nu = calibrate_sabr(F, T, ks, ivs, beta=beta)
+    def _enrich(df, opt):
+        dl, gl, sv = [], [], []
+        for _, row in df.iterrows():
+            K = float(row.get("strike", F))
+            d, g = calc_sabr_greeks(F, K, T, r, alpha, beta, rho, nu, opt)
+            dl.append(d); gl.append(g)
+            sv.append(round(sabr_iv(F, K, T, alpha, beta, rho, nu), 4))
+        df = df.copy()
+        df["delta"] = dl; df["gamma"] = gl; df["sabr_vol"] = sv
+        return df
+    calls = _enrich(calls, "call")
+    puts  = _enrich(puts,  "put")
+    meta  = {"alpha": round(alpha,4), "beta": beta, "rho": round(rho,3),
+             "nu": round(nu,3), "T_days": round(T*365, 2)}
+    calls.attrs["sabr"] = meta
+    puts.attrs["sabr"]  = meta
+    return calls, puts
+
+def calc_max_pain(calls, puts):
+    if calls is None or puts is None: return None
+    try:
+        strikes = sorted(set(list(calls["strike"].dropna()) + list(puts["strike"].dropna())))
+        if not strikes: return None
+        pain = {}
+        for t in strikes:
+            cp = sum(float(r.get("openInterest",0) or 0) * max(t - float(r["strike"]), 0) for _, r in calls.iterrows())
+            pp = sum(float(r.get("openInterest",0) or 0) * max(float(r["strike"]) - t, 0) for _, r in puts.iterrows())
+            pain[t] = cp + pp
+        return min(pain, key=pain.get)
+    except Exception:
+        return None
+
+def calc_expected_move(calls, puts, spot, is_spy=False):
+    if calls is None or puts is None or spot is None: return None, None
+    try:
+        cc = calls.copy(); cc["_d"] = abs(cc["strike"] - spot)
+        atm_call   = cc.loc[cc["_d"].idxmin()]
+        atm_strike = float(atm_call["strike"])
+        tol        = 1.5 if is_spy else 12.5
+        puts_atm   = puts[abs(puts["strike"] - atm_strike) < tol]
+        if puts_atm.empty: return None, None
+        atm_put = puts_atm.iloc[0]
+        def mid(row):
+            b = float(row.get("bid", 0) or 0)
+            a = float(row.get("ask", 0) or 0)
+            if b > 0 and a >= b: return (b + a) / 2.0
+            lp = float(row.get("lastPrice", 0) or 0)
+            return lp if lp > 0 else None
+        cm, pm = mid(atm_call), mid(atm_put)
+        if cm is None or pm is None: return None, None
+        straddle = (cm + pm) * (10.0 if is_spy else 1.0)
+        return (round(straddle, 2), round(straddle / spot * 100, 3)) if straddle > 0 else (None, None)
+    except Exception:
+        return None, None
+
+def calc_gex_profile(calls, puts, spot):
+    if calls is None or puts is None or spot is None: return []
+    try:
+        result = {}
+        for _, r in calls.iterrows():
+            k = float(r.get("strike", 0))
+            result[k] = result.get(k, 0) + float(r.get("openInterest",0) or 0) * float(r.get("gamma",0) or 0) * spot * spot * 100
+        for _, r in puts.iterrows():
+            k = float(r.get("strike", 0))
+            result[k] = result.get(k, 0) - float(r.get("openInterest",0) or 0) * float(r.get("gamma",0) or 0) * spot * spot * 100
+        return [{"strike": k, "gex_raw": v, "gex_m": round(v/1e6, 2)} for k, v in sorted(result.items())]
+    except Exception:
+        return []
+
+def calc_gex_key_levels(gex_data, spot):
+    if not gex_data or spot is None: return {}
+    try:
+        net   = sum(d["gex_raw"] for d in gex_data)
+        net_m = round(net / 1e6, 1)
+        pos   = net >= 0
+        r_color  = "#00CC44" if pos else "#FF4444"
+        r_label  = "POSITIVE GAMMA — PINNING ENVIRONMENT" if pos else "NEGATIVE GAMMA — TRENDING / EXPLOSIVE"
+        r_detail = (
+            "Dealers are net LONG gamma. They buy dips and sell rips. Dampens volatility, pins SPX near high-OI strikes. Best: Iron condors, credit spreads."
+            if pos else
+            "Dealers are net SHORT gamma. Their hedging AMPLIFIES moves. Rallies run further, selloffs cascade. Best: Long calls/puts, debit spreads."
+        )
+        above_pos = [d for d in gex_data if d["strike"] >= spot and d["gex_raw"] > 0]
+        below_neg = [d for d in gex_data if d["strike"] <= spot and d["gex_raw"] < 0]
+        gw = max(above_pos, key=lambda d: d["gex_raw"])["strike"] if above_pos else None
+        pw = min(below_neg, key=lambda d: d["gex_raw"])["strike"] if below_neg else None
+        cum, gex_flip = 0.0, None
+        for d in sorted(gex_data, key=lambda d: d["strike"], reverse=True):
+            cum += d["gex_raw"]
+            if cum < 0 and d["strike"] <= spot:
+                gex_flip = d["strike"]; break
+        levels = []
+        if gw:
+            levels.append({"strike": gw, "type": "GAMMA WALL", "color": "#00CC44", "icon": "🟢",
+                "dist_str": f"+{gw-spot:.0f} pts above spot",
+                "what_happens": (f"As SPX approaches {gw:,.0f}: dealers short calls SELL stock to delta-hedge. "
+                    "Natural ceiling. Price stalls or pins here. Clean break ABOVE triggers short-covering → squeeze to next wall.")})
+        if pw:
+            levels.append({"strike": pw, "type": "PUT WALL / SUPPORT", "color": "#00AAFF", "icon": "🔵",
+                "dist_str": f"-{spot-pw:.0f} pts below spot",
+                "what_happens": (f"As SPX approaches {pw:,.0f}: dealers short puts BUY stock to delta-hedge. "
+                    "Mechanical support. Watch for bounce. Clean break with no bounce = next put cluster is new target.")})
+        if gex_flip:
+            levels.append({"strike": gex_flip, "type": "GEX FLIP", "color": "#FF8C00", "icon": "🟠",
+                "dist_str": f"-{spot-gex_flip:.0f} pts below spot",
+                "what_happens": (f"Regime-change line at {gex_flip:,.0f}. Above: dealers stabilise. Below: dealers amplify. "
+                    "Classic breach: initial close below → retest → flush if held below. Most important level in a breakdown.")})
+        return {"net_gex_m": net_m, "regime": "POSITIVE" if pos else "NEGATIVE",
+                "regime_color": r_color, "regime_label": r_label, "regime_detail": r_detail,
+                "gamma_wall": gw, "put_wall": pw, "gex_flip": gex_flip, "levels": levels}
+    except Exception:
+        return {}
+
+def calc_pcr(calls, puts):
+    if calls is None or puts is None: return None, None
+    try:
+        co = float(calls["openInterest"].fillna(0).sum())
+        po = float(puts["openInterest"].fillna(0).sum())
+        cv = float(calls["volume"].fillna(0).sum())
+        pv = float(puts["volume"].fillna(0).sum())
+        return (round(po/co, 2) if co > 0 else None, round(pv/cv, 2) if cv > 0 else None)
+    except Exception:
+        return None, None
+
+@st.cache_data(ttl=120)
+def vix_term_structure():
+    vals = {}
+    for key, tkr in [("vix9d","^VIX9D"), ("vix","^VIX"), ("vix3m","^VIX3M")]:
+        try:
+            h = yf.Ticker(tkr).history(period="5d")
+            if not h.empty: vals[key] = round(float(h["Close"].iloc[-1]), 2)
+        except Exception: pass
+    if "vix9d" in vals and "vix" in vals:
+        sp = round(vals["vix9d"] - vals["vix"], 2)
+        vals["spread_9d_30d"] = sp
+        if   sp < -2.0: vals["slope_signal"] = f"CONTANGO ({sp:+.1f}) — 0DTE vol cheap, favour selling premium";  vals["slope_color"] = "#00CC44"
+        elif sp >  2.0: vals["slope_signal"] = f"BACKWARDATION ({sp:+.1f}) — near-term fear, 0DTE expensive";      vals["slope_color"] = "#FF4444"
+        else:           vals["slope_signal"] = f"FLAT ({sp:+.1f}) — mixed signal, follow price action";             vals["slope_color"] = "#FF8C00"
+    if "vix3m" in vals and "vix" in vals:
+        vals["long_signal"] = (
+            f"INVERTED: VIX3M ({vals['vix3m']}) < VIX ({vals['vix']}) — immediate fear dominant"
+            if vals["vix3m"] < vals["vix"] else
+            f"NORMAL: VIX3M ({vals['vix3m']}) > VIX ({vals['vix']})")
+    return vals
+
+@st.cache_data(ttl=300)
+def spx_key_levels(spot):
+    if not spot: return {}
+    try:
+        h = yf.Ticker("^GSPC").history(period="5d")
+        if h.empty: return {}
+        base   = round(spot / 25) * 25
+        rounds = sorted({base-50, base-25, base, base+25, base+50})
+        return {
+            "prev_close":   round(float(h["Close"].iloc[-2]), 2) if len(h) > 1 else None,
+            "prev_high":    round(float(h["High"].iloc[-2]),  2) if len(h) > 1 else None,
+            "prev_low":     round(float(h["Low"].iloc[-2]),   2) if len(h) > 1 else None,
+            "week_high":    round(float(h["High"].max()), 2),
+            "week_low":     round(float(h["Low"].min()),  2),
+            "round_levels": rounds,
+        }
+    except Exception: return {}
+
+def calc_vwap(intraday_df):
+    if intraday_df is None or intraday_df.empty: return None
+    try:
+        vol = intraday_df["Volume"].fillna(0)
+        if vol.sum() == 0: return None
+        typ  = (intraday_df["High"] + intraday_df["Low"] + intraday_df["Close"]) / 3.0
+        vwap = (typ * vol).sum() / vol.sum()
+        return round(float(vwap) * 10.0, 2)
+    except Exception: return None
