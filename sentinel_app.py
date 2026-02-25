@@ -41,6 +41,7 @@ from ui_components import (
     render_insider_cards, poly_url, poly_status, unusual_side,
     render_poly_card,
     SENTINEL_PROMPT, GEMINI_MODELS, list_gemini_models, gemini_response,
+    render_0dte_gex_chart, render_0dte_gex_decoder, render_0dte_recommendation, render_0dte_trade_log
 )
 
 st.set_page_config(page_title="SENTINEL", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
@@ -813,15 +814,15 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
 
         if _0dte_open:
             st.markdown(
-                '<div style="background:#002200;border:1px solid #00CC44;padding:8px 14px;'
-                'font-family:monospace;font-size:12px;color:#00CC44;font-weight:700;letter-spacing:1px">'
+                '<style>@keyframes fadeOut { 0% {opacity:1;} 80% {opacity:1;} 100% {opacity:0; display:none;} } .alpaca-banner { animation: fadeOut 5s forwards; font-family:monospace; font-size:12px; color:#00CC44; font-weight:700; background:#002200; border:1px solid #00CC44; padding:8px 14px; letter-spacing:1px; }</style>'
+                '<div class="alpaca-banner">'
                 '⚡ ALPACA API ACTIVE: Institutional Real-Time Options Feed'
                 '</div>', unsafe_allow_html=True)
         else:
             st.markdown(
                 '<div style="background:#220000;border:1px solid #FF4444;padding:12px 14px;'
                 'font-family:monospace;font-size:13px;color:#FF4444;font-weight:700;letter-spacing:1px">'
-                '🛑 MARKET CLOSED: 0DTE Analysis offline until the next trading session.'
+                '🛑 MARKET CLOSED: Showing latest available 0DTE chain.'
                 f'<br><span style="color:#888;font-size:11px;font-weight:400">{_0dte_msg}</span>'
                 '</div>', unsafe_allow_html=True)
 
@@ -844,7 +845,9 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
         # ── Fetch Data
         _spx = get_spx_metrics()
         _vix_data = fetch_vix_data()
-        _0dte_chain, _chain_status = ([], "Market closed") if not _0dte_open else fetch_0dte_chain("SPY")
+        
+        # Always fetch the chain so the chart can render after-hours
+        _0dte_chain, _chain_status = fetch_0dte_chain("SPY")
 
         # ── SPX Metrics Row
         if _spx:
@@ -898,61 +901,20 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
 
             _gex_col, _info_col = st.columns([3, 2])
             with _gex_col:
-                if _gex:
-                    _strikes_spx = [k * 10 for k in sorted(_gex.keys())]
-                    _gex_vals = [_gex[k / 10] for k in _strikes_spx]
-                    _colors = ["#00CC44" if v >= 0 else "#FF4444" for v in _gex_vals]
-                    _fig = go.Figure(go.Bar(
-                        x=_strikes_spx, y=_gex_vals,
-                        marker=dict(color=_colors, line=dict(width=0)),
-                        text=[f"${v:.1f}M" for v in _gex_vals], textposition="outside",
-                        textfont=dict(color="#FF8C00", size=9),
-                        hovertemplate="Strike: %{x}<br>GEX: $%{y:.2f}M<extra></extra>",
-                    ))
-                    _fig.update_layout(**CHART_LAYOUT, height=350, xaxis_title="SPX Strike",
-                                       yaxis_title="GEX ($M)",
-                                       title=dict(text="Dealer Gamma Exposure by Strike",
-                                                  font=dict(color="#FF6600", size=12)))
-                    if _gf_spy:
-                        _fig.add_vline(x=_gf_spy * 10, line=dict(color="#FFCC00", dash="dash", width=1),
-                                       annotation_text=f"Gamma Flip: {_gf_spy * 10:.0f}",
-                                       annotation_font=dict(color="#FFCC00", size=10))
-                    if _mp_spy:
-                        _fig.add_vline(x=_mp_spy * 10, line=dict(color="#AA44FF", dash="dot", width=1),
-                                       annotation_text=f"Max Pain: {_mp_spy * 10:.0f}",
-                                       annotation_font=dict(color="#AA44FF", size=10),
-                                       annotation_position="bottom right")
-                    st.plotly_chart(_fig, use_container_width=True)
+                _fig = render_0dte_gex_chart(_gex, _gf_spy, _mp_spy)
+                if _fig:
+                    st.plotly_chart(_fig, use_container_width=True, config={'displayModeBar': False})
                 else:
                     st.markdown('<div style="color:#555;font-family:monospace;font-size:11px">GEX data unavailable.</div>', unsafe_allow_html=True)
-
             with _info_col:
-                _gf_spx = f"${_gf_spy * 10:,.0f}" if _gf_spy else "—"
-                _mp_spx = f"${_mp_spy * 10:,.0f}" if _mp_spy else "—"
                 _wall_strike, _wall_gex = None, 0
                 if _gex:
                     for _wk, _wv in _gex.items():
                         if abs(_wv) > abs(_wall_gex):
                             _wall_gex, _wall_strike = _wv, _wk
                 _wall_spx = f"${_wall_strike * 10:,.0f}" if _wall_strike else "—"
-                _wall_dir = "CALL" if _wall_gex > 0 else "PUT"
-                st.markdown(f"""
-<div style="background:#0A0A0A;border:1px solid #222;border-left:3px solid #FF6600;
-padding:14px 16px;font-family:monospace;font-size:11px;line-height:1.8">
-<div style="color:#FF6600;font-weight:700;font-size:12px;letter-spacing:1px;margin-bottom:8px">
-GEX DECODER</div>
-<div style="color:#CCCCCC">
-<span style="color:#FFCC00">▸ Gamma Flip:</span> {_gf_spx}<br>
-<span style="color:#AA44FF">▸ Max Pain:</span> {_mp_spx}<br>
-<span style="color:#FF8C00">▸ Biggest Wall:</span> {_wall_spx} ({_wall_dir})<br>
-<hr style="border-color:#222;margin:8px 0">
-<span style="color:#00CC44">Green bars</span> = Call GEX (dealers sell strength → resistance)<br>
-<span style="color:#FF4444">Red bars</span> = Put GEX (dealers buy weakness → support)<br>
-<hr style="border-color:#222;margin:8px 0">
-<span style="color:#888">Wall hit → dealers hedge aggressively → price pins or reverses at the wall.</span><br>
-<span style="color:#888">Above Gamma Flip = dealers dampen moves (mean-revert).<br>
-Below Gamma Flip = dealers amplify moves (trend).</span>
-</div></div>""", unsafe_allow_html=True)
+                _wall_dir = "Call Wall" if _wall_gex >= 0 else "Put Wall"
+                st.markdown(render_0dte_gex_decoder(_gf_spy, _mp_spy, _wall_spx, _wall_dir), unsafe_allow_html=True)
 
         elif not _0dte_open:
             st.markdown('<div style="color:#555;font-family:monospace;font-size:11px;padding:20px;text-align:center">'
@@ -962,73 +924,40 @@ Below Gamma Flip = dealers amplify moves (trend).</span>
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
         # ── 0DTE Trade Assistant
-        with st.expander("⚡ 0DTE TRADE ASSISTANT", expanded=False):
+        with st.expander("⚡ AUTONOMOUS TRADE ANALYZER", expanded=False):
             st.markdown('<div style="color:#888;font-family:monospace;font-size:10px;margin-bottom:8px">'
-                        'Enter your trade thesis. Example: "SPX@6025 bull $5k size 1R risk 2:15pm ET"</div>',
+                        'Automatically evaluates real-time VWAP, Gamma profile, PCR, and Volatility to generate '
+                        'a directional bias and trading target.</div>',
                         unsafe_allow_html=True)
-            _user_input = st.text_area("Trade Input", placeholder='SPX@6025 bull $5k size 1R risk 2:15pm ET',
-                                       height=60, label_visibility="collapsed", key="trade_input_0dte")
+
             _ac, _cc = st.columns([1, 4])
-            with _ac: _analyze_clicked = st.button("⚡ ANALYZE", key="analyze_0dte", use_container_width=True)
+            with _ac: _analyze_clicked = st.button("⚡ ANALYZE NOW", key="analyze_0dte", use_container_width=True)
             with _cc:
                 if st.button("CLEAR LOG", key="clear_log_0dte"):
                     st.session_state.trade_log_0dte = []
                     st.rerun()
 
-            if _analyze_clicked and _user_input.strip():
-                _parsed = parse_trade_input(_user_input)
-                if not _parsed["bias"]:
+            if _analyze_clicked:
+                if not _0dte_chain:
                     st.markdown('<div style="color:#FF4444;font-family:monospace;font-size:12px;padding:8px">'
-                                '⚠️ Could not detect bias. Include "bull" or "bear" in your input.</div>',
-                                unsafe_allow_html=True)
-                elif not _0dte_chain:
-                    st.markdown('<div style="color:#FF4444;font-family:monospace;font-size:12px;padding:8px">'
-                                '⚠️ No options data available. Market may be closed or API issue.</div>',
+                                '⚠️ No options data available.</div>',
                                 unsafe_allow_html=True)
                 else:
-                    _rec = generate_recommendation(_0dte_chain, _spx, _vix_data, _parsed["bias"])
+                    _rec = generate_recommendation(_0dte_chain, _spx, _vix_data)
                     if _rec:
-                        _conf_c = {"HIGH": "#00CC44", "MODERATE": "#FF8C00", "LOW": "#FF4444"}.get(_rec["confidence"], "#FF8C00")
-                        st.markdown(f"""
-<div style="background:#0A0A0A;border:1px solid #222;border-left:4px solid {_conf_c};
-padding:16px 18px;font-family:monospace;font-size:12px;line-height:1.9;margin:8px 0">
-<div style="color:{_conf_c};font-weight:700;font-size:14px;letter-spacing:1px;margin-bottom:10px">
-{_rec['recommendation']}</div>
-<div style="color:#CCCCCC">{_rec['rationale']}</div>
-<div style="color:#FF8C00;margin-top:6px">{_rec['stats']}</div>
-<div style="color:#CCCCCC;margin-top:6px">{_rec['action']}</div>
-<hr style="border-color:#222;margin:10px 0">
-<div style="font-size:10px">
-<span style="color:#00CC44">✅ {', '.join(_rec['conditions_met']) if _rec['conditions_met'] else 'None'}</span><br>
-<span style="color:#FF4444">❌ {', '.join(_rec['conditions_failed']) if _rec['conditions_failed'] else 'None'}</span><br>
-<span style="color:#555">Confidence: {_rec['confidence']} | Ask: ${_rec.get('mid_price', 0):.2f} (SPY) | 1 contract</span>
-</div></div>""", unsafe_allow_html=True)
-                        _ET_log = pytz.timezone("US/Eastern")
-                        _log_time = datetime.now(_ET_log).strftime("%I:%M %p")
-                        st.session_state.trade_log_0dte.append(
-                            f"[{_log_time}] {_rec['recommendation'].replace('RECOMMENDATION: ', '')}")
+                        st.markdown(render_0dte_recommendation(_rec), unsafe_allow_html=True)
+                        
+                        # Only log actionable trades
+                        if "NO TRADE" not in _rec['recommendation']:
+                            _ET_log = pytz.timezone("US/Eastern")
+                            _log_time = datetime.now(_ET_log).strftime("%I:%M %p")
+                            st.session_state.trade_log_0dte.append(
+                                f"[{_log_time}] {_rec['recommendation'].replace('RECOMMENDATION: ', '')}")
 
         # ── Compact Trade Log
         if st.session_state.trade_log_0dte:
             _log_entries = st.session_state.trade_log_0dte[-10:]
-            _entries_html = ""
-            for _entry in _log_entries:
-                if "CALL" in _entry:
-                    _bc, _bg = "#00CC44", "rgba(0,204,68,0.1)"
-                elif "PUT" in _entry:
-                    _bc, _bg = "#FF4444", "rgba(255,68,68,0.1)"
-                else:
-                    _bc, _bg = "#888", "rgba(136,136,136,0.1)"
-                _entries_html += (f'<span style="display:inline-block;background:{_bg};border:1px solid {_bc};'
-                                  f'color:{_bc};padding:3px 8px;margin:2px 4px;font-size:10px;'
-                                  f'font-family:monospace;font-weight:600;letter-spacing:0.5px">{_entry}</span>')
-            st.markdown(f"""
-<div style="background:#050505;border:1px solid #222;border-top:2px solid #FF6600;
-padding:8px 10px;margin-top:4px">
-<div style="color:#FF6600;font-size:9px;font-weight:700;letter-spacing:2px;margin-bottom:6px;
-font-family:monospace">TRADE LOG</div>
-<div style="display:flex;flex-wrap:wrap;gap:2px">{_entries_html}</div>
-</div>""", unsafe_allow_html=True)
+            st.markdown(render_0dte_trade_log(_log_entries), unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════
 # TAB 3 — MACRO
