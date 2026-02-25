@@ -483,3 +483,106 @@ def gemini_response(user_msg, history, context=""):
         return "⚠️ google-generativeai not installed."
     except Exception as e:
         return f"⚠️ Error: {e}"
+
+# ════════════════════════════════════════════════════════════════════
+# 0DTE TAB HELPERS
+# ════════════════════════════════════════════════════════════════════
+
+def render_0dte_gex_chart(gex, gf_spy, mp_spy):
+    """Renders the Gamma Exposure (GEX) Plotly bar chart."""
+    if not gex or go is None: return None
+    strikes_spx = [k * 10 for k in sorted(gex.keys())]
+    gex_vals = [gex[k / 10] for k in strikes_spx]
+    colors = ["#00CC44" if v >= 0 else "#FF4444" for v in gex_vals]
+    
+    fig = go.Figure(go.Bar(
+        x=strikes_spx, y=gex_vals,
+        marker=dict(color=colors, line=dict(width=0)),
+        text=[f"${v:.1f}M" for v in gex_vals], textposition="outside",
+        textfont=dict(color="#FF8C00", size=9),
+        hovertemplate="Strike: %{x}<br>GEX: $%{y:.2f}M<extra></extra>",
+    ))
+    
+    fig.update_layout(**CHART_LAYOUT, height=350, xaxis_title="SPX Strike",
+                      yaxis_title="GEX ($M)",
+                      title=dict(text="Dealer Gamma Exposure by Strike",
+                                 font=dict(color="#FF6600", size=12)))
+    if gf_spy:
+        fig.add_vline(x=gf_spy * 10, line=dict(color="#FFCC00", dash="dash", width=1),
+                      annotation_text=f"Gamma Flip: {gf_spy * 10:.0f}",
+                      annotation_font=dict(color="#FFCC00", size=10))
+    if mp_spy:
+        fig.add_vline(x=mp_spy * 10, line=dict(color="#AA44FF", dash="dot", width=1),
+                      annotation_text=f"Max Pain: {mp_spy * 10:.0f}",
+                      annotation_font=dict(color="#AA44FF", size=10),
+                      annotation_position="bottom right")
+    return fig
+
+def render_0dte_gex_decoder(gf_spy, mp_spy, wall_spx, wall_dir):
+    """Renders the GEX Decoder informational block."""
+    gf_str = f"${gf_spy * 10:,.0f}" if gf_spy else "—"
+    mp_str = f"${mp_spy * 10:,.0f}" if mp_spy else "—"
+    return f"""
+<div style="background:#0A0A0A;border:1px solid #222;border-left:3px solid #FF6600;
+padding:14px 16px;font-family:monospace;font-size:11px;line-height:1.8">
+<div style="color:#FF6600;font-weight:700;font-size:12px;letter-spacing:1px;margin-bottom:8px">
+GEX DECODER</div>
+<div style="color:#CCCCCC">
+<span style="color:#FFCC00">▸ Gamma Flip:</span> {gf_str}<br>
+<span style="color:#AA44FF">▸ Max Pain:</span> {mp_str}<br>
+<span style="color:#FF8C00">▸ Biggest Wall:</span> {wall_spx} ({wall_dir})<br>
+<hr style="border-color:#222;margin:8px 0">
+<span style="color:#00CC44">Green bars</span> = Call GEX (dealers sell strength → resistance)<br>
+<span style="color:#FF4444">Red bars</span> = Put GEX (dealers buy weakness → support)<br>
+<hr style="border-color:#222;margin:8px 0">
+<span style="color:#888">Wall hit → dealers hedge aggressively → price pins or reverses at the wall.</span><br>
+<span style="color:#888">Above Gamma Flip = dealers dampen moves (mean-revert).<br>
+Below Gamma Flip = dealers amplify moves (trend).</span>
+</div></div>"""
+
+def render_0dte_recommendation(rec):
+    """Renders the 0DTE Trade Analyzer recommendation output."""
+    conf_c = {"HIGH": "#00CC44", "MODERATE": "#FF8C00", "LOW": "#FF4444"}.get(rec["confidence"], "#888888")
+    if "NO TRADE" in rec['recommendation']:
+        conf_c = "#555555"
+        
+    met_str = ', '.join(rec['conditions_met']) if rec['conditions_met'] else 'None'
+    failed_str = ', '.join(rec['conditions_failed']) if rec['conditions_failed'] else 'None'
+
+    return f"""
+<div style="background:#0A0A0A;border:1px solid #222;border-left:4px solid {conf_c};
+padding:16px 18px;font-family:monospace;font-size:12px;line-height:1.9;margin:8px 0">
+<div style="color:{conf_c};font-weight:700;font-size:14px;letter-spacing:1px;margin-bottom:10px">
+{rec['recommendation']}</div>
+<div style="color:#CCCCCC">{rec['rationale']}</div>
+<div style="color:#FF8C00;margin-top:6px">{rec['stats']}</div>
+<div style="color:#CCCCCC;margin-top:6px">{rec['action']}</div>
+<hr style="border-color:#222;margin:10px 0">
+<div style="font-size:10px">
+<span style="color:#00CC44">✅ {met_str}</span><br>
+<span style="color:#FF4444">❌ {failed_str}</span><br>
+<span style="color:#555">Confidence: {rec['confidence']} | Ask: ${rec.get('mid_price', 0):.2f} (SPY) | 1 contract</span>
+</div></div>"""
+
+def render_0dte_trade_log(entries):
+    """Renders the compact horizontal trade log for 0DTE."""
+    if not entries: return ""
+    html = ""
+    for entry in entries:
+        if "CALL" in entry:
+            bc, bg = "#00CC44", "rgba(0,204,68,0.1)"
+        elif "PUT" in entry:
+            bc, bg = "#FF4444", "rgba(255,68,68,0.1)"
+        else:
+            bc, bg = "#888", "rgba(136,136,136,0.1)"
+        html += (f'<span style="display:inline-block;background:{bg};border:1px solid {bc};'
+                 f'color:{bc};padding:3px 8px;margin:2px 4px;font-size:10px;'
+                 f'font-family:monospace;font-weight:600;letter-spacing:0.5px">{entry}</span>')
+                 
+    return f"""
+<div style="background:#050505;border:1px solid #222;border-top:2px solid #FF6600;
+padding:8px 10px;margin-top:4px">
+<div style="color:#FF6600;font-size:9px;font-weight:700;letter-spacing:2px;margin-bottom:6px;
+font-family:monospace">TRADE LOG</div>
+<div style="display:flex;flex-wrap:wrap;gap:2px">{html}</div>
+</div>"""
