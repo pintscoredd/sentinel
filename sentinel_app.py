@@ -29,6 +29,10 @@ from data_fetchers import (
     vix_price, options_chain, options_expiries, sector_etfs, top_movers,
     detect_unusual_poly, market_snapshot_str, _parse_poly_field,
     get_earnings_calendar, is_market_open,
+    is_0dte_market_open, get_stock_snapshot, get_spx_metrics,
+    fetch_0dte_chain, compute_gex_profile, compute_max_pain, compute_pcr,
+    find_gamma_flip, fetch_vix_data, find_target_strike,
+    parse_trade_input, generate_recommendation,
 )
 from ui_components import (
     CHART_LAYOUT, dark_fig, tv_chart, tv_mini, tv_tape,
@@ -372,8 +376,10 @@ with st.sidebar:
     st.markdown('<div style="color:#FF6600;font-size:9px;letter-spacing:2px;font-weight:700">STATUS</div>', unsafe_allow_html=True)
     st.markdown('<div style="color:#555;font-size:9px;font-family:monospace;margin-bottom:4px">Keys loaded from .streamlit/secrets.toml</div>', unsafe_allow_html=True)
 
+    _alpaca_ok = bool(_get_secret("ALPACA_API_KEY")) and bool(_get_secret("ALPACA_SECRET_KEY"))
     for api, ok in [
         ("Yahoo Finance",True),("Polymarket",True),("GDELT",True),
+        ("Alpaca (0DTE)", _alpaca_ok),
         ("FRED", bool(st.session_state.fred_key)),
         ("Finnhub", bool(st.session_state.finnhub_key)),
         ("NewsAPI", bool(st.session_state.newsapi_key)),
@@ -408,7 +414,7 @@ st.markdown(f"""
   <div style="font-size:10px;color:#000;opacity:0.75">{now_pst()} &nbsp;|&nbsp; LIVE</div>
 </div>""", unsafe_allow_html=True)
 
-tabs = st.tabs(["BRIEF","MARKETS","MACRO","CRYPTO","POLYMARKET","GEO","EARNINGS","SENTINEL AI"])
+tabs = st.tabs(["BRIEF","MARKETS","SPX 0DTE","MACRO","CRYPTO","POLYMARKET","GEO","EARNINGS","SENTINEL AI"])
 
 # ════════════════════════════════════════════════════════════════════
 # TAB 0 — MORNING BRIEF
@@ -786,9 +792,248 @@ with tabs[1]:
             st.markdown(render_news_card(title,url,src,d,"bb-news bb-news-macro"), unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════
-# TAB 2 — MACRO
+# TAB 2 — SPX 0DTE
 # ════════════════════════════════════════════════════════════════════
 with tabs[2]:
+    # ── Session state for trade log
+    if "trade_log_0dte" not in st.session_state:
+        st.session_state.trade_log_0dte = []
+
+    # ── API Status Banner
+    _alpaca_present = bool(_get_secret("ALPACA_API_KEY")) and bool(_get_secret("ALPACA_SECRET_KEY"))
+    if not _alpaca_present:
+        st.markdown("""<div style="background:#1A0500;border:1px solid #FF6600;border-left:4px solid #FF6600;
+pading:16px;font-family:monospace;font-size:12px;color:#FF8C00">
+🔴 ALPACA API KEYS MISSING — Add ALPACA_API_KEY and ALPACA_SECRET_KEY to .streamlit/secrets.toml<br><br>
+<a href="https://app.alpaca.markets/signup" target="_blank" style="color:#FF6600">
+Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html=True)
+    else:
+        # ── Market Hours Check
+        _0dte_open, _0dte_msg = is_0dte_market_open()
+
+        if _0dte_open:
+            st.markdown(
+                '<div style="background:#002200;border:1px solid #00CC44;padding:8px 14px;'
+                'font-family:monospace;font-size:12px;color:#00CC44;font-weight:700;letter-spacing:1px">'
+                '⚡ ALPACA API ACTIVE: Institutional Real-Time Options Feed'
+                '</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(
+                '<div style="background:#220000;border:1px solid #FF4444;padding:12px 14px;'
+                'font-family:monospace;font-size:13px;color:#FF4444;font-weight:700;letter-spacing:1px">'
+                '🛑 MARKET CLOSED: 0DTE Analysis offline until the next trading session.'
+                f'<br><span style="color:#888;font-size:11px;font-weight:400">{_0dte_msg}</span>'
+                '</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="bb-ph">⚡ SPX 0DTE — GAMMA EXPOSURE & TRADE ENGINE</div>', unsafe_allow_html=True)
+
+        # ── Refresh Button
+        _0dte_ref, _0dte_stat = st.columns([1, 4])
+        with _0dte_ref:
+            if st.button("↺ REFRESH 0DTE", key="refresh_0dte"):
+                fetch_0dte_chain.clear()
+                get_stock_snapshot.clear()
+                fetch_vix_data.clear()
+                st.rerun()
+        with _0dte_stat:
+            _ET = pytz.timezone("US/Eastern")
+            _now_et = datetime.now(_ET).strftime("%H:%M:%S ET")
+            st.markdown(f'<div style="text-align:right;font-family:monospace;padding:6px 0;color:#555;font-size:10px">'
+                        f'Last refresh: {_now_et} | Auto-refresh: 30s cache</div>', unsafe_allow_html=True)
+
+        # ── Fetch Data
+        _spx = get_spx_metrics()
+        _vix_data = fetch_vix_data()
+        _0dte_chain, _chain_status = ([], "Market closed") if not _0dte_open else fetch_0dte_chain("SPY")
+
+        # ── SPX Metrics Row
+        if _spx:
+            _spot, _vwap, _em = _spx["spot"], _spx["vwap"], round(_spx["high"] - _spx["low"], 1)
+            _m1, _m2, _m3, _m4 = st.columns(4)
+            with _m1: st.metric("SPX SPOT", f"${_spot:,.2f}")
+            with _m2: st.metric("EXPECTED MOVE", f"±{_em:.1f}")
+            with _m3:
+                _vd = _spot - _vwap
+                st.metric("VWAP", f"${_vwap:,.2f}", delta=f"{_vd:+.1f} vs Spot",
+                          delta_color="normal" if _vd >= 0 else "inverse")
+            with _m4: st.metric("CONTRACTS", f"{len(_0dte_chain)}",
+                                delta=_chain_status if _chain_status != "OK" else "Live")
+        else:
+            st.markdown('<div style="color:#888;font-family:monospace;font-size:11px;padding:8px">'
+                        'SPX data unavailable — check Alpaca API connection.</div>', unsafe_allow_html=True)
+
+        # ── VIX / PCR Metrics Row
+        _v1, _v2, _v3, _v4 = st.columns(4)
+        with _v1:
+            _vix_val = _vix_data.get("vix")
+            if _vix_val:
+                _vl = "LOW" if _vix_val < 15 else ("MOD" if _vix_val < 25 else "HIGH")
+                st.metric("VIX", f"{_vix_val:.2f}", delta=_vl)
+            else: st.metric("VIX", "—")
+        with _v2:
+            _v9d = _vix_data.get("vix9d")
+            st.metric("VIX9D", f"{_v9d:.2f}" if _v9d else "—")
+        with _v3:
+            _ctg = _vix_data.get("contango")
+            if _ctg is not None:
+                st.metric("TERM STRUCTURE", "✅ Contango" if _ctg else "⚠️ Backwardation",
+                          delta_color="normal" if _ctg else "inverse")
+            else: st.metric("TERM STRUCTURE", "—")
+        with _v4:
+            _pcr = compute_pcr(_0dte_chain) if _0dte_chain else None
+            if _pcr is not None:
+                _pl = "Bullish" if _pcr < 0.8 else ("Bearish" if _pcr > 1.0 else "Neutral")
+                st.metric("PUT/CALL RATIO", f"{_pcr:.2f}", delta=_pl)
+            else: st.metric("PUT/CALL RATIO", "—")
+
+        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+        # ── GEX Profile Chart
+        if _0dte_chain and _spx:
+            st.markdown('<div class="bb-ph">📊 GAMMA EXPOSURE (GEX) PROFILE</div>', unsafe_allow_html=True)
+            _spy_spot = _spx["spot"] / 10
+            _gex = compute_gex_profile(_0dte_chain, _spy_spot)
+            _gf_spy = find_gamma_flip(_gex)
+            _mp_spy = compute_max_pain(_0dte_chain)
+
+            _gex_col, _info_col = st.columns([3, 2])
+            with _gex_col:
+                if _gex:
+                    _strikes_spx = [k * 10 for k in sorted(_gex.keys())]
+                    _gex_vals = [_gex[k / 10] for k in _strikes_spx]
+                    _colors = ["#00CC44" if v >= 0 else "#FF4444" for v in _gex_vals]
+                    _fig = go.Figure(go.Bar(
+                        x=_strikes_spx, y=_gex_vals,
+                        marker=dict(color=_colors, line=dict(width=0)),
+                        text=[f"${v:.1f}M" for v in _gex_vals], textposition="outside",
+                        textfont=dict(color="#FF8C00", size=9),
+                        hovertemplate="Strike: %{x}<br>GEX: $%{y:.2f}M<extra></extra>",
+                    ))
+                    _fig.update_layout(**CHART_LAYOUT, height=350, xaxis_title="SPX Strike",
+                                       yaxis_title="GEX ($M)",
+                                       title=dict(text="Dealer Gamma Exposure by Strike",
+                                                  font=dict(color="#FF6600", size=12)))
+                    if _gf_spy:
+                        _fig.add_vline(x=_gf_spy * 10, line=dict(color="#FFCC00", dash="dash", width=1),
+                                       annotation_text=f"Gamma Flip: {_gf_spy * 10:.0f}",
+                                       annotation_font=dict(color="#FFCC00", size=10))
+                    if _mp_spy:
+                        _fig.add_vline(x=_mp_spy * 10, line=dict(color="#AA44FF", dash="dot", width=1),
+                                       annotation_text=f"Max Pain: {_mp_spy * 10:.0f}",
+                                       annotation_font=dict(color="#AA44FF", size=10),
+                                       annotation_position="bottom right")
+                    st.plotly_chart(_fig, use_container_width=True)
+                else:
+                    st.markdown('<div style="color:#555;font-family:monospace;font-size:11px">GEX data unavailable.</div>', unsafe_allow_html=True)
+
+            with _info_col:
+                _gf_spx = f"${_gf_spy * 10:,.0f}" if _gf_spy else "—"
+                _mp_spx = f"${_mp_spy * 10:,.0f}" if _mp_spy else "—"
+                _wall_strike, _wall_gex = None, 0
+                if _gex:
+                    for _wk, _wv in _gex.items():
+                        if abs(_wv) > abs(_wall_gex):
+                            _wall_gex, _wall_strike = _wv, _wk
+                _wall_spx = f"${_wall_strike * 10:,.0f}" if _wall_strike else "—"
+                _wall_dir = "CALL" if _wall_gex > 0 else "PUT"
+                st.markdown(f"""
+<div style="background:#0A0A0A;border:1px solid #222;border-left:3px solid #FF6600;
+padding:14px 16px;font-family:monospace;font-size:11px;line-height:1.8">
+<div style="color:#FF6600;font-weight:700;font-size:12px;letter-spacing:1px;margin-bottom:8px">
+GEX DECODER</div>
+<div style="color:#CCCCCC">
+<span style="color:#FFCC00">▸ Gamma Flip:</span> {_gf_spx}<br>
+<span style="color:#AA44FF">▸ Max Pain:</span> {_mp_spx}<br>
+<span style="color:#FF8C00">▸ Biggest Wall:</span> {_wall_spx} ({_wall_dir})<br>
+<hr style="border-color:#222;margin:8px 0">
+<span style="color:#00CC44">Green bars</span> = Call GEX (dealers sell strength → resistance)<br>
+<span style="color:#FF4444">Red bars</span> = Put GEX (dealers buy weakness → support)<br>
+<hr style="border-color:#222;margin:8px 0">
+<span style="color:#888">Wall hit → dealers hedge aggressively → price pins or reverses at the wall.</span><br>
+<span style="color:#888">Above Gamma Flip = dealers dampen moves (mean-revert).<br>
+Below Gamma Flip = dealers amplify moves (trend).</span>
+</div></div>""", unsafe_allow_html=True)
+
+        elif not _0dte_open:
+            st.markdown('<div style="color:#555;font-family:monospace;font-size:11px;padding:20px;text-align:center">'
+                        '📊 GEX Profile will populate when the market opens and 0DTE chain data is available.</div>',
+                        unsafe_allow_html=True)
+
+        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+        # ── 0DTE Trade Assistant
+        with st.expander("⚡ 0DTE TRADE ASSISTANT", expanded=False):
+            st.markdown('<div style="color:#888;font-family:monospace;font-size:10px;margin-bottom:8px">'
+                        'Enter your trade thesis. Example: "SPX@6025 bull $5k size 1R risk 2:15pm ET"</div>',
+                        unsafe_allow_html=True)
+            _user_input = st.text_area("Trade Input", placeholder='SPX@6025 bull $5k size 1R risk 2:15pm ET',
+                                       height=60, label_visibility="collapsed", key="trade_input_0dte")
+            _ac, _cc = st.columns([1, 4])
+            with _ac: _analyze_clicked = st.button("⚡ ANALYZE", key="analyze_0dte", use_container_width=True)
+            with _cc:
+                if st.button("CLEAR LOG", key="clear_log_0dte"):
+                    st.session_state.trade_log_0dte = []
+                    st.rerun()
+
+            if _analyze_clicked and _user_input.strip():
+                _parsed = parse_trade_input(_user_input)
+                if not _parsed["bias"]:
+                    st.markdown('<div style="color:#FF4444;font-family:monospace;font-size:12px;padding:8px">'
+                                '⚠️ Could not detect bias. Include "bull" or "bear" in your input.</div>',
+                                unsafe_allow_html=True)
+                elif not _0dte_chain:
+                    st.markdown('<div style="color:#FF4444;font-family:monospace;font-size:12px;padding:8px">'
+                                '⚠️ No options data available. Market may be closed or API issue.</div>',
+                                unsafe_allow_html=True)
+                else:
+                    _rec = generate_recommendation(_0dte_chain, _spx, _vix_data, _parsed["bias"])
+                    if _rec:
+                        _conf_c = {"HIGH": "#00CC44", "MODERATE": "#FF8C00", "LOW": "#FF4444"}.get(_rec["confidence"], "#FF8C00")
+                        st.markdown(f"""
+<div style="background:#0A0A0A;border:1px solid #222;border-left:4px solid {_conf_c};
+padding:16px 18px;font-family:monospace;font-size:12px;line-height:1.9;margin:8px 0">
+<div style="color:{_conf_c};font-weight:700;font-size:14px;letter-spacing:1px;margin-bottom:10px">
+{_rec['recommendation']}</div>
+<div style="color:#CCCCCC">{_rec['rationale']}</div>
+<div style="color:#FF8C00;margin-top:6px">{_rec['stats']}</div>
+<div style="color:#CCCCCC;margin-top:6px">{_rec['action']}</div>
+<hr style="border-color:#222;margin:10px 0">
+<div style="font-size:10px">
+<span style="color:#00CC44">✅ {', '.join(_rec['conditions_met']) if _rec['conditions_met'] else 'None'}</span><br>
+<span style="color:#FF4444">❌ {', '.join(_rec['conditions_failed']) if _rec['conditions_failed'] else 'None'}</span><br>
+<span style="color:#555">Confidence: {_rec['confidence']} | Ask: ${_rec.get('mid_price', 0):.2f} (SPY) | 1 contract</span>
+</div></div>""", unsafe_allow_html=True)
+                        _ET_log = pytz.timezone("US/Eastern")
+                        _log_time = datetime.now(_ET_log).strftime("%I:%M %p")
+                        st.session_state.trade_log_0dte.append(
+                            f"[{_log_time}] {_rec['recommendation'].replace('RECOMMENDATION: ', '')}")
+
+        # ── Compact Trade Log
+        if st.session_state.trade_log_0dte:
+            _log_entries = st.session_state.trade_log_0dte[-10:]
+            _entries_html = ""
+            for _entry in _log_entries:
+                if "CALL" in _entry:
+                    _bc, _bg = "#00CC44", "rgba(0,204,68,0.1)"
+                elif "PUT" in _entry:
+                    _bc, _bg = "#FF4444", "rgba(255,68,68,0.1)"
+                else:
+                    _bc, _bg = "#888", "rgba(136,136,136,0.1)"
+                _entries_html += (f'<span style="display:inline-block;background:{_bg};border:1px solid {_bc};'
+                                  f'color:{_bc};padding:3px 8px;margin:2px 4px;font-size:10px;'
+                                  f'font-family:monospace;font-weight:600;letter-spacing:0.5px">{_entry}</span>')
+            st.markdown(f"""
+<div style="background:#050505;border:1px solid #222;border-top:2px solid #FF6600;
+padding:8px 10px;margin-top:4px">
+<div style="color:#FF6600;font-size:9px;font-weight:700;letter-spacing:2px;margin-bottom:6px;
+font-family:monospace">TRADE LOG</div>
+<div style="display:flex;flex-wrap:wrap;gap:2px">{_entries_html}</div>
+</div>""", unsafe_allow_html=True)
+
+# ════════════════════════════════════════════════════════════════════
+# TAB 3 — MACRO
+# ════════════════════════════════════════════════════════════════════
+with tabs[3]:
     st.markdown('<div class="bb-ph">📈 MACRO — FRED DATA DASHBOARD</div>', unsafe_allow_html=True)
 
     if not st.session_state.fred_key:
@@ -866,7 +1111,7 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
 # ════════════════════════════════════════════════════════════════════
 # TAB 3 — CRYPTO
 # ════════════════════════════════════════════════════════════════════
-with tabs[3]:
+with tabs[4]:
     st.markdown('<div class="bb-ph">💰 CRYPTO — COINGECKO + TRADINGVIEW</div>', unsafe_allow_html=True)
 
     with st.spinner("Loading crypto globals…"):
@@ -931,7 +1176,7 @@ with tabs[3]:
 # ════════════════════════════════════════════════════════════════════
 # TAB 4 — POLYMARKET
 # ════════════════════════════════════════════════════════════════════
-with tabs[4]:
+with tabs[5]:
     st.markdown('<div class="bb-ph">🎲 POLYMARKET — PREDICTION INTELLIGENCE & UNUSUAL FLOW</div>', unsafe_allow_html=True)
 
     with st.spinner("Loading Polymarket…"):
@@ -1107,7 +1352,7 @@ Which outcome unusual volume favors<br><br>
 # ════════════════════════════════════════════════════════════════════
 # TAB 5 — GEO GLOBE (Fixed loading with error handling)
 # ════════════════════════════════════════════════════════════════════
-with tabs[5]:
+with tabs[6]:
     st.markdown('<div class="bb-ph">🌍 GEOPOLITICAL INTELLIGENCE — LIVE GLOBE + GDELT</div>', unsafe_allow_html=True)
     st.markdown('<div style="color:#555;font-family:monospace;font-size:10px;margin-bottom:6px">Drag to rotate · Scroll to zoom · Click markers for intel</div>', unsafe_allow_html=True)
 
@@ -1193,7 +1438,7 @@ Place globe.html in your GitHub repo root alongside sentinel_app.py and redeploy
 # ════════════════════════════════════════════════════════════════════
 # TAB 6 — EARNINGS TRACKER
 # ════════════════════════════════════════════════════════════════════
-with tabs[6]:
+with tabs[7]:
     st.markdown('<div class="bb-ph">📅 EARNINGS TRACKER — UPCOMING & RECENT</div>', unsafe_allow_html=True)
 
     ec1, ec2 = st.columns([3,2])
@@ -1250,7 +1495,7 @@ with tabs[6]:
 # ════════════════════════════════════════════════════════════════════
 # TAB 7 — SENTINEL AI
 # ════════════════════════════════════════════════════════════════════
-with tabs[7]:
+with tabs[8]:
     st.markdown('<div class="bb-ph">🤖 SENTINEL AI — POWERED BY GOOGLE GEMINI</div>', unsafe_allow_html=True)
 
     if not st.session_state.gemini_key:
