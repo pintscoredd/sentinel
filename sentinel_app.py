@@ -618,12 +618,13 @@ with tabs[1]:
                 scored = score_options_chain(calls, puts, q["price"], vix=current_vix)
 
                 # Regime label
+                vix_str = f"{current_vix:.1f}" if current_vix else "N/A"
                 if current_vix and current_vix > 25:
-                    regime = f'<span style="color:#FF4444;font-weight:700">HIGH VOL (VIX {current_vix:.1f})</span> — Δ-weighted'
+                    regime = f'<span style="color:#FF4444;font-weight:700">HIGH VOL (VIX {vix_str})</span> — Δ-weighted'
                 elif current_vix and current_vix < 15:
-                    regime = f'<span style="color:#00CC44;font-weight:700">LOW VOL (VIX {current_vix:.1f})</span> — Flow-weighted'
+                    regime = f'<span style="color:#00CC44;font-weight:700">LOW VOL (VIX {vix_str})</span> — Flow-weighted'
                 else:
-                    regime = f'<span style="color:#FF8C00;font-weight:700">NEUTRAL (VIX {current_vix:.1f if current_vix else "N/A"})</span> — Balanced'
+                    regime = f'<span style="color:#FF8C00;font-weight:700">NEUTRAL (VIX {vix_str})</span> — Balanced'
 
                 st.markdown(f'<div style="color:#888;font-size:11px;font-family:monospace;margin-bottom:6px">EXPIRY: {exp_fmt} | CURRENT: {fmt_p(q["price"])} | REGIME: {regime}</div>', unsafe_allow_html=True)
 
