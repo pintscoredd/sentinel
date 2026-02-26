@@ -174,7 +174,18 @@ def render_wl_row(q):
 
 def render_options_table(df, side="calls", current_price=None):
     if df is None or df.empty: return '<p style="color:#555;font-family:monospace;font-size:11px">No data</p>'
-    cls = "opt-call" if side == "calls" else "opt-put"
+    import pandas as pd
+    df = df.copy()
+    # Ensure strike is numeric
+    if "strike" in df.columns:
+        df["strike"] = pd.to_numeric(df["strike"], errors="coerce").fillna(0)
+
+    # ── Remove 13 deepest OTM/ITM strikes ──
+    if current_price and "strike" in df.columns and len(df) > 13:
+        df["_dist"] = (df["strike"] - current_price).abs()
+        df = df.nsmallest(len(df) - 13, "_dist").drop(columns=["_dist"])
+
+    strike_color = "#00CC44" if side == "calls" else "#FF4444"
     # Find ATM strike (nearest to current price)
     atm_strike = None
     if current_price and not df.empty:
@@ -198,7 +209,7 @@ def render_options_table(df, side="calls", current_price=None):
         atm_style = ""
         if atm_strike is not None and abs(s - atm_strike) < 0.01:
             atm_style = ' style="background:rgba(255,102,0,0.18);border-left:3px solid #FF6600"'
-        rows += (f'<tr class="{itm}"{atm_style}><td class="{cls}">{s:.2f}</td>'
+        rows += (f'<tr class="{itm}"{atm_style}><td style="color:{strike_color};font-weight:600;text-align:left">{s:.2f}</td>'
                  f'<td>{lp:.2f}</td><td>{b:.2f}</td><td>{a:.2f}</td>'
                  f'<td class="{hv}">{v:,}</td><td>{oi:,}</td><td>{iv:.1%}</td></tr>')
     return (f'<table class="opt-tbl"><thead><tr>'
