@@ -28,6 +28,7 @@ from data_fetchers import (
     gdelt_news, newsapi_headlines, finnhub_news, finnhub_insider, finnhub_officers,
     vix_price, options_chain, options_expiries, sector_etfs, top_movers,
     detect_unusual_poly, market_snapshot_str, _parse_poly_field,
+    score_options_chain,
     get_earnings_calendar, is_market_open,
     is_0dte_market_open, get_stock_snapshot, get_spx_metrics,
     fetch_0dte_chain, compute_gex_profile, compute_max_pain, compute_pcr,
@@ -38,6 +39,7 @@ from ui_components import (
     CHART_LAYOUT, dark_fig, tv_chart, tv_mini, tv_tape,
     yield_curve_chart, yield_history_chart, cpi_vs_rates_chart,
     render_news_card, render_wl_row, render_options_table,
+    render_scored_options, render_unusual_trade,
     render_insider_cards, poly_url, poly_status, unusual_side,
     render_poly_card,
     SENTINEL_PROMPT, GEMINI_MODELS, list_gemini_models, gemini_response,
@@ -221,14 +223,14 @@ section.main > div.block-container {
 .poly-unusual-no  { color: var(--red); font-size: 10px; font-weight: 700; }
 
 /* OPTIONS CHAIN */
-.opt-tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11px; }
+.opt-tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; }
 .opt-tbl th {
-  background: var(--bg3); color: var(--org); padding: 5px 7px;
-  text-align: right; font-size: 9px; letter-spacing: 1px; text-transform: uppercase;
+  background: var(--bg3); color: var(--org); padding: 6px 9px;
+  text-align: right; font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
   border-bottom: 1px solid var(--org);
 }
 .opt-tbl th:first-child { text-align: left; }
-.opt-tbl td { padding: 4px 7px; text-align: right; color: var(--txt); border-bottom: 1px solid var(--bg3); }
+.opt-tbl td { padding: 6px 9px; text-align: right; color: var(--txt); border-bottom: 1px solid var(--bg3); }
 .opt-tbl td:first-child { text-align: left; font-weight: 600; }
 .opt-tbl tr:hover td { background: var(--bg2); }
 .opt-call { color: var(--grn) !important; }
@@ -589,8 +591,8 @@ with tabs[1]:
             st.markdown('<div class="bb-ph" style="margin-top:8px">CHART — TRADINGVIEW (RSI + SMA)</div>', unsafe_allow_html=True)
             components.html(tv_chart(tv_sym, 480), height=485, scrolling=False)
 
-            # ── Options Chain (full width)
-            st.markdown('<div class="bb-ph">📋 OPTIONS CHAIN</div>', unsafe_allow_html=True)
+            # ── Options Intelligence Engine (full width)
+            st.markdown('<div class="bb-ph">📋 OPTIONS INTELLIGENCE — ADAPTIVE SCORING ENGINE</div>', unsafe_allow_html=True)
             expiries = options_expiries(tkr)
             selected_exp = None
             if expiries:
@@ -606,14 +608,47 @@ with tabs[1]:
                     exp_fmt = exp_dt.strftime("%B %-d %Y")
                 except:
                     exp_fmt = str(exp_date)
-                st.markdown(f'<div style="color:#888;font-size:10px;font-family:monospace;margin-bottom:6px">EXPIRY: {exp_fmt} | CURRENT: {fmt_p(q["price"])}</div>', unsafe_allow_html=True)
+
+                # Get VIX for adaptive weighting
+                try:
+                    current_vix = vix_price()
+                except:
+                    current_vix = 20.0
+
+                scored = score_options_chain(calls, puts, q["price"], vix=current_vix)
+
+                # Regime label
+                if current_vix and current_vix > 25:
+                    regime = f'<span style="color:#FF4444;font-weight:700">HIGH VOL (VIX {current_vix:.1f})</span> — Δ-weighted'
+                elif current_vix and current_vix < 15:
+                    regime = f'<span style="color:#00CC44;font-weight:700">LOW VOL (VIX {current_vix:.1f})</span> — Flow-weighted'
+                else:
+                    regime = f'<span style="color:#FF8C00;font-weight:700">NEUTRAL (VIX {current_vix:.1f if current_vix else "N/A"})</span> — Balanced'
+
+                st.markdown(f'<div style="color:#888;font-size:11px;font-family:monospace;margin-bottom:6px">EXPIRY: {exp_fmt} | CURRENT: {fmt_p(q["price"])} | REGIME: {regime}</div>', unsafe_allow_html=True)
+
+                # ── Top 2 Calls / Top 2 Puts — scored table
                 cc, pc = st.columns(2)
                 with cc:
-                    st.markdown('<div style="color:#00CC44;font-size:9px;font-weight:700;letter-spacing:2px">▲ CALLS</div>', unsafe_allow_html=True)
-                    st.markdown(render_options_table(calls,"calls",q["price"]), unsafe_allow_html=True)
+                    st.markdown('<div style="color:#00CC44;font-size:10px;font-weight:700;letter-spacing:2px">▲ TOP CALLS (by score)</div>', unsafe_allow_html=True)
+                    st.markdown(render_scored_options(scored["top_calls"], side="calls"), unsafe_allow_html=True)
                 with pc:
-                    st.markdown('<div style="color:#FF4444;font-size:9px;font-weight:700;letter-spacing:2px">▼ PUTS</div>', unsafe_allow_html=True)
-                    st.markdown(render_options_table(puts,"puts",q["price"]), unsafe_allow_html=True)
+                    st.markdown('<div style="color:#FF4444;font-size:10px;font-weight:700;letter-spacing:2px">▼ TOP PUTS (by score)</div>', unsafe_allow_html=True)
+                    st.markdown(render_scored_options(scored["top_puts"], side="puts"), unsafe_allow_html=True)
+
+                # ── Unusual Activity Detection
+                if scored.get("unusual"):
+                    st.markdown(render_unusual_trade(scored["unusual"], ticker=tkr, expiry=exp_fmt), unsafe_allow_html=True)
+
+                # ── Full chain in expander
+                with st.expander("📄 FULL OPTIONS CHAIN", expanded=False):
+                    fc, fp = st.columns(2)
+                    with fc:
+                        st.markdown('<div style="color:#00CC44;font-size:9px;font-weight:700;letter-spacing:2px">▲ ALL CALLS</div>', unsafe_allow_html=True)
+                        st.markdown(render_options_table(calls, "calls", q["price"]), unsafe_allow_html=True)
+                    with fp:
+                        st.markdown('<div style="color:#FF4444;font-size:9px;font-weight:700;letter-spacing:2px">▼ ALL PUTS</div>', unsafe_allow_html=True)
+                        st.markdown(render_options_table(puts, "puts", q["price"]), unsafe_allow_html=True)
             else:
                 st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Options unavailable for this ticker.</p>', unsafe_allow_html=True)
 
