@@ -575,11 +575,31 @@ with tabs[1]:
         tkr = flash_ticker.upper().strip()
         q = yahoo_quote(tkr)
         if q:
-            m1,m2,m3,m4 = st.columns(4)
-            m1.metric("PRICE",  fmt_p(q["price"]), delta=fmt_pct(q["pct"]))
-            m2.metric("CHANGE", f"{'+' if q['change']>=0 else ''}{q['change']:.2f}")
-            m3.metric("VOLUME", f"{q['volume']:,}")
-            m4.metric("1D CHG%",fmt_pct(q["pct"]))
+            _prc = q["price"]
+            _chg = q["change"]
+            _pct = q["pct"]
+            _vol = q["volume"]
+            _up = _chg >= 0
+            _c = "#00CC44" if _up else "#FF4444"
+            _sign = "+" if _up else ""
+            _vol_c = "#00CC44" if _vol > 0 else "#888"  # volume is always positive, but keep consistent
+            # Price + pct inline
+            st.markdown(
+                f'<div style="display:flex;align-items:baseline;gap:14px;margin-bottom:10px">'
+                f'<span style="color:#FFF;font-size:28px;font-weight:700;font-family:monospace">{fmt_p(_prc)}</span>'
+                f'<span style="color:{_c};font-size:16px;font-weight:600;font-family:monospace">{_sign}{_pct:.2f}%</span>'
+                f'</div>', unsafe_allow_html=True)
+            # CHANGE / VOLUME / 1D CHG% cards
+            m2, m3, m4 = st.columns(3)
+            _card = lambda label, val, color: (
+                f'<div style="background:#0A0A0A;border:1px solid #1A1A1A;border-top:2px solid {color};'
+                f'padding:10px 14px;font-family:monospace">'
+                f'<div style="color:#666;font-size:10px;letter-spacing:1px;margin-bottom:4px">{label}</div>'
+                f'<div style="color:{color};font-size:16px;font-weight:700">{val}</div></div>'
+            )
+            m2.markdown(_card("CHANGE", f"{_sign}{_chg:.2f}", _c), unsafe_allow_html=True)
+            m3.markdown(_card("VOLUME", f"{_vol:,}", _vol_c), unsafe_allow_html=True)
+            m4.markdown(_card("1D CHG%", f"{_sign}{_pct:.2f}%", _c), unsafe_allow_html=True)
 
             # TradingView Chart (SMA60 instead of MACD)
             TV_MAP = {"SPY":"AMEX:SPY","QQQ":"NASDAQ:QQQ","NVDA":"NASDAQ:NVDA","AAPL":"NASDAQ:AAPL",
