@@ -1161,76 +1161,42 @@ def generate_recommendation(chain, spx_metrics, vix_data):
         "strike_spx": strike_spx, "opt_type": opt_label, "mid_price": target.get("mid", 0),
     }
 
-
 # ════════════════════════════════════════════════════════════════════
 # CRYPTO WHALE FLOWS & ON-CHAIN DATA  (US-accessible APIs)
 # ════════════════════════════════════════════════════════════════════
 
-# ── Symbol mapping: callers pass "BTCUSDT" / "ETHUSDT" style keys ──
-
-with st.expander("🔧 API DEBUG — click to diagnose", expanded=True):
-    import requests as _req
-    tests = [
-        ("Binance trades",    "https://api.binance.com/api/v3/trades?symbol=BTCUSDT&limit=5"),
-        ("Binance funding",   "https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT"),
-        ("Binance OI",        "https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT"),
-        ("Binance liqs",      "https://fapi.binance.com/fapi/v1/allForceOrders?symbol=BTCUSDT&limit=5"),
-        ("CoinGecko exch",    "https://api.coingecko.com/api/v3/exchanges?per_page=3&page=1"),
-    ]
-    for name, url in tests:
-        try:
-            r = _req.get(url, timeout=6, headers={"User-Agent": "Mozilla/5.0"})
-            st.markdown(
-                f'<div style="font-family:monospace;font-size:10px;padding:3px 0">'
-                f'<span style="color:{"#00CC44" if r.status_code==200 else "#FF4444"}">'
-                f'{"✓" if r.status_code==200 else "✗"} {name}</span> '
-                f'— HTTP {r.status_code} — {str(r.text[:120])}</div>',
-                unsafe_allow_html=True)
-        except Exception as e:
-            st.markdown(
-                f'<div style="font-family:monospace;font-size:10px;padding:3px 0">'
-                f'<span style="color:#FF4444">✗ {name} — EXCEPTION: {e}</span></div>',
-                unsafe_allow_html=True) 
-            
-_COINBASE_PRODUCT_MAP = {
-    "BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD",
-    "SOLUSDT": "SOL-USD", "BNBUSDT": "BNB-USD",
-}
+_COINBASE_MAP = {"BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD"}
 
 @st.cache_data(ttl=120)
 def get_whale_trades(symbol="BTCUSDT", min_usd=500_000):
-    """Coinbase Exchange public trades — filter for whale-size orders (>= min_usd).
+    """Coinbase Exchange public trades — filter for whale-size orders.
     Returns top 25 by USD value descending.
     """
-    product = _COINBASE_PRODUCT_MAP.get(symbol, "BTC-USD")
+    product = _COINBASE_MAP.get(symbol, "BTC-USD")
     try:
         r = requests.get(
             f"https://api.exchange.coinbase.com/products/{product}/trades",
             params={"limit": 1000},
-            headers={"Accept": "application/json"},
             timeout=10,
         )
         r.raise_for_status()
         trades = r.json()
         result = []
         for t in trades:
-            price = float(t.get("price", 0))
-            qty = float(t.get("size", 0))
+            price = float(t.get("price", "0"))
+            qty = float(t.get("size", "0"))
             usd = price * qty
             if usd < min_usd:
                 continue
-            # Coinbase side: "buy" = taker bought (aggressor buy), "sell" = taker sold
-            raw_side = str(t.get("side", "")).upper()
-            side = raw_side if raw_side in ("BUY", "SELL") else "BUY"
+            side = "BUY" if t.get("side", "") == "buy" else "SELL"
             time_str = ""
-            ts = t.get("time", "")
-            if ts:
+            iso = t.get("time", "")
+            if iso:
                 try:
-                    from datetime import datetime, timezone
-                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                    time_str = dt.strftime("%H:%M:%S")
+                    from datetime import datetime as _dt
+                    time_str = _dt.fromisoformat(iso.replace("Z", "+00:00")).strftime("%H:%M:%S")
                 except:
-                    time_str = str(ts)[:8]
+                    time_str = str(iso)[:8]
             result.append({
                 "time": time_str,
                 "side": side,
@@ -1244,10 +1210,14 @@ def get_whale_trades(symbol="BTCUSDT", min_usd=500_000):
         return []
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600)
 def get_exchange_netflow():
-    """CoinGecko public exchanges — top 10 by BTC volume with trust score."""
+    """CoinGecko public exchanges — top 10 by BTC volume with trust score.
+    Includes 1s sleep to avoid 429 rate limits.
+    """
+    import time as _time
     try:
+        _time.sleep(1)
         r = requests.get(
             "https://api.coingecko.com/api/v3/exchanges",
             params={"per_page": 10, "page": 1},
@@ -1268,13 +1238,13 @@ def get_exchange_netflow():
         return []
 
 
-_FUNDING_COINS_BYBIT = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
-                         "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "MATICUSDT", "ADAUSDT"]
+_FUNDING_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+                     "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "MATICUSDT", "ADAUSDT"]
 
 @st.cache_data(ttl=120)
 def get_funding_rates():
     """Bybit v5 linear tickers — funding rates for top 10 coins.
-    Uses api.bybit.com which is accessible from the US.
+    Sorted by abs(rate_pct) descending.
     """
     try:
         r = requests.get(
@@ -1283,38 +1253,35 @@ def get_funding_rates():
             timeout=10,
         )
         r.raise_for_status()
-        data = r.json()
-        tickers = data.get("result", {}).get("list", [])
-        lookup = {t["symbol"]: t for t in tickers if t.get("symbol") in _FUNDING_COINS_BYBIT}
+        tickers = r.json().get("result", {}).get("list", [])
+        lookup = {t["symbol"]: t for t in tickers if t.get("symbol") in _FUNDING_SYMBOLS}
         result = []
-        for sym in _FUNDING_COINS_BYBIT:
+        for sym in _FUNDING_SYMBOLS:
             t = lookup.get(sym)
             if not t:
                 continue
-            # Bybit returns fundingRate as a decimal string (e.g. "0.0001")
-            rate = float(t.get("fundingRate", 0) or 0)
-            mark = float(t.get("markPrice", 0) or 0)
+            rate = float(t.get("fundingRate", "0") or "0")
+            mark = float(t.get("markPrice", "0") or "0")
+            rate_pct = round(rate * 100, 4)
             result.append({
                 "symbol": sym.replace("USDT", ""),
-                "rate_pct": round(rate * 100, 4),
-                "rate_ann": round(rate * 100 * 3 * 365, 2),
+                "rate_pct": rate_pct,
+                "rate_ann": round(rate_pct * 3 * 365, 2),
                 "mark_price": round(mark, 2),
             })
+        result.sort(key=lambda x: abs(x["rate_pct"]), reverse=True)
         return result
     except:
         return []
 
 
-_OI_COINS_BYBIT = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "AVAXUSDT"]
+_OI_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "AVAXUSDT"]
 
 @st.cache_data(ttl=120)
 def get_open_interest():
-    """Bybit v5 open interest per coin.
-    Uses /v5/market/open-interest endpoint (public, no API key).
-    """
+    """Bybit v5 open interest per coin, enriched with mark price for USD value."""
     try:
-        result = []
-        # Get mark prices from tickers in one call
+        # Fetch mark prices in one call
         tr = requests.get(
             "https://api.bybit.com/v5/market/tickers",
             params={"category": "linear"},
@@ -1322,9 +1289,10 @@ def get_open_interest():
         )
         tr.raise_for_status()
         tickers = tr.json().get("result", {}).get("list", [])
-        marks = {t["symbol"]: float(t.get("markPrice", 0) or 0) for t in tickers}
+        marks = {t["symbol"]: float(t.get("markPrice", "0") or "0") for t in tickers}
 
-        for sym in _OI_COINS_BYBIT:
+        result = []
+        for sym in _OI_SYMBOLS:
             try:
                 r = requests.get(
                     "https://api.bybit.com/v5/market/open-interest",
@@ -1335,14 +1303,12 @@ def get_open_interest():
                 items = r.json().get("result", {}).get("list", [])
                 if not items:
                     continue
-                # openInterest is in coin terms
-                oi_coins = float(items[0].get("openInterest", 0) or 0)
+                oi_coins = float(items[0].get("openInterest", "0") or "0")
                 mark = marks.get(sym, 0)
-                oi_usd = oi_coins * mark
                 result.append({
                     "symbol": sym.replace("USDT", ""),
                     "oi_coins": round(oi_coins, 4),
-                    "oi_usd": round(oi_usd, 2),
+                    "oi_usd": round(oi_coins * mark, 2),
                 })
             except:
                 continue
@@ -1356,15 +1322,15 @@ _LIQ_COINS = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]
 
 @st.cache_data(ttl=180)
 def get_liquidations():
-    """Coinglass public liquidation data.
-    Falls back to empty dict gracefully on 403 / rate-limit / any error.
+    """Coinglass public liquidation data (no API key).
+    Per-coin requests — individual failures are skipped gracefully.
     """
     result = {}
     for coin in _LIQ_COINS:
         try:
             r = requests.get(
                 "https://open-api.coinglass.com/public/v2/liquidation_chart",
-                params={"symbol": coin, "time_type": "1"},
+                params={"ex": "Bybit", "pair": f"{coin}USDT", "interval": "0"},
                 headers={"Accept": "application/json"},
                 timeout=10,
             )
@@ -1372,14 +1338,9 @@ def get_liquidations():
                 result[coin] = {"long_liq": 0, "short_liq": 0, "total": 0}
                 continue
             r.raise_for_status()
-            data = r.json()
-            # Coinglass returns {code, data: {buyVolUsd: [...], sellVolUsd: [...]}}
-            chart = data.get("data", {})
-            # Sum the most recent array values for buys (short liqs) and sells (long liqs)
-            buy_vols = chart.get("buyVolUsd", [])   # short liquidations (forced buys)
-            sell_vols = chart.get("sellVolUsd", [])  # long liquidations (forced sells)
-            short_liq = sum(float(v) for v in buy_vols[-24:]) if buy_vols else 0
-            long_liq = sum(float(v) for v in sell_vols[-24:]) if sell_vols else 0
+            data = r.json().get("data", {})
+            long_liq = float(data.get("longLiquidationUsd", 0) or 0)
+            short_liq = float(data.get("shortLiquidationUsd", 0) or 0)
             result[coin] = {
                 "long_liq": round(long_liq, 2),
                 "short_liq": round(short_liq, 2),
