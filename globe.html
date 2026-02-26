@@ -432,6 +432,13 @@
     ];
 
     async function fetchSatTLEs(){
+      // Guard: satellite.js CDN may have failed to load
+      if(typeof satellite === 'undefined'){
+        console.warn('satellite.js not loaded — retrying CDN or aborting');
+        document.getElementById('sat-status').style.display='';
+        document.getElementById('sat-status').textContent='⚠ satellite.js failed to load';
+        return;
+      }
       if(satLoaded) return updateSatPositions();
       let loaded=0;
 
@@ -598,7 +605,8 @@
     let flightMeshes=[]; // [{mesh,flight,basePos}]
     let showFlights=false;
 
-    // US Military ICAO hex range: AE0000–AFFFFF
+    let satUpdateInterval = null;
+    let fltUpdateInterval = null;
     const isMilHex=hex=>hex&&/^ae/i.test(hex);
 
     // Military callsign patterns
@@ -667,6 +675,8 @@
       }
 
       flightData.forEach(flight=>{
+        if(!flight.lat||!flight.lon) return;
+        if(isNaN(flight.lat)||isNaN(flight.lon)) return;
         if(flight.lat<-90||flight.lat>90||flight.lon<-180||flight.lon>180) return;
         const col=new THREE.Color(0xFFDD00);
 
@@ -978,16 +988,16 @@
         btn.classList.add('sat-on');
         document.getElementById('satpanel').style.display='block';
         document.getElementById('tp').style.display='none';
-        fetchSatTLEs().then(()=>{
-          renderSatMarkers();
-          setInterval(updateSatPositions,30000); // live updates
-        });
+        fetchSatTLEs(); // renderSatMarkers() is called inside fetchSatTLEs on completion
+        if(satUpdateInterval) clearInterval(satUpdateInterval);
+        satUpdateInterval = setInterval(updateSatPositions,30000);
       } else {
         btn.classList.remove('sat-on');
         document.getElementById('satpanel').style.display='none';
         document.getElementById('tp').style.display='block';
         document.getElementById('badge-sats').textContent='◉ SATS: OFF';
         document.getElementById('badge-sats').classList.remove('active');
+        if(satUpdateInterval){ clearInterval(satUpdateInterval); satUpdateInterval=null; }
         if(trackingObj?.type==='sat') stopTracking();
         renderSatMarkers();
       }
@@ -998,9 +1008,11 @@
       if(showFlights){
         btn.classList.add('flt-on');
         fetchMilitaryFlights();
-        setInterval(fetchMilitaryFlights,60000);
+        if(fltUpdateInterval) clearInterval(fltUpdateInterval);
+        fltUpdateInterval = setInterval(fetchMilitaryFlights,60000);
       } else {
         btn.classList.remove('flt-on');
+        if(fltUpdateInterval){ clearInterval(fltUpdateInterval); fltUpdateInterval=null; }
         if(trackingObj?.type==='flight') stopTracking();
         renderFlightMarkers();
       }
@@ -1051,6 +1063,7 @@
 
     function animate(t){
       requestAnimationFrame(animate);
+      try{
       const dt=Math.min((t-lastT)/1000,0.05); lastT=t; frameCount++;
       if(autoRotate) targetRotY+=dt*0.065;
       rotX+=(targetRotX-rotX)*0.08;
@@ -1090,13 +1103,21 @@
         }
       });
 
-      // Flight markers
+      // Flight markers — NaN-safe orientation
       flightMeshes.forEach(({mesh,flight,basePos})=>{
         _rp.copy(basePos).applyQuaternion(_quat);
         mesh.position.copy(_rp);
-        // Recalculate orientation
-        const up=_rp.clone().normalize();
-        mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),up);
+        const len=_rp.length();
+        if(len < 0.001) return; // skip if degenerate
+        const up=_rp.clone().divideScalar(len); // safe normalize
+        // setFromUnitVectors can NaN when vectors are anti-parallel — guard it
+        const dot=up.dot(new THREE.Vector3(0,1,0));
+        if(Math.abs(dot) > 0.9999){
+          // Near-parallel or anti-parallel: use a stable fallback axis
+          mesh.quaternion.setFromAxisAngle(new THREE.Vector3(1,0,0), dot > 0 ? 0 : Math.PI);
+        } else {
+          mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),up);
+        }
         const rot2=new THREE.Quaternion();
         rot2.setFromAxisAngle(up,flight.heading*Math.PI/180);
         mesh.quaternion.premultiply(rot2);
@@ -1108,6 +1129,7 @@
       }
 
       renderer.render(scene,camera);
+      }catch(err){ /* prevent single bad frame from killing rAF loop */ }
     }
     animate(0);
 
