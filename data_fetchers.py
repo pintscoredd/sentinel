@@ -1167,6 +1167,31 @@ def generate_recommendation(chain, spx_metrics, vix_data):
 # ════════════════════════════════════════════════════════════════════
 
 # ── Symbol mapping: callers pass "BTCUSDT" / "ETHUSDT" style keys ──
+
+with st.expander("🔧 API DEBUG — click to diagnose", expanded=True):
+    import requests as _req
+    tests = [
+        ("Binance trades",    "https://api.binance.com/api/v3/trades?symbol=BTCUSDT&limit=5"),
+        ("Binance funding",   "https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT"),
+        ("Binance OI",        "https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT"),
+        ("Binance liqs",      "https://fapi.binance.com/fapi/v1/allForceOrders?symbol=BTCUSDT&limit=5"),
+        ("CoinGecko exch",    "https://api.coingecko.com/api/v3/exchanges?per_page=3&page=1"),
+    ]
+    for name, url in tests:
+        try:
+            r = _req.get(url, timeout=6, headers={"User-Agent": "Mozilla/5.0"})
+            st.markdown(
+                f'<div style="font-family:monospace;font-size:10px;padding:3px 0">'
+                f'<span style="color:{"#00CC44" if r.status_code==200 else "#FF4444"}">'
+                f'{"✓" if r.status_code==200 else "✗"} {name}</span> '
+                f'— HTTP {r.status_code} — {str(r.text[:120])}</div>',
+                unsafe_allow_html=True)
+        except Exception as e:
+            st.markdown(
+                f'<div style="font-family:monospace;font-size:10px;padding:3px 0">'
+                f'<span style="color:#FF4444">✗ {name} — EXCEPTION: {e}</span></div>',
+                unsafe_allow_html=True) 
+            
 _COINBASE_PRODUCT_MAP = {
     "BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD",
     "SOLUSDT": "SOL-USD", "BNBUSDT": "BNB-USD",
