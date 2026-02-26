@@ -314,30 +314,15 @@ _POLY_OUTCOME_SUFFIX = re.compile(
     re.IGNORECASE
 )
 
-def poly_url(m):
-    """Build correct Polymarket URL — strip outcome suffixes from slug."""
-    slug = m.get("slug", "") or ""
-    cond = m.get("conditionId", "") or ""
-    evt_slug = m.get("eventSlug", "") or ""
-
-    def clean(s):
-        return s.strip().strip("/")
-
-    def strip_outcome(s):
-        """Strip outcome suffixes like -yes, -no, -1t from slug."""
-        s = clean(s)
-        return _POLY_OUTCOME_SUFFIX.sub('', s)
-
-    if evt_slug:
-        return f"https://polymarket.com/event/{strip_outcome(evt_slug)}"
+def poly_url(evt):
+    """Build correct Polymarket event URL from an event object."""
+    slug = evt.get("slug", "") or ""
     if slug:
-        return f"https://polymarket.com/event/{strip_outcome(slug)}"
-    if cond:
-        return f"https://polymarket.com/market/{clean(cond)}"
-    # Last resort: build slug from question title
-    q = m.get("question", "") or ""
-    if q:
-        auto_slug = re.sub(r'[^a-z0-9]+', '-', q.lower())[:60].strip('-')
+        return f"https://polymarket.com/event/{slug.strip().strip('/')}"
+    # Fallback: try title
+    title = evt.get("title", "") or evt.get("question", "") or ""
+    if title:
+        auto_slug = re.sub(r'[^a-z0-9]+', '-', title.lower())[:60].strip('-')
         if auto_slug:
             return f"https://polymarket.com/event/{auto_slug}"
     return "https://polymarket.com"
@@ -373,59 +358,84 @@ def unusual_side(m):
     except:
         return None, None
 
-def render_poly_card(m, show_unusual=False):
-    raw_title = m.get("question", m.get("title", "Unknown")) or "Unknown"
+def _extract_participants(evt, limit=5):
+    """Extract top participants from an event's nested markets array.
+    Each market's outcomePrices[0] is the 'Yes' probability for that participant.
+    Returns [(name, probability_float), ...] sorted by probability desc, limited to `limit`.
+    """
+    markets = evt.get("markets", [])
+    if not markets:
+        return []
+    participants = []
+    for mk in markets:
+        name = mk.get("groupItemTitle") or mk.get("question", "")[:40]
+        prices = _parse_poly_field(mk.get("outcomePrices", []))
+        p = _safe_float(prices[0]) if prices else 0.0
+        participants.append((name, p))
+    participants.sort(key=lambda x: x[1], reverse=True)
+    return participants[:limit]
+
+
+def render_poly_card(evt, show_unusual=False):
+    """Render a Polymarket event card with up to 5 participants and their probabilities."""
+    raw_title = evt.get("title", evt.get("question", "Unknown")) or "Unknown"
     title_esc = _esc(raw_title[:100])
-    url = poly_url(m)
-    v24 = _safe_float(m.get("volume24hr", 0))
-    vtot = _safe_float(m.get("volume", 0))
-    status_lbl, status_cls = poly_status(m)
+    url = poly_url(evt)
+    v24 = _safe_float(evt.get("volume24hr", 0))
+    vtot = _safe_float(evt.get("volume", 0))
+    status_lbl, status_cls = poly_status(evt)
     t_html = f'<a href="{url}" target="_blank">{title_esc}</a>'
 
-    outcomes = _parse_poly_field(m.get("outcomes", []))
-    out_prices = _parse_poly_field(m.get("outcomePrices", []))
-
-    winner_idx = None
     is_settled = status_lbl in ("RESOLVED", "CLOSED")
-    if is_settled and out_prices:
-        prices_f = [_safe_float(p) for p in out_prices]
-        if prices_f:
-            max_p = max(prices_f)
-            if max_p >= 0.95:
-                winner_idx = prices_f.index(max_p)
+
+    # Extract participants from nested markets
+    participants = _extract_participants(evt, limit=5)
 
     prob_rows = ""
-    if outcomes and out_prices:
-        try:
+    if participants:
+        # Multi-participant event (e.g., "Who will be Fed Chair?")
+        for name, p_raw in participants:
+            p = max(0.0, min(100.0, p_raw * 100))
+            bar_c = "#00CC44" if p >= 50 else ("#FF8C00" if p >= 20 else "#FF4444")
+            is_winner = is_settled and p_raw >= 0.95
+            winner_tag = (f' &nbsp;<span style="background:#00CC44;color:#000;'
+                          f'font-size:9px;font-weight:700;padding:1px 5px">✓ WINNER</span>'
+                          if is_winner else "")
+            outcome_name = _esc(str(name)[:35])
+            prob_rows += (
+                f'<div style="display:flex;align-items:center;gap:8px;margin-top:5px">'
+                f'<span style="color:{bar_c};font-size:11px;min-width:44px;font-weight:700">{p:.0f}%</span>'
+                f'<span style="color:#AAA;font-size:10px;flex:1">{outcome_name}{winner_tag}</span>'
+                f'<div style="width:160px;height:5px;background:#1A1A1A;border-radius:1px;overflow:hidden">'
+                f'<div style="width:{min(p, 100):.0f}%;height:100%;background:{bar_c};border-radius:1px"></div>'
+                f'</div></div>')
+    else:
+        # Fallback: simple binary Yes/No from the event's own outcomes
+        outcomes = _parse_poly_field(evt.get("outcomes", []))
+        out_prices = _parse_poly_field(evt.get("outcomePrices", []))
+        if outcomes and out_prices:
             for i, outcome in enumerate(outcomes[:2]):
                 if i >= len(out_prices): break
                 p = max(0.0, min(100.0, _safe_float(out_prices[i]) * 100))
                 bar_c = "#00CC44" if p >= 50 else "#FF4444"
-                is_winner = (winner_idx == i)
-                winner_tag = (f' &nbsp;<span style="background:#00CC44;color:#000;'
-                              f'font-size:9px;font-weight:700;padding:1px 5px">✓ WINNER</span>'
-                              if is_winner else "")
                 outcome_name = _esc(str(outcome)[:30])
                 prob_rows += (
-                    f'<div style="display:flex;align-items:center;gap:8px;margin-top:6px">'
+                    f'<div style="display:flex;align-items:center;gap:8px;margin-top:5px">'
                     f'<span style="color:{bar_c};font-size:11px;min-width:44px;font-weight:700">{p:.0f}%</span>'
-                    f'<span style="color:#888;font-size:10px;flex:1">{outcome_name}{winner_tag}</span>'
-                    f'<div style="width:180px;height:5px;background:#1A1A1A;border-radius:1px;overflow:hidden">'
+                    f'<span style="color:#888;font-size:10px;flex:1">{outcome_name}</span>'
+                    f'<div style="width:160px;height:5px;background:#1A1A1A;border-radius:1px;overflow:hidden">'
                     f'<div style="width:{p:.0f}%;height:100%;background:{bar_c};border-radius:1px"></div>'
                     f'</div></div>')
-        except:
-            pass
 
     unusual_html = ""
     if show_unusual:
-        side, side_cls = unusual_side(m)
         ratio = v24 / vtot * 100 if vtot > 0 else 0
-        if side:
-            unusual_html = (f'<div style="margin-top:5px;padding:3px 6px;background:rgba(255,102,0,0.08);border-left:2px solid #FF6600">'
-                            f'⚡ Unusual volume favoring <span class="{side_cls}">{side}</span>'
-                            f' &nbsp;({ratio:.0f}% of total in 24h)</div>')
+        unusual_html = (f'<div style="margin-top:5px;padding:3px 6px;background:rgba(255,102,0,0.08);border-left:2px solid #FF6600">'
+                        f'⚡ Unusual volume ({ratio:.0f}% of total in 24h)</div>')
 
     vol_str = f"24H: ${v24:,.0f} &nbsp;|&nbsp; TOTAL: ${vtot:,.0f}"
+    n_markets = len(evt.get("markets", []))
+    count_str = f" &nbsp;·&nbsp; {n_markets} markets" if n_markets > 1 else ""
 
     return (f'<div class="poly-card">'
             f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:2px">'
@@ -433,7 +443,7 @@ def render_poly_card(m, show_unusual=False):
             f'<span class="{status_cls}" style="margin-left:8px;white-space:nowrap">{status_lbl}</span>'
             f'</div>'
             f'{prob_rows}{unusual_html}'
-            f'<div style="color:#444;font-size:10px;margin-top:6px;letter-spacing:0.5px">{vol_str}</div>'
+            f'<div style="color:#444;font-size:10px;margin-top:6px;letter-spacing:0.5px">{vol_str}{count_str}</div>'
             f'</div>')
 
 # ════════════════════════════════════════════════════════════════════
