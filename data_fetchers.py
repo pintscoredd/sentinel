@@ -1162,3 +1162,179 @@ def generate_recommendation(chain, spx_metrics, vix_data):
     }
 
 
+# ════════════════════════════════════════════════════════════════════
+# CRYPTO WHALE FLOWS & ON-CHAIN DATA
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=120)
+def get_whale_trades(symbol="BTCUSDT", min_usd=500_000):
+    """Binance public trades — filter for whale-size orders (≥ min_usd).
+    Returns top 25 by USD value descending.
+    """
+    try:
+        r = requests.get(
+            "https://api.binance.com/api/v3/trades",
+            params={"symbol": symbol, "limit": 1000},
+            timeout=10,
+        )
+        r.raise_for_status()
+        trades = r.json()
+        result = []
+        for t in trades:
+            price = float(t.get("price", 0))
+            qty = float(t.get("qty", 0))
+            usd = price * qty
+            if usd < min_usd:
+                continue
+            # isBuyerMaker=True means the buyer placed a limit order (taker sold into it)
+            side = "SELL" if t.get("isBuyerMaker", False) else "BUY"
+            ts = t.get("time", 0)
+            from datetime import datetime, timezone
+            time_str = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%H:%M:%S") if ts else ""
+            result.append({
+                "time": time_str,
+                "side": side,
+                "qty": round(qty, 4),
+                "usd": round(usd, 2),
+                "price": round(price, 2),
+            })
+        result.sort(key=lambda x: x["usd"], reverse=True)
+        return result[:25]
+    except:
+        return []
+
+
+@st.cache_data(ttl=300)
+def get_exchange_netflow():
+    """CoinGecko public exchanges — top 10 by BTC volume with trust score."""
+    try:
+        r = requests.get(
+            "https://api.coingecko.com/api/v3/exchanges",
+            params={"per_page": 10, "page": 1},
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json()
+        result = []
+        for ex in data:
+            result.append({
+                "name": ex.get("name", ""),
+                "btc_vol_24h": float(ex.get("trade_volume_24h_btc", 0) or 0),
+                "trust_score": int(ex.get("trust_score", 0) or 0),
+            })
+        result.sort(key=lambda x: x["btc_vol_24h"], reverse=True)
+        return result
+    except:
+        return []
+
+
+_FUNDING_COINS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+                   "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "MATICUSDT", "ADAUSDT"]
+
+@st.cache_data(ttl=120)
+def get_funding_rates():
+    """Binance Futures premiumIndex — funding rates for top 10 coins."""
+    try:
+        r = requests.get(
+            "https://fapi.binance.com/fapi/v1/premiumIndex",
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json()
+        lookup = {d["symbol"]: d for d in data if d.get("symbol") in _FUNDING_COINS}
+        result = []
+        for sym in _FUNDING_COINS:
+            d = lookup.get(sym)
+            if not d:
+                continue
+            rate = float(d.get("lastFundingRate", 0) or 0)
+            mark = float(d.get("markPrice", 0) or 0)
+            result.append({
+                "symbol": sym.replace("USDT", ""),
+                "rate_pct": round(rate * 100, 4),
+                "rate_ann": round(rate * 100 * 3 * 365, 2),
+                "mark_price": round(mark, 2),
+            })
+        return result
+    except:
+        return []
+
+
+_OI_COINS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "AVAXUSDT"]
+
+@st.cache_data(ttl=120)
+def get_open_interest():
+    """Binance Futures open interest per coin, enriched with mark price for USD value."""
+    try:
+        result = []
+        # Get mark prices in one call
+        pi = requests.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=10)
+        pi.raise_for_status()
+        marks = {d["symbol"]: float(d.get("markPrice", 0) or 0) for d in pi.json()}
+
+        for sym in _OI_COINS:
+            try:
+                r = requests.get(
+                    "https://fapi.binance.com/fapi/v1/openInterest",
+                    params={"symbol": sym},
+                    timeout=8,
+                )
+                r.raise_for_status()
+                d = r.json()
+                oi_coins = float(d.get("openInterest", 0) or 0)
+                mark = marks.get(sym, 0)
+                oi_usd = oi_coins * mark
+                result.append({
+                    "symbol": sym.replace("USDT", ""),
+                    "oi_coins": round(oi_coins, 4),
+                    "oi_usd": round(oi_usd, 2),
+                })
+            except:
+                continue
+        result.sort(key=lambda x: x["oi_usd"], reverse=True)
+        return result
+    except:
+        return []
+
+
+_LIQ_COINS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"]
+
+@st.cache_data(ttl=180)
+def get_liquidations():
+    """Binance Futures forced liquidation orders.
+    NOTE: /fapi/v1/allForceOrders may return 403 based on region/IP.
+    Returns empty dict gracefully on any error.
+    """
+    result = {}
+    for sym in _LIQ_COINS:
+        coin = sym.replace("USDT", "")
+        try:
+            r = requests.get(
+                "https://fapi.binance.com/fapi/v1/allForceOrders",
+                params={"symbol": sym, "limit": 200},
+                timeout=10,
+            )
+            # Graceful fallback on 403 / any HTTP error
+            if r.status_code == 403:
+                result[coin] = {"long_liq": 0, "short_liq": 0, "total": 0}
+                continue
+            r.raise_for_status()
+            orders = r.json()
+            long_liq = 0.0
+            short_liq = 0.0
+            for o in orders:
+                qty = float(o.get("price", 0) or 0) * float(o.get("origQty", 0) or 0)
+                side = o.get("side", "")
+                # SELL side = long position liquidated, BUY side = short position liquidated
+                if side == "SELL":
+                    long_liq += qty
+                elif side == "BUY":
+                    short_liq += qty
+            result[coin] = {
+                "long_liq": round(long_liq, 2),
+                "short_liq": round(short_liq, 2),
+                "total": round(long_liq + short_liq, 2),
+            }
+        except:
+            result[coin] = {"long_liq": 0, "short_liq": 0, "total": 0}
+    return result
