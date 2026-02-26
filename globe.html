@@ -1,456 +1,111 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8">
   <title>SENTINEL GEO</title>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-      font-family: 'Courier New', monospace;
-    }
-
-    html,
-    body {
-      background: #000;
-      color: #d0d3d8;
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-    }
-
-    #c {
-      display: block;
-      position: absolute;
-      top: 0;
-      left: 170px;
-      width: calc(100% - 385px);
-      height: 100%;
-    }
+    * { margin:0; padding:0; box-sizing:border-box; font-family:'Courier New',monospace; }
+    html,body { background:#000; color:#d0d3d8; width:100%; height:100%; overflow:hidden; }
+    #c { display:block; position:absolute; top:0; left:170px; width:calc(100% - 385px); height:100%; }
 
     /* Header */
-    #hdr {
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      z-index: 20;
-      background: linear-gradient(180deg, rgba(0, 0, 0, .95) 0%, transparent 100%);
-      padding: 6px 12px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      pointer-events: none;
-    }
-
-    #logo {
-      color: #FF6600;
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 3px;
-    }
-
-    #hst {
-      font-size: 9px;
-      color: #444;
-      display: flex;
-      gap: 10px;
-    }
-
-    .hd {
-      display: inline-block;
-      width: 5px;
-      height: 5px;
-      border-radius: 50%;
-      margin-right: 3px;
-      vertical-align: middle;
-    }
-
-    .hg {
-      background: #00CC44;
-      animation: pb 2s infinite;
-    }
-
-    .ha {
-      background: #FF6600;
-    }
-
-    .hr {
-      background: #FF4444;
-      animation: pb 1s infinite;
-    }
-
-    @keyframes pb {
-
-      0%,
-      100% {
-        opacity: 1
-      }
-
-      50% {
-        opacity: .2
-      }
-    }
+    #hdr { position:absolute; top:0; left:0; right:0; z-index:20; background:linear-gradient(180deg,rgba(0,0,0,.95) 0%,transparent 100%); padding:6px 12px; display:flex; justify-content:space-between; align-items:center; pointer-events:none; }
+    #logo { color:#FF6600; font-size:12px; font-weight:700; letter-spacing:3px; }
+    #hst { font-size:9px; color:#444; display:flex; gap:10px; }
+    .hd { display:inline-block; width:5px; height:5px; border-radius:50%; margin-right:3px; vertical-align:middle; }
+    .hg { background:#00CC44; animation:pb 2s infinite; }
+    .ha { background:#FF6600; }
+    .hr { background:#FF4444; animation:pb 1s infinite; }
+    @keyframes pb { 0%,100%{opacity:1} 50%{opacity:.2} }
 
     /* Filter bar */
-    #fb {
-      position: absolute;
-      left: 8px;
-      top: 42px;
-      z-index: 20;
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      pointer-events: all;
-    }
-
-    .fbtn {
-      background: rgba(0, 0, 0, .9);
-      border: 1px solid #1a1a1a;
-      color: #555;
-      font-family: 'Courier New', monospace;
-      font-size: 12px;
-      letter-spacing: 1px;
-      padding: 6px 12px;
-      cursor: pointer;
-      width: 155px;
-      text-align: left;
-      transition: all .15s;
-    }
-
-    .fbtn:hover,
-    .fbtn.on {
-      background: rgba(255, 102, 0, .12);
-      border-color: #FF6600;
-      color: #FF6600;
-    }
+    #fb { position:absolute; left:8px; top:42px; z-index:20; display:flex; flex-direction:column; gap:2px; pointer-events:all; }
+    .fbtn { background:rgba(0,0,0,.9); border:1px solid #1a1a1a; color:#555; font-family:'Courier New',monospace; font-size:12px; letter-spacing:1px; padding:6px 12px; cursor:pointer; width:155px; text-align:left; transition:all .15s; }
+    .fbtn:hover,.fbtn.on { background:rgba(255,102,0,.12); border-color:#FF6600; color:#FF6600; }
+    .fbtn.sat-on { background:rgba(0,255,255,.08); border-color:#00FFFF; color:#00FFFF; }
+    .fbtn.flt-on { background:rgba(255,220,0,.08); border-color:#FFDD00; color:#FFDD00; }
+    .fbtn-sep { height:1px; background:#1a1a1a; margin:3px 0; }
 
     /* Theater panel */
-    #tp {
-      position: absolute;
-      right: 0;
-      top: 42px;
-      width: 215px;
-      background: rgba(0, 0, 0, .96);
-      border: 1px solid #222;
-      border-right: none;
-      z-index: 20;
-    }
-
-    .tph {
-      padding: 8px 11px;
-      font-size: 11px;
-      letter-spacing: 2px;
-      color: #FF6600;
-      border-bottom: 1px solid #222;
-      font-weight: 700;
-    }
-
-    .tpi {
-      padding: 10px 11px;
-      border-bottom: 1px solid #151515;
-      cursor: pointer;
-      transition: all .15s;
-      border-left: 3px solid transparent;
-      pointer-events: all;
-    }
-
-    .tpi:hover {
-      background: rgba(255, 102, 0, .1);
-      border-left-color: #FF6600;
-    }
-
-    .tpn {
-      font-size: 13px;
-      color: #ddd;
-      font-weight: 700;
-    }
-
-    .tps {
-      font-size: 11px;
-      margin-top: 2px;
-      font-weight: 700;
-      letter-spacing: 1px;
-    }
-
-    .tc {
-      color: #FF4444;
-    }
-
-    .te {
-      color: #FF8C00;
-    }
-
-    .tw {
-      color: #FFCC00;
-    }
+    #tp { position:absolute; right:0; top:42px; width:215px; background:rgba(0,0,0,.96); border:1px solid #222; border-right:none; z-index:20; }
+    .tph { padding:8px 11px; font-size:11px; letter-spacing:2px; color:#FF6600; border-bottom:1px solid #222; font-weight:700; }
+    .tpi { padding:10px 11px; border-bottom:1px solid #151515; cursor:pointer; transition:all .15s; border-left:3px solid transparent; pointer-events:all; }
+    .tpi:hover { background:rgba(255,102,0,.1); border-left-color:#FF6600; }
+    .tpn { font-size:13px; color:#ddd; font-weight:700; }
+    .tps { font-size:11px; margin-top:2px; font-weight:700; letter-spacing:1px; }
+    .tc { color:#FF4444; } .te { color:#FF8C00; } .tw { color:#FFCC00; }
 
     /* Info card popup */
-    #ic {
-      position: absolute;
-      z-index: 50;
-      background: rgba(0, 0, 2, .98);
-      border: 1px solid #2a2a2a;
-      border-left: 4px solid #FF6600;
-      padding: 15px 17px;
-      width: 300px;
-      display: none;
-      box-shadow: 0 10px 40px rgba(0, 0, 0, .9);
-    }
+    #ic { position:absolute; z-index:50; background:rgba(0,0,2,.98); border:1px solid #2a2a2a; border-left:4px solid #FF6600; padding:15px 17px; width:300px; display:none; box-shadow:0 10px 40px rgba(0,0,0,.9); }
+    #ic.show { display:block; }
+    #ic.critical { border-left-color:#FF4444; }
+    #ic.elevated { border-left-color:#FF6600; }
+    #ic.watch { border-left-color:#FFCC00; }
+    #ic.satellite { border-left-color:#00FFFF; }
+    #ic.flight { border-left-color:#FFDD00; }
+    #ic-close { position:absolute; top:7px; right:9px; cursor:pointer; color:#444; font-size:16px; line-height:1; transition:color .15s; }
+    #ic-close:hover { color:#FF6600; }
+    .icl { font-size:8px; letter-spacing:2px; color:#444; margin-bottom:4px; text-transform:uppercase; }
+    .ict { font-size:14px; font-weight:700; color:#fff; margin-bottom:7px; line-height:1.35; }
+    .icb { font-size:11px; color:#999; line-height:1.75; }
+    .icm { color:#00AAFF; margin-top:7px; font-size:11px; font-weight:600; }
+    .ictags { margin-top:7px; display:flex; gap:3px; flex-wrap:wrap; }
+    .ictag { font-size:8px; padding:1px 5px; border:1px solid #252525; color:#555; letter-spacing:1px; }
+    #ic-date { color:#555; font-size:9px; margin-top:6px; letter-spacing:1px; }
+    #ic-track-btn { margin-top:9px; width:100%; padding:5px; font-family:'Courier New',monospace; font-size:9px; letter-spacing:1px; cursor:pointer; border:1px solid #00FFFF; background:rgba(0,255,255,.08); color:#00FFFF; transition:all .15s; display:none; }
+    #ic-track-btn:hover { background:rgba(0,255,255,.2); }
+    #ic-track-btn.flt { border-color:#FFDD00; background:rgba(255,220,0,.08); color:#FFDD00; }
+    #ic-track-btn.flt:hover { background:rgba(255,220,0,.2); }
 
-    #ic.show {
-      display: block;
-    }
+    /* Tracking bar */
+    #trackbar { position:absolute; top:28px; left:50%; transform:translateX(-50%); z-index:25; background:rgba(0,0,0,.92); border:1px solid #00FFFF; padding:4px 14px; font-size:9px; letter-spacing:2px; color:#00FFFF; display:none; white-space:nowrap; }
+    #trackbar.flt { border-color:#FFDD00; color:#FFDD00; }
+    #trackbar-stop { margin-left:10px; cursor:pointer; color:#444; }
+    #trackbar-stop:hover { color:#FF6600; }
 
-    #ic.critical {
-      border-left-color: #FF4444;
-    }
-
-    #ic.elevated {
-      border-left-color: #FF6600;
-    }
-
-    #ic.watch {
-      border-left-color: #FFCC00;
-    }
-
-    #ic-close {
-      position: absolute;
-      top: 7px;
-      right: 9px;
-      cursor: pointer;
-      color: #444;
-      font-size: 16px;
-      line-height: 1;
-      transition: color .15s;
-    }
-
-    #ic-close:hover {
-      color: #FF6600;
-    }
-
-    .icl {
-      font-size: 8px;
-      letter-spacing: 2px;
-      color: #444;
-      margin-bottom: 4px;
-      text-transform: uppercase;
-    }
-
-    .ict {
-      font-size: 14px;
-      font-weight: 700;
-      color: #fff;
-      margin-bottom: 7px;
-      line-height: 1.35;
-    }
-
-    .icb {
-      font-size: 11px;
-      color: #999;
-      line-height: 1.75;
-    }
-
-    .icm {
-      color: #00AAFF;
-      margin-top: 7px;
-      font-size: 11px;
-      font-weight: 600;
-    }
-
-    .ictags {
-      margin-top: 7px;
-      display: flex;
-      gap: 3px;
-      flex-wrap: wrap;
-    }
-
-    .ictag {
-      font-size: 8px;
-      padding: 1px 5px;
-      border: 1px solid #252525;
-      color: #555;
-      letter-spacing: 1px;
-    }
+    /* Satellite status */
+    #satpanel { position:absolute; right:0; width:215px; background:rgba(0,0,0,.96); border:1px solid #222; border-right:none; z-index:20; display:none; }
+    .satph { padding:8px 11px; font-size:11px; letter-spacing:2px; color:#00FFFF; border-bottom:1px solid #222; font-weight:700; }
+    .satpi { padding:7px 11px; border-bottom:1px solid #111; cursor:pointer; transition:all .15s; border-left:3px solid transparent; }
+    .satpi:hover { background:rgba(0,255,255,.07); border-left-color:#00FFFF; }
+    .satpn { font-size:11px; color:#bbb; }
+    .satps { font-size:9px; color:#00FFFF; margin-top:1px; letter-spacing:1px; }
 
     /* Add event */
-    #addbtn {
-      position: absolute;
-      right: 225px;
-      bottom: 42px;
-      z-index: 20;
-      background: rgba(255, 102, 0, .1);
-      border: 1px solid #FF6600;
-      color: #FF6600;
-      font-family: 'Courier New', monospace;
-      font-size: 9px;
-      padding: 4px 10px;
-      cursor: pointer;
-      letter-spacing: 1px;
-    }
-
-    #addbtn:hover {
-      background: rgba(255, 102, 0, .2);
-    }
-
-    #adddlg {
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
-      background: #060606;
-      border: 1px solid #FF6600;
-      padding: 18px;
-      width: 320px;
-      z-index: 60;
-      display: none;
-    }
-
-    #adddlg.show {
-      display: block;
-    }
-
-    #adddlg h3 {
-      color: #FF6600;
-      font-size: 10px;
-      letter-spacing: 2px;
-      margin-bottom: 12px;
-    }
-
-    #adddlg label {
-      font-size: 9px;
-      color: #666;
-      display: block;
-      margin-bottom: 2px;
-      letter-spacing: 1px;
-    }
-
-    #adddlg input,
-    #adddlg select,
-    #adddlg textarea {
-      width: 100%;
-      background: #000;
-      border: 1px solid #1a1a1a;
-      color: #ccc;
-      font-family: 'Courier New', monospace;
-      font-size: 10px;
-      padding: 4px 7px;
-      margin-bottom: 8px;
-    }
-
-    .dbtns {
-      display: flex;
-      gap: 7px;
-      margin-top: 3px;
-    }
-
-    .dbok {
-      flex: 1;
-      padding: 5px;
-      font-family: 'Courier New', monospace;
-      font-size: 9px;
-      cursor: pointer;
-      border: 1px solid #FF6600;
-      background: rgba(255, 102, 0, .15);
-      color: #FF6600;
-    }
-
-    .dbcancel {
-      flex: 1;
-      padding: 5px;
-      font-family: 'Courier New', monospace;
-      font-size: 9px;
-      cursor: pointer;
-      border: 1px solid #1a1a1a;
-      background: transparent;
-      color: #555;
-    }
+    #addbtn { position:absolute; right:225px; bottom:42px; z-index:20; background:rgba(255,102,0,.1); border:1px solid #FF6600; color:#FF6600; font-family:'Courier New',monospace; font-size:9px; padding:4px 10px; cursor:pointer; letter-spacing:1px; }
+    #addbtn:hover { background:rgba(255,102,0,.2); }
+    #adddlg { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); background:#060606; border:1px solid #FF6600; padding:18px; width:320px; z-index:60; display:none; }
+    #adddlg.show { display:block; }
+    #adddlg h3 { color:#FF6600; font-size:10px; letter-spacing:2px; margin-bottom:12px; }
+    #adddlg label { font-size:9px; color:#666; display:block; margin-bottom:2px; letter-spacing:1px; }
+    #adddlg input,#adddlg select,#adddlg textarea { width:100%; background:#000; border:1px solid #1a1a1a; color:#ccc; font-family:'Courier New',monospace; font-size:10px; padding:4px 7px; margin-bottom:8px; }
+    .dbtns { display:flex; gap:7px; margin-top:3px; }
+    .dbok { flex:1; padding:5px; font-family:'Courier New',monospace; font-size:9px; cursor:pointer; border:1px solid #FF6600; background:rgba(255,102,0,.15); color:#FF6600; }
+    .dbcancel { flex:1; padding:5px; font-family:'Courier New',monospace; font-size:9px; cursor:pointer; border:1px solid #1a1a1a; background:transparent; color:#555; }
 
     /* Status bar */
-    #sb {
-      position: absolute;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      padding: 3px 12px;
-      display: flex;
-      justify-content: space-between;
-      background: linear-gradient(0deg, rgba(0, 0, 0, .95) 0%, transparent 100%);
-      z-index: 20;
-      font-size: 8px;
-      letter-spacing: 1px;
-      color: #2a2a2a;
-      pointer-events: none;
-    }
+    #sb { position:absolute; bottom:0; left:0; right:0; padding:3px 12px; display:flex; justify-content:space-between; background:linear-gradient(0deg,rgba(0,0,0,.95) 0%,transparent 100%); z-index:20; font-size:8px; letter-spacing:1px; color:#2a2a2a; pointer-events:none; }
 
     /* Tooltip */
-    #tt {
-      position: absolute;
-      z-index: 30;
-      background: rgba(0, 0, 0, .92);
-      border: 1px solid #FF6600;
-      padding: 3px 7px;
-      font-size: 9px;
-      color: #FF8C00;
-      display: none;
-      pointer-events: none;
-      white-space: nowrap;
-    }
+    #tt { position:absolute; z-index:30; background:rgba(0,0,0,.92); border:1px solid #FF6600; padding:3px 7px; font-size:9px; color:#FF8C00; display:none; pointer-events:none; white-space:nowrap; }
+    #tt.sat { border-color:#00FFFF; color:#00FFFF; }
+    #tt.flt { border-color:#FFDD00; color:#FFDD00; }
 
     /* Loader */
-    #ls {
-      position: absolute;
-      inset: 0;
-      background: #000005;
-      z-index: 100;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-direction: column;
-      gap: 12px;
-    }
+    #ls { position:absolute; inset:0; background:#000005; z-index:100; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:12px; }
+    #ls.gone { display:none; }
+    .lt { color:#FF6600; font-size:10px; letter-spacing:4px; animation:pb 1.5s infinite; }
+    .lb { width:180px; height:2px; background:#111; overflow:hidden; }
+    .lb::after { content:''; display:block; width:40%; height:100%; background:#FF6600; animation:sl 1.1s linear infinite; }
+    @keyframes sl { 0%{transform:translateX(-100%)} 100%{transform:translateX(350%)} }
 
-    #ls.gone {
-      display: none;
-    }
-
-    .lt {
-      color: #FF6600;
-      font-size: 10px;
-      letter-spacing: 4px;
-      animation: pb 1.5s infinite;
-    }
-
-    .lb {
-      width: 180px;
-      height: 2px;
-      background: #111;
-      overflow: hidden;
-    }
-
-    .lb::after {
-      content: '';
-      display: block;
-      width: 40%;
-      height: 100%;
-      background: #FF6600;
-      animation: sl 1.1s linear infinite;
-    }
-
-    @keyframes sl {
-      0% {
-        transform: translateX(-100%)
-      }
-
-      100% {
-        transform: translateX(350%)
-      }
-    }
+    /* Loading badges */
+    .layer-status { position:absolute; bottom:14px; left:180px; z-index:25; display:flex; gap:6px; pointer-events:none; }
+    .ls-badge { font-size:8px; letter-spacing:1px; padding:2px 6px; border:1px solid #1a1a1a; color:#333; }
+    .ls-badge.active { border-color:#00FFFF; color:#00FFFF; }
+    .ls-badge.flt-active { border-color:#FFDD00; color:#FFDD00; }
   </style>
 </head>
-
 <body>
   <div id="ls">
     <div style="color:#FF6600;font-size:18px;font-weight:900;letter-spacing:5px">⚡ SENTINEL GEO</div>
@@ -461,16 +116,24 @@
   <canvas id="c"></canvas>
 
   <div id="hdr">
-    <div><span id="logo">⚡ SENTINEL GEO</span><span style="color:#2a2a2a;font-size:8px;margin-left:10px">GEOPOLITICAL
-        INTELLIGENCE</span></div>
+    <div><span id="logo">⚡ SENTINEL GEO</span><span style="color:#2a2a2a;font-size:8px;margin-left:10px">GEOPOLITICAL INTELLIGENCE</span></div>
     <div id="hst">
       <span><span class="hd hg"></span>LIVE</span>
       <span><span class="hd hg"></span>GDELT</span>
       <span><span class="hd ha"></span>AIS</span>
+      <span id="sat-status" style="display:none"><span class="hd" style="background:#00FFFF;animation:pb 3s infinite"></span>SAT</span>
+      <span id="flt-status" style="display:none"><span class="hd" style="background:#FFDD00;animation:pb 2s infinite"></span>MIL-AIR</span>
       <span id="clk" style="color:#333"></span>
     </div>
   </div>
 
+  <!-- Tracking bar -->
+  <div id="trackbar">
+    <span id="trackbar-label">◉ TRACKING: —</span>
+    <span id="trackbar-stop" onclick="stopTracking()">✕ STOP</span>
+  </div>
+
+  <!-- Filter bar -->
   <div id="fb">
     <button class="fbtn on" onclick="setFilter('all',this)">● ALL EVENTS</button>
     <button class="fbtn" onclick="setFilter('conflict',this)">◆ CONFLICT</button>
@@ -479,12 +142,20 @@
     <button class="fbtn" onclick="setFilter('minerals',this)">⬟ MINERALS</button>
     <button class="fbtn" onclick="setFilter('trade',this)">◇ TRADE/TECH</button>
     <button class="fbtn" onclick="setFilter('custom',this)">+ MY EVENTS</button>
+    <div class="fbtn-sep"></div>
+    <button class="fbtn" id="sat-btn" onclick="toggleSatLayer(this)">◉ SATELLITES</button>
+    <button class="fbtn" id="flt-btn" onclick="toggleFlightLayer(this)">✈ MIL AIR</button>
   </div>
 
   <div id="tp">
-    <div class="tph">⚠ THEATER STATUS <span id="tp-update" style="color:#333;font-size:7px;letter-spacing:0">LIVE</span>
-    </div>
+    <div class="tph">⚠ THEATER STATUS <span id="tp-update" style="color:#333;font-size:7px;letter-spacing:0">LIVE</span></div>
     <div id="tp-items"></div>
+  </div>
+
+  <!-- Satellite quicklist panel (replaces theater panel when sats active) -->
+  <div id="satpanel">
+    <div class="satph">◉ TRACKED OBJECTS <span id="sat-count" style="color:#333;font-size:8px"></span></div>
+    <div id="sat-items" style="max-height:calc(100vh - 200px);overflow-y:auto;"></div>
   </div>
 
   <div id="ic">
@@ -494,16 +165,22 @@
     <div class="icb" id="ic-body"></div>
     <div class="icm" id="ic-mkt"></div>
     <div class="ictags" id="ic-tags"></div>
-    <div id="ic-date" style="color:#555;font-size:9px;margin-top:6px;letter-spacing:1px"></div>
+    <div id="ic-date"></div>
+    <button id="ic-track-btn" onclick="startTrackingFromCard()">◉ TRACK ORBIT</button>
   </div>
 
   <!-- Live news feed panel -->
-  <div id="newsfeed"
-    style="position:absolute;bottom:38px;left:10px;z-index:20;width:520px;font-family:'Courier New',monospace">
-    <div style="color:#FF6600;font-size:11px;letter-spacing:2px;margin-bottom:6px;font-weight:700">📡 LIVE INTEL FEED
-    </div>
+  <div id="newsfeed" style="position:absolute;bottom:38px;left:10px;z-index:20;width:520px;font-family:'Courier New',monospace">
+    <div style="color:#FF6600;font-size:11px;letter-spacing:2px;margin-bottom:6px;font-weight:700">📡 LIVE INTEL FEED</div>
     <div id="nf-items" style="font-size:13px"></div>
   </div>
+
+  <!-- Layer badges -->
+  <div class="layer-status">
+    <div class="ls-badge" id="badge-sats">◉ SATS: OFF</div>
+    <div class="ls-badge" id="badge-flt">✈ MIL-AIR: OFF</div>
+  </div>
+
   <div id="tt"></div>
 
   <button id="addbtn" onclick="document.getElementById('adddlg').classList.add('show')">＋ ADD EVENT</button>
@@ -512,8 +189,7 @@
     <label>TITLE</label><input id="ae-title" placeholder="e.g. Belarus Tensions">
     <label>LAT / LON</label>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">
-      <input id="ae-lat" placeholder="e.g. 52.0">
-      <input id="ae-lon" placeholder="e.g. 28.0">
+      <input id="ae-lat" placeholder="e.g. 52.0"><input id="ae-lon" placeholder="e.g. 28.0">
     </div>
     <label>DESCRIPTION</label><textarea id="ae-desc" rows="3" placeholder="Intel summary…"></textarea>
     <label>SEVERITY</label>
@@ -530,619 +206,962 @@
   </div>
 
   <div id="sb">
-    <div><span class="hd hr" style="display:inline-block;margin-right:4px"></span>3 CRITICAL &nbsp;<span class="hd ha"
-        style="display:inline-block;margin-right:4px;margin-left:8px"></span>4 ELEVATED</div>
+    <div><span class="hd hr" style="display:inline-block;margin-right:4px"></span>3 CRITICAL &nbsp;<span class="hd ha" style="display:inline-block;margin-right:4px;margin-left:8px"></span>4 ELEVATED</div>
     <div>DRAG TO ROTATE · SCROLL TO ZOOM · CLICK MARKERS FOR INTEL</div>
-    <div>THREE.JS · GDELT · AIS · NASA</div>
+    <div>THREE.JS · CELESTRAK · ADSBX · GDELT</div>
   </div>
 
+  <!-- satellite.js for orbital propagation -->
+  <script src="https://unpkg.com/satellite.js@4.1.3/dist/satellite.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script>
+    // ============================================================
+    // API CONFIGURATION
+    // ============================================================
+    // ADS-B Exchange (RapidAPI) — optional, for military aircraft
+    // Get key at: https://rapidapi.com/adsbexchange-adsbexchange-default/api/adsbexchange-com1
+    // Free tier available. If left blank, falls back to OpenSky (US military hex filter).
+    const ADSBX_API_KEY = ''; // <-- PASTE YOUR RAPIDAPI KEY HERE
+
+    // CelesTrak: No key needed — free public API
+    // OpenSky: No key needed — free public API (rate limited)
+    // ============================================================
+
     // ── CLOCK
     setInterval(() => {
       const d = new Date();
       const el = document.getElementById('clk');
-      if (el) el.textContent = d.toUTCString().slice(17, 25) + ' UTC';
-    }, 1000);
+      if (el) el.textContent = d.toUTCString().slice(17,25)+' UTC';
+    },1000);
 
-    // ── CANVAS SIZE (use actual canvas dimensions for correct picking)
+    // ── CANVAS SIZE
     const canvas = document.getElementById('c');
-    let CW = canvas.offsetWidth || (window.innerWidth - 385);
-    let CH = canvas.offsetHeight || window.innerHeight;
-    if (CW < 10) CW = window.innerWidth - 385;
-    if (CH < 10) CH = window.innerHeight;
+    let CW = canvas.offsetWidth||(window.innerWidth-385);
+    let CH = canvas.offsetHeight||window.innerHeight;
+    if(CW<10) CW=window.innerWidth-385;
+    if(CH<10) CH=window.innerHeight;
 
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
-    renderer.setSize(CW, CH);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const renderer = new THREE.WebGLRenderer({canvas,antialias:true,alpha:false});
+    renderer.setSize(CW,CH);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
     renderer.setClearColor(0x000003);
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(42, CW / CH, 0.1, 1000);
-    camera.position.set(0, 0, 2.65);
+    const camera = new THREE.PerspectiveCamera(42,CW/CH,0.1,1000);
+    camera.position.set(0,0,2.65);
 
-    // ── GLOBE SETUP (reduced poly for performance)
-    const globeGeo = new THREE.SphereGeometry(1, 64, 64);
+    // ── GLOBE SETUP
+    const globeGeo = new THREE.SphereGeometry(1,64,64);
     const loader = new THREE.TextureLoader();
-    let globeMesh = null;
-    let earthTex = null;
+    let globeMesh=null, earthTex=null;
 
-    // ── REALISTIC DARK OCEAN FALLBACK TEXTURE
-    function makeFallback() {
-      const cv = document.createElement('canvas');
-      cv.width = 2048; cv.height = 1024;
-      const ctx = cv.getContext('2d');
-
-      // Very dark deep ocean — near-black for maximum contrast
-      const og = ctx.createLinearGradient(0, 0, 0, 1024);
-      og.addColorStop(0, '#000308');
-      og.addColorStop(.4, '#00050c');
-      og.addColorStop(.6, '#00050c');
-      og.addColorStop(1, '#000308');
-      ctx.fillStyle = og; ctx.fillRect(0, 0, 2048, 1024);
-
-      // Subtle ocean depth variation (nearly invisible abyssal plains)
-      ctx.fillStyle = 'rgba(0,4,12,0.4)';
-      // Pacific deep
-      ctx.fillRect(850, 150, 500, 700);
-      // Atlantic deep
-      ctx.fillRect(400, 200, 120, 600);
-
-      // Continental shelf highlights (very subtle near coasts)
-      ctx.fillStyle = 'rgba(2,12,30,0.25)';
-
-      // Continents — realistic shapes
-      ctx.fillStyle = '#1d3c18';
-
-      // North America
-      const na = [
-        [290, 190, 175, 130, -.1], [245, 285, 110, 95, .05], [215, 335, 70, 58, 0],
-        [370, 270, 90, 68, -.08], [295, 150, 60, 45, .1], [260, 125, 45, 30, .05]
-      ];
-      // South America
-      const sa = [
-        [325, 475, 105, 80, .08], [298, 550, 85, 98, -.04], [308, 618, 68, 75, -.08]
-      ];
-      // Europe
-      const eu = [
-        [610, 200, 92, 68, .04], [658, 232, 62, 50, -.08], [636, 182, 52, 40, .12],
-        [590, 188, 30, 22, .05], [630, 155, 28, 18, .1], [665, 170, 22, 18, -.05]
-      ];
-      // Africa
-      const af = [
-        [628, 342, 108, 98, .03], [618, 428, 98, 108, -.04], [608, 508, 78, 88, 0], [600, 582, 58, 54, .08]
-      ];
-      // Asia
-      const as = [
-        [718, 192, 145, 108, .08], [825, 212, 128, 95, -.04], [882, 252, 108, 82, .04],
-        [925, 292, 92, 74, -.08], [968, 192, 88, 64, .08], [1015, 278, 78, 64, -.08],
-        [845, 172, 65, 54, .18], [870, 148, 48, 35, .1]
-      ];
-      // Japan
-      const jp = [[982, 228, 16, 42, .18], [992, 255, 11, 28, .18]];
-      // SE Asia
-      const sea = [[922, 375, 72, 58, .04], [962, 418, 58, 44, -.08]];
-      // Australia
-      const au = [[908, 508, 98, 65, .04], [928, 562, 74, 54, -.08]];
-      // Greenland
-      const gr = [[362, 136, 70, 48, .08], [332, 126, 44, 34, .12]];
-      // UK
-      const uk = [[592, 192, 18, 26, .08], [607, 188, 12, 20, .1]];
-      // Madagascar
-      const ma = [[660, 470, 18, 38, .1]];
-
-      [na, sa, eu, af, as, jp, sea, au, gr, uk, ma].flat().forEach(([x, y, w, h, r = 0]) => {
-        ctx.save(); ctx.translate(x, y); ctx.rotate(r);
-        ctx.beginPath(); ctx.ellipse(0, 0, w, h, 0, 0, Math.PI * 2);
-        ctx.fill(); ctx.restore();
+    function makeFallback(){
+      const cv=document.createElement('canvas'); cv.width=2048; cv.height=1024;
+      const ctx=cv.getContext('2d');
+      const og=ctx.createLinearGradient(0,0,0,1024);
+      og.addColorStop(0,'#000308'); og.addColorStop(.4,'#00050c'); og.addColorStop(.6,'#00050c'); og.addColorStop(1,'#000308');
+      ctx.fillStyle=og; ctx.fillRect(0,0,2048,1024);
+      ctx.fillStyle='#1d3c18';
+      const na=[[290,190,175,130,-.1],[245,285,110,95,.05],[215,335,70,58,0],[370,270,90,68,-.08],[295,150,60,45,.1],[260,125,45,30,.05]];
+      const sa=[[325,475,105,80,.08],[298,550,85,98,-.04],[308,618,68,75,-.08]];
+      const eu=[[610,200,92,68,.04],[658,232,62,50,-.08],[636,182,52,40,.12],[590,188,30,22,.05],[630,155,28,18,.1],[665,170,22,18,-.05]];
+      const af=[[628,342,108,98,.03],[618,428,98,108,-.04],[608,508,78,88,0],[600,582,58,54,.08]];
+      const as=[[718,192,145,108,.08],[825,212,128,95,-.04],[882,252,108,82,.04],[925,292,92,74,-.08],[968,192,88,64,.08],[1015,278,78,64,-.08],[845,172,65,54,.18],[870,148,48,35,.1]];
+      const jp=[[982,228,16,42,.18],[992,255,11,28,.18]];
+      const sea=[[922,375,72,58,.04],[962,418,58,44,-.08]];
+      const au=[[908,508,98,65,.04],[928,562,74,54,-.08]];
+      const gr=[[362,136,70,48,.08],[332,126,44,34,.12]];
+      const uk=[[592,192,18,26,.08],[607,188,12,20,.1]];
+      const ma=[[660,470,18,38,.1]];
+      [na,sa,eu,af,as,jp,sea,au,gr,uk,ma].flat().forEach(([x,y,w,h,r=0])=>{
+        ctx.save(); ctx.translate(x,y); ctx.rotate(r);
+        ctx.beginPath(); ctx.ellipse(0,0,w,h,0,0,Math.PI*2); ctx.fill(); ctx.restore();
       });
-
-      // Mountain ranges (darker green-grey)
-      ctx.fillStyle = '#162a13';
-      [[718, 208, 26, 16], [690, 220, 20, 12], [885, 222, 18, 11], [310, 230, 20, 12]].forEach(([x, y, w, h]) => {
-        ctx.beginPath(); ctx.ellipse(x, y, w, h, 0, 0, Math.PI * 2); ctx.fill();
-      });
-
-      // Deserts (pale ochre tint)
-      ctx.fillStyle = 'rgba(80,60,20,0.18)';
-      [[635, 375, 75, 48], [910, 295, 55, 38]].forEach(([x, y, w, h]) => {
-        ctx.beginPath(); ctx.ellipse(x, y, w, h, 0, 0, Math.PI * 2); ctx.fill();
-      });
-
-      // Arctic ice — bluish white
-      ctx.fillStyle = '#c0d8e8';
-      ctx.fillRect(0, 0, 2048, 18);
-      ctx.fillRect(0, 1000, 2048, 24);
-      ctx.fillStyle = 'rgba(170,200,220,0.55)';
-      ctx.fillRect(0, 18, 2048, 15);
-      ctx.fillRect(0, 985, 2048, 16);
-
+      ctx.fillStyle='#c0d8e8'; ctx.fillRect(0,0,2048,18); ctx.fillRect(0,1000,2048,24);
       return new THREE.CanvasTexture(cv);
     }
 
-    function buildGlobe() {
-      const mat = new THREE.MeshPhongMaterial({
-        map: earthTex || makeFallback(),
-        color: new THREE.Color(0x8899bb),          // Bright tint — lets blue marble show naturally
-        specular: new THREE.Color(0x334466),        // Subtle ocean reflections
-        shininess: 15,
-        emissive: new THREE.Color(0x020815),
-        emissiveIntensity: 0.08,
+    function buildGlobe(){
+      const mat=new THREE.MeshPhongMaterial({
+        map:earthTex||makeFallback(), color:new THREE.Color(0x8899bb),
+        specular:new THREE.Color(0x334466), shininess:15,
+        emissive:new THREE.Color(0x020815), emissiveIntensity:0.08,
       });
-      if (globeMesh) { scene.remove(globeMesh); if (globeMesh.material.map) globeMesh.material.map.dispose(); globeMesh.material.dispose(); }
-      globeMesh = new THREE.Mesh(globeGeo, mat);
-      scene.add(globeMesh);
+      if(globeMesh){scene.remove(globeMesh); if(globeMesh.material.map) globeMesh.material.map.dispose(); globeMesh.material.dispose();}
+      globeMesh=new THREE.Mesh(globeGeo,mat); scene.add(globeMesh);
       document.getElementById('ls').classList.add('gone');
     }
-
-    // Build immediately with fallback, upgrade if texture loads
     buildGlobe();
-    loader.load('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg',
-      t => { earthTex = t; buildGlobe(); }, undefined, () => { });
-    setTimeout(() => document.getElementById('ls').classList.add('gone'), 2000);
+    loader.load('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg',t=>{earthTex=t;buildGlobe();},undefined,()=>{});
+    setTimeout(()=>document.getElementById('ls').classList.add('gone'),2000);
 
-    // ── ATMOSPHERE — single dark navy glow (reduced from 2 layers)
-    const atm1 = new THREE.MeshPhongMaterial({ color: 0x000d1f, transparent: true, opacity: 0.10, side: THREE.FrontSide, depthWrite: false, blending: THREE.AdditiveBlending });
-    scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.02, 32, 32), atm1));
-    // Grid overlay
-    scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.001, 24, 12), new THREE.MeshBasicMaterial({ color: 0x000a14, wireframe: true, transparent: true, opacity: 0.025 })));
+    // ── ATMOSPHERE
+    scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.02,32,32),new THREE.MeshPhongMaterial({color:0x000d1f,transparent:true,opacity:0.10,side:THREE.FrontSide,depthWrite:false,blending:THREE.AdditiveBlending})));
+    scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.001,24,12),new THREE.MeshBasicMaterial({color:0x000a14,wireframe:true,transparent:true,opacity:0.025})));
 
-    // ── LIGHTING — bright natural earth
-    scene.add(new THREE.AmbientLight(0x334455, 1.2));           // Strong ambient for visibility
-    const sun = new THREE.DirectionalLight(0xfff8ee, 2.5);      // Bright warm sun
-    sun.position.set(6, 2, 4); scene.add(sun);
-    const fill = new THREE.DirectionalLight(0x2a3a50, 0.8);     // Strong fill for dark side
-    fill.position.set(-6, -2, -4); scene.add(fill);
-    const rim = new THREE.DirectionalLight(0x2a3545, 0.6);      // Rim light
-    rim.position.set(-2, 1, -5); scene.add(rim);
+    // ── LIGHTING
+    scene.add(new THREE.AmbientLight(0x334455,1.2));
+    const sun=new THREE.DirectionalLight(0xfff8ee,2.5); sun.position.set(6,2,4); scene.add(sun);
+    const fill=new THREE.DirectionalLight(0x2a3a50,0.8); fill.position.set(-6,-2,-4); scene.add(fill);
+    const rim=new THREE.DirectionalLight(0x2a3545,0.6); rim.position.set(-2,1,-5); scene.add(rim);
 
     // ── STARS
-    const sg = new THREE.BufferGeometry(), sp = [], sc = [];
-    for (let i = 0; i < 2000; i++) {
-      const th = Math.random() * Math.PI * 2, ph = Math.acos(2 * Math.random() - 1), r = 65 + Math.random() * 85;
-      sp.push(r * Math.sin(ph) * Math.cos(th), r * Math.cos(ph), r * Math.sin(ph) * Math.sin(th));
-      const t = Math.random();
-      if (t < .08) sc.push(.6, .6, 1.0);       // blue giants
-      else if (t < .16) sc.push(1.0, .85, .6); // yellow
-      else if (t < .20) sc.push(1.0, .6, .5);  // red dwarf
-      else sc.push(.4, .45, .55);            // white-grey
+    const sg=new THREE.BufferGeometry(), sp=[], sc=[];
+    for(let i=0;i<2000;i++){
+      const th=Math.random()*Math.PI*2, ph=Math.acos(2*Math.random()-1), r=65+Math.random()*85;
+      sp.push(r*Math.sin(ph)*Math.cos(th),r*Math.cos(ph),r*Math.sin(ph)*Math.sin(th));
+      const t=Math.random();
+      if(t<.08) sc.push(.6,.6,1.0); else if(t<.16) sc.push(1.0,.85,.6); else if(t<.20) sc.push(1.0,.6,.5); else sc.push(.4,.45,.55);
     }
-    sg.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3));
-    sg.setAttribute('color', new THREE.Float32BufferAttribute(sc, 3));
-    scene.add(new THREE.Points(sg, new THREE.PointsMaterial({ size: .11, vertexColors: true })));
+    sg.setAttribute('position',new THREE.Float32BufferAttribute(sp,3));
+    sg.setAttribute('color',new THREE.Float32BufferAttribute(sc,3));
+    scene.add(new THREE.Points(sg,new THREE.PointsMaterial({size:.11,vertexColors:true})));
 
     // ── HOTSPOT DATA
-    const HOTSPOTS = [
-      {
-        lat: 31.5, lon: 34.8, label: 'GAZA/ISRAEL', sev: 'critical', type: 'conflict',
-        title: 'Gaza — Active Conflict Zone',
-        body: 'Ongoing operations in Gaza. Regional escalation risk via Hezbollah and IRGC proxies. US carrier strike group in Eastern Mediterranean. Iran-backed network spanning 5 countries.',
-        mkt: 'WTI (CL=F), Gold (GLD), XLE, ITA, LMT', tags: ['OIL RISK', 'IRGC', 'ESCALATION']
-      },
-      {
-        lat: 14, lon: 43, label: 'RED SEA', sev: 'critical', type: 'shipping',
-        title: 'Red Sea — Houthi Shipping Campaign',
-        body: 'Houthi ballistic/drone attacks on commercial vessels ongoing. Cape of Good Hope rerouting adds 12–14 days. Suez Canal transits down ~40%. Container rates +35% vs pre-crisis.',
-        mkt: 'Container ETFs, FDX, UPS, European CPI, XLE', tags: ['SHIPPING', 'HOUTHI', 'INFLATION']
-      },
-      {
-        lat: 26.5, lon: 56, label: 'HORMUZ', sev: 'elevated', type: 'energy',
-        title: 'Strait of Hormuz — IRGC Naval Ops',
-        body: "20% of global oil transits Hormuz daily. IRGC elevated naval presence. Lloyd's war risk premiums +300%. Tanker insurance spiking sharply.",
-        mkt: "WTI (CL=F), Brent, XLE, Airline margins", tags: ["20% GLOBAL OIL", "IRAN", "IRGC"]
-      },
-      {
-        lat: 25, lon: 121, label: 'TAIWAN', sev: 'elevated', type: 'trade',
-        title: 'Taiwan Strait — PLA Military Posture',
-        body: 'PLA conducting regular exercises near median line. TSMC produces 90%+ of advanced chips <5nm. US carrier groups in Western Pacific. AUKUS submarine deliveries accelerating.',
-        mkt: 'SMH, NVDA, AAPL supply chain, SOXX, TSM', tags: ['TSMC', 'SEMICONDUCTORS', 'PLA']
-      },
-      {
-        lat: 49, lon: 31, label: 'UKRAINE', sev: 'critical', type: 'conflict',
-        title: 'Ukraine — Active War Theater',
-        body: 'Frontline active across 1,000km line. Russia targeting power/energy infrastructure. NATO Patriot deployments expanding. Grain corridor disrupted.',
-        mkt: 'NG=F (natgas), ZW=F (wheat), European banks, Defense ETFs', tags: ['NATGAS', 'GRAIN', 'NATO']
-      },
-      {
-        lat: 14, lon: 2, label: 'SAHEL', sev: 'elevated', type: 'minerals',
-        title: 'Sahel — Coups & Critical Minerals',
-        body: 'Coup governments in Mali, Niger, Burkina Faso. French forces withdrawn. Wagner/Africa Corps active. Chinese mining rights expanding in gold/lithium zones.',
-        mkt: 'GDX, SIL, LIT, gold futures', tags: ['GOLD', 'LITHIUM', 'WAGNER']
-      },
-      {
-        lat: -5, lon: 23.5, label: 'DRC/COBALT', sev: 'elevated', type: 'minerals',
-        title: 'DRC — Cobalt Supply Chain',
-        body: 'DRC produces ~70% of world cobalt. M23 rebels active near Goma. Eastern DRC conflict threatening mining operations. Chinese firms control ~80% of processing capacity.',
-        mkt: 'Cobalt, TSLA supply chain, ALB, SQM, LIT', tags: ['70% COBALT', 'EV', 'M23']
-      },
-      {
-        lat: 12, lon: 115, label: 'S CHINA SEA', sev: 'elevated', type: 'shipping',
-        title: 'South China Sea — Territorial Disputes',
-        body: '$3T+ annual trade transits here. Philippines-China confrontations at Second Thomas Shoal escalating. Water cannon incidents. US-Philippines military exercises intensifying.',
-        mkt: 'Container shipping, Asian FX, semiconductors', tags: ['$3T TRADE', 'NAVAL', 'PHILIPPINES']
-      },
-      {
-        lat: 56, lon: 37.6, label: 'RUSSIA', sev: 'elevated', type: 'energy',
-        title: 'Russia — Energy Export Rerouting',
-        body: 'Russian oil rerouted to China/India at 15–20% discount. European LNG costs remain elevated. Sanctions enforcement tightening. Shadow fleet growing to ~500 vessels.',
-        mkt: 'European natgas, LNG stocks, UNG, XLE', tags: ['LNG', 'SANCTIONS', 'SHADOW FLEET']
-      },
-      {
-        lat: 35.6, lon: 139.7, label: 'BOJ/YEN', sev: 'watch', type: 'trade',
-        title: 'Japan — BOJ Policy & Yen Carry Trade',
-        body: 'BOJ normalizing ultra-loose policy after 3 decades. Yen carry trade unwind risk — estimated $4T+ in positions. Rate hike trajectory uncertain — global volatility trigger.',
-        mkt: 'USD/JPY, Nikkei, DXY, global bonds, TLT', tags: ['YEN CARRY', 'BOJ', 'REFLATION']
-      },
-      {
-        lat: -20, lon: 28, label: 'ZIMBABWE', sev: 'watch', type: 'minerals',
-        title: 'Zimbabwe — Lithium Export Controls',
-        body: 'Zimbabwe banned raw lithium ore exports. Chinese firms dominate local processing. EV battery supply chain implications for Tesla, BYD. ALB/SQM affected.',
-        mkt: 'LIT, ALB (Albemarle), SQM, LTHM', tags: ['LITHIUM', 'EV', 'EXPORT BAN']
-      },
-      {
-        lat: 33, lon: 44, label: 'IRAQ/IRAN', sev: 'elevated', type: 'energy',
-        title: 'Iraq — Iranian Proxy Network',
-        body: 'Iranian-backed militias targeted 160+ US facilities since Oct 2023. Iraqi oil output near record 4.3Mbpd. OPEC+ compliance and Iran nuclear talks create complex dynamics.',
-        mkt: 'WTI, Brent, XLE, OIH', tags: ['IRAN PROXIES', 'OPEC+', 'OIL']
-      },
+    const HOTSPOTS=[
+      {lat:31.5,lon:34.8,label:'GAZA/ISRAEL',sev:'critical',type:'conflict',title:'Gaza — Active Conflict Zone',body:'Ongoing operations in Gaza. Regional escalation risk via Hezbollah and IRGC proxies. US carrier strike group in Eastern Mediterranean.',mkt:'WTI (CL=F), Gold (GLD), XLE, ITA, LMT',tags:['OIL RISK','IRGC','ESCALATION']},
+      {lat:14,lon:43,label:'RED SEA',sev:'critical',type:'shipping',title:'Red Sea — Houthi Shipping Campaign',body:'Houthi ballistic/drone attacks on commercial vessels ongoing. Cape of Good Hope rerouting adds 12–14 days. Suez Canal transits down ~40%.',mkt:'Container ETFs, FDX, UPS, European CPI, XLE',tags:['SHIPPING','HOUTHI','INFLATION']},
+      {lat:26.5,lon:56,label:'HORMUZ',sev:'elevated',type:'energy',title:'Strait of Hormuz — IRGC Naval Ops',body:"20% of global oil transits Hormuz daily. IRGC elevated naval presence. Lloyd's war risk premiums +300%.",mkt:"WTI (CL=F), Brent, XLE, Airline margins",tags:["20% GLOBAL OIL","IRAN","IRGC"]},
+      {lat:25,lon:121,label:'TAIWAN',sev:'elevated',type:'trade',title:'Taiwan Strait — PLA Military Posture',body:'PLA conducting regular exercises near median line. TSMC produces 90%+ of advanced chips <5nm.',mkt:'SMH, NVDA, AAPL supply chain, SOXX, TSM',tags:['TSMC','SEMICONDUCTORS','PLA']},
+      {lat:49,lon:31,label:'UKRAINE',sev:'critical',type:'conflict',title:'Ukraine — Active War Theater',body:'Frontline active across 1,000km line. Russia targeting power/energy infrastructure. NATO Patriot deployments expanding.',mkt:'NG=F (natgas), ZW=F (wheat), European banks, Defense ETFs',tags:['NATGAS','GRAIN','NATO']},
+      {lat:14,lon:2,label:'SAHEL',sev:'elevated',type:'minerals',title:'Sahel — Coups & Critical Minerals',body:'Coup governments in Mali, Niger, Burkina Faso. Wagner/Africa Corps active. Chinese mining rights expanding.',mkt:'GDX, SIL, LIT, gold futures',tags:['GOLD','LITHIUM','WAGNER']},
+      {lat:-5,lon:23.5,label:'DRC/COBALT',sev:'elevated',type:'minerals',title:'DRC — Cobalt Supply Chain',body:'DRC produces ~70% of world cobalt. M23 rebels active near Goma.',mkt:'Cobalt, TSLA supply chain, ALB, SQM, LIT',tags:['70% COBALT','EV','M23']},
+      {lat:12,lon:115,label:'S CHINA SEA',sev:'elevated',type:'shipping',title:'South China Sea — Territorial Disputes',body:'$3T+ annual trade transits here. Philippines-China confrontations at Second Thomas Shoal escalating.',mkt:'Container shipping, Asian FX, semiconductors',tags:['$3T TRADE','NAVAL','PHILIPPINES']},
+      {lat:56,lon:37.6,label:'RUSSIA',sev:'elevated',type:'energy',title:'Russia — Energy Export Rerouting',body:'Russian oil rerouted to China/India at 15–20% discount. Shadow fleet growing to ~500 vessels.',mkt:'European natgas, LNG stocks, UNG, XLE',tags:['LNG','SANCTIONS','SHADOW FLEET']},
+      {lat:35.6,lon:139.7,label:'BOJ/YEN',sev:'watch',type:'trade',title:'Japan — BOJ Policy & Yen Carry Trade',body:'BOJ normalizing ultra-loose policy. Yen carry trade unwind risk — estimated $4T+ in positions.',mkt:'USD/JPY, Nikkei, DXY, global bonds, TLT',tags:['YEN CARRY','BOJ','REFLATION']},
+      {lat:-20,lon:28,label:'ZIMBABWE',sev:'watch',type:'minerals',title:'Zimbabwe — Lithium Export Controls',body:'Zimbabwe banned raw lithium ore exports. Chinese firms dominate local processing.',mkt:'LIT, ALB (Albemarle), SQM, LTHM',tags:['LITHIUM','EV','EXPORT BAN']},
+      {lat:33,lon:44,label:'IRAQ/IRAN',sev:'elevated',type:'energy',title:'Iraq — Iranian Proxy Network',body:'Iranian-backed militias targeted 160+ US facilities since Oct 2023. Iraqi oil output near record 4.3Mbpd.',mkt:'WTI, Brent, XLE, OIH',tags:['IRAN PROXIES','OPEC+','OIL']},
     ];
 
-    const COLORS = { critical: '#FF4444', elevated: '#FF8C00', watch: '#FFCC00' };
-    let customEvents = [], activeFilter = 'all';
-    let autoRotate = true, dragging = false, isDrag = false, dragDist = 0;
-    let prevX = 0, prevY = 0, rotX = 0, rotY = 0, targetRotX = 0, targetRotY = 0;
-    const markers = [];
+    const COLORS={critical:'#FF4444',elevated:'#FF8C00',watch:'#FFCC00'};
+    let customEvents=[],activeFilter='all';
+    let autoRotate=true,dragging=false,isDrag=false,dragDist=0;
+    let prevX=0,prevY=0,rotX=0,rotY=0,targetRotX=0,targetRotY=0;
+    const markers=[];
 
-    // ── COORDINATE CONVERSION
-    function latLonToVec3(lat, lon, r = 1.013) {
-      const phi = (90 - lat) * Math.PI / 180;
-      const theta = (lon + 180) * Math.PI / 180;
-      return new THREE.Vector3(
-        -r * Math.sin(phi) * Math.cos(theta),
-        r * Math.cos(phi),
-        r * Math.sin(phi) * Math.sin(theta)
-      );
+    function latLonToVec3(lat,lon,r=1.013){
+      const phi=(90-lat)*Math.PI/180;
+      const theta=(lon+180)*Math.PI/180;
+      return new THREE.Vector3(-r*Math.sin(phi)*Math.cos(theta),r*Math.cos(phi),r*Math.sin(phi)*Math.sin(theta));
     }
 
-    // ── MARKERS
-    // Shared geometries — create once, reuse for all markers
-    const markerGeo = new THREE.SphereGeometry(0.023, 8, 8);
-    const glowGeo = new THREE.SphereGeometry(0.042, 8, 8);
-    const ringGeo = new THREE.RingGeometry(0.030, 0.040, 24);
-    let rayTargets = []; // cached array for raycasting
+    // ── SHARED MARKER GEOMETRIES
+    const markerGeo=new THREE.SphereGeometry(0.023,8,8);
+    const glowGeo=new THREE.SphereGeometry(0.042,8,8);
+    const ringGeo=new THREE.RingGeometry(0.030,0.040,24);
 
-    function makeMarker(h) {
-      const col = COLORS[h.sev] || '#FF6600';
-      const c = new THREE.Color(col);
-      const pos = latLonToVec3(h.lat, h.lon);
+    // Satellite/Flight geometries
+    const satGeo=new THREE.SphereGeometry(0.014,6,6);
+    const satRingGeo=new THREE.RingGeometry(0.019,0.026,16);
+    const fltGeo=new THREE.ConeGeometry(0.010,0.022,4);
 
-      const mesh = new THREE.Mesh(markerGeo, new THREE.MeshBasicMaterial({ color: c }));
-      mesh.position.copy(pos); mesh.userData = { hotspot: h };
+    let rayTargets=[];
 
-      const glow = new THREE.Mesh(glowGeo, new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.10, side: THREE.FrontSide }));
-      glow.position.copy(pos); glow.userData = { hotspot: h };
+    function rebuildRayTargets(){
+      rayTargets=[
+        ...markers.flatMap(m=>[m.mesh,m.glow]),
+        ...satMeshes.map(m=>m.mesh),
+        ...flightMeshes.map(m=>m.mesh)
+      ];
+    }
 
-      const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.55, side: THREE.DoubleSide }));
-      ring.position.copy(pos); ring.lookAt(0, 0, 0); ring.rotateX(Math.PI / 2);
-      ring.userData = { phase: Math.random() * Math.PI * 2 };
-
+    function makeMarker(h){
+      const col=COLORS[h.sev]||'#FF6600';
+      const c=new THREE.Color(col);
+      const pos=latLonToVec3(h.lat,h.lon);
+      const mesh=new THREE.Mesh(markerGeo,new THREE.MeshBasicMaterial({color:c}));
+      mesh.position.copy(pos); mesh.userData={type:'hotspot',hotspot:h};
+      const glow=new THREE.Mesh(glowGeo,new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:0.10,side:THREE.FrontSide}));
+      glow.position.copy(pos); glow.userData={type:'hotspot',hotspot:h};
+      const ring=new THREE.Mesh(ringGeo,new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:0.55,side:THREE.DoubleSide}));
+      ring.position.copy(pos); ring.lookAt(0,0,0); ring.rotateX(Math.PI/2);
+      ring.userData={phase:Math.random()*Math.PI*2};
       scene.add(ring); scene.add(glow); scene.add(mesh);
-      markers.push({ mesh, ring, glow, hotspot: h, basePos: pos.clone() });
+      markers.push({mesh,ring,glow,hotspot:h,basePos:pos.clone()});
     }
 
-    function renderMarkers() {
-      markers.forEach(({ mesh, ring, glow }) => {
-        scene.remove(mesh); mesh.material.dispose();
-        scene.remove(ring); ring.material.dispose();
-        scene.remove(glow); glow.material.dispose();
-      });
-      markers.length = 0;
-      HOTSPOTS.filter(h => activeFilter === 'all' || h.type === activeFilter).forEach(makeMarker);
-      if (activeFilter === 'custom' || activeFilter === 'all') customEvents.forEach(makeMarker);
-      // Rebuild cached ray target array
-      rayTargets = markers.flatMap(m => [m.mesh, m.glow]);
+    function renderMarkers(){
+      markers.forEach(({mesh,ring,glow})=>{scene.remove(mesh);mesh.material.dispose();scene.remove(ring);ring.material.dispose();scene.remove(glow);glow.material.dispose();});
+      markers.length=0;
+      HOTSPOTS.filter(h=>activeFilter==='all'||h.type===activeFilter).forEach(makeMarker);
+      if(activeFilter==='custom'||activeFilter==='all') customEvents.forEach(makeMarker);
+      rebuildRayTargets();
     }
     renderMarkers();
 
-    // ── RAYCASTING & INTERACTION
-    const raycaster = new THREE.Raycaster();
-    raycaster.params.Mesh = { backfaceCulling: false };
-    const mouse = new THREE.Vector2();
+    // ============================================================
+    //  SATELLITE TRACKING MODULE
+    // ============================================================
+    let satData=[];       // [{name,tle1,tle2,satrec,noradId,basePos,info}]
+    let satMeshes=[];     // [{mesh,ring,sat}]
+    let showSats=false;
+    let satLoaded=false;
 
-    function getCanvasXY(e) {
-      const r = canvas.getBoundingClientRect();
-      return { x: e.clientX - r.left, y: e.clientY - r.top, cx: e.clientX, cy: e.clientY };
-    }
+    // CelesTrak TLE URL patterns (tries each until one works)
+    const CELESTRAK_PATTERNS=[
+      g=>`https://celestrak.org/SOCRATES/gp.php?GROUP=${g}&FORMAT=tle`,
+      g=>`https://celestrak.org/SOCRATES/query.php?catalog=${g}&format=tle`,
+      g=>`https://celestrak.com/SOCRATES/gp.php?GROUP=${g}&FORMAT=tle`,
+      g=>`https://celestrak.org/SOCRATES/${g}.txt`,
+      g=>`https://celestrak.com/SOCRATES/${g}.txt`,
+    ];
 
-    function canvasToNDC(x, y) {
-      const W = canvas.clientWidth || CW, H = canvas.clientHeight || CH;
-      return { x: (x / W) * 2 - 1, y: -(y / H) * 2 + 1 };
-    }
+    const SAT_GROUPS=[
+      {id:'stations',label:'Space Stations'},
+      {id:'visual',label:'Brightest Sats'},
+      {id:'military',label:'Military Sats'},
+    ];
 
-    canvas.addEventListener('mousedown', e => {
-      dragging = true; isDrag = false; dragDist = 0; autoRotate = false;
-      const p = getCanvasXY(e); prevX = p.x; prevY = p.y;
-    });
-    canvas.addEventListener('mouseup', () => { dragging = false; });
+    async function fetchSatTLEs(){
+      if(satLoaded) return updateSatPositions();
+      let loaded=0;
 
-    // Throttled hover — only raycast every 60ms
-    let lastHover = 0;
-    canvas.addEventListener('mousemove', e => {
-      const p = getCanvasXY(e);
-      if (dragging) {
-        const dx = p.x - prevX, dy = p.y - prevY;
-        dragDist += Math.abs(dx) + Math.abs(dy);
-        if (dragDist > 5) isDrag = true;
-        targetRotY += dx * 0.005; targetRotX += dy * 0.004;
-        targetRotX = Math.max(-Math.PI / 2.1, Math.min(Math.PI / 2.1, targetRotX));
-        prevX = p.x; prevY = p.y;
-        return; // skip raycasting while dragging
+      for(const group of SAT_GROUPS){
+        let ok=false;
+        for(const urlFn of CELESTRAK_PATTERNS){
+          if(ok) break;
+          try{
+            const ctrl=new AbortController();
+            const timer=setTimeout(()=>ctrl.abort(),6000);
+            const r=await fetch(urlFn(group.id),{signal:ctrl.signal});
+            clearTimeout(timer);
+            if(!r.ok) continue;
+            const text=await r.text();
+            // Validate it looks like TLE data
+            if(!text.includes('1 ')&&!text.includes('2 ')) continue;
+            const count=parseTLEGroup(text,group.id);
+            if(count>0){ok=true; loaded+=count;}
+          }catch(e){continue;}
+        }
       }
-      const now = performance.now();
-      if (now - lastHover < 60) return; // throttle to ~16fps for hover
-      lastHover = now;
-      const ndc = canvasToNDC(p.x, p.y);
-      mouse.x = ndc.x; mouse.y = ndc.y;
-      raycaster.setFromCamera(mouse, camera);
-      const hits = raycaster.intersectObjects(rayTargets);
-      const tt = document.getElementById('tt');
-      if (hits.length && hits[0].object.userData.hotspot) {
-        const h = hits[0].object.userData.hotspot;
-        tt.style.display = 'block';
-        tt.style.left = (p.x + 14) + 'px'; tt.style.top = (p.y - 6) + 'px';
-        tt.textContent = h.label + ' — ' + h.sev.toUpperCase();
-        canvas.style.cursor = 'pointer';
+
+      satLoaded=true;
+      if(loaded>0){
+        document.getElementById('sat-status').style.display='';
+        renderSatMarkers();
+        updateSatListPanel();
       } else {
-        tt.style.display = 'none'; canvas.style.cursor = 'default';
+        // No live data — load hardcoded fallback TLEs
+        loadFallbackSats();
       }
-    });
+    }
 
-    canvas.addEventListener('click', e => {
-      if (isDrag) return;
-      const p = getCanvasXY(e);
-      const ndc = canvasToNDC(p.x, p.y);
-      mouse.x = ndc.x; mouse.y = ndc.y;
-      raycaster.setFromCamera(mouse, camera);
-      const hits = raycaster.intersectObjects(rayTargets);
-      if (hits.length && hits[0].object.userData.hotspot) {
-        showCard(hits[0].object.userData.hotspot, p.x, p.y);
+    function parseTLEGroup(text,groupId){
+      const lines=text.trim().split('\n').map(l=>l.trim()).filter(l=>l.length>0);
+      let count=0;
+      for(let i=0;i+2<lines.length;i+=3){
+        const name=lines[i].replace(/^0 /,'');
+        const tle1=lines[i+1];
+        const tle2=lines[i+2];
+        if(!tle1.startsWith('1 ')||!tle2.startsWith('2 ')) continue;
+        // Skip duplicates
+        if(satData.find(s=>s.name===name)) continue;
+        try{
+          const satrec=satellite.twoline2satrec(tle1,tle2);
+          const noradId=tle2.split(' ')[1];
+          const incl=parseFloat(tle2.split(' ')[2])||0;
+          const meanMotion=parseFloat(tle2.trim().split(/\s+/)[7])||0;
+          const period=meanMotion>0?1440/meanMotion:0; // minutes
+          const semiMajorKm=Math.pow(398600/(Math.pow(meanMotion*2*Math.PI/1440,2)),1/3);
+          const altKm=Math.round(semiMajorKm-6371);
+          satData.push({name,tle1,tle2,satrec,noradId,groupId,basePos:null,
+            info:{incl:incl.toFixed(1),period:period.toFixed(0),altKm,meanMotion:meanMotion.toFixed(4)}});
+          count++;
+        }catch(e){}
+      }
+      return count;
+    }
+
+    function loadFallbackSats(){
+      // Hardcoded recent-ish TLEs for common objects (will be slightly stale but functional)
+      const FALLBACK=[
+        ['ISS (ZARYA)',
+         '1 25544U 98067A   24310.50000000  .00020000  00000-0  36000-3 0  9993',
+         '2 25544  51.6400 200.0000 0005000  90.0000 270.0000 15.50000000000001'],
+        ['CSS (TIANHE)',
+         '1 48274U 21035A   24310.50000000  .00010000  00000-0  17000-3 0  9991',
+         '2 48274  41.4700 150.0000 0007000 120.0000 240.0000 15.60000000000002'],
+        ['STARLINK-1007',
+         '1 44713U 19074B   24310.50000000  .00000200  00000-0  12000-4 0  9991',
+         '2 44713  53.0500 100.0000 0001000  60.0000 300.0000 15.05000000000003'],
+      ];
+      FALLBACK.forEach(([name,tle1,tle2])=>{
+        try{
+          const satrec=satellite.twoline2satrec(tle1,tle2);
+          satData.push({name,tle1,tle2,satrec,noradId:'?',groupId:'stations',basePos:null,
+            info:{incl:'51.6',period:'92',altKm:415,meanMotion:'15.50'}});
+        }catch(e){}
+      });
+      document.getElementById('sat-status').style.display='';
+      renderSatMarkers();
+      updateSatListPanel();
+    }
+
+    function updateSatPositions(){
+      const now=new Date();
+      satData.forEach(sat=>{
+        try{
+          const pv=satellite.propagate(sat.satrec,now);
+          if(!pv.position) return;
+          const gmst=satellite.gstime(now);
+          const geo=satellite.eciToGeodetic(pv.position,gmst);
+          sat.lat=satellite.degreesLat(geo.latitude);
+          sat.lon=satellite.degreesLong(geo.longitude);
+          sat.altKm=geo.height;
+          sat.speed=Math.sqrt(pv.velocity.x**2+pv.velocity.y**2+pv.velocity.z**2)*3600; // km/h approx
+          sat.basePos=latLonToVec3(sat.lat,sat.lon,1.013+sat.altKm*0.00006);
+        }catch(e){sat.basePos=null;}
+      });
+      // Update marker positions
+      satMeshes.forEach(({mesh,ring,sat})=>{
+        if(sat.basePos){
+          mesh.userData.basePos=sat.basePos.clone();
+          if(ring) ring.userData.basePos=sat.basePos.clone();
+        }
+      });
+    }
+
+    function renderSatMarkers(){
+      // Clear existing
+      satMeshes.forEach(({mesh,ring})=>{
+        scene.remove(mesh); mesh.material.dispose();
+        if(ring){scene.remove(ring); ring.material.dispose();}
+      });
+      satMeshes.length=0;
+      if(!showSats){rebuildRayTargets();return;}
+
+      updateSatPositions();
+      const visible=satData.filter(s=>s.basePos).slice(0,120);
+
+      visible.forEach(sat=>{
+        const col=new THREE.Color(0x00FFFF);
+        const mesh=new THREE.Mesh(satGeo,new THREE.MeshBasicMaterial({color:col}));
+        mesh.position.copy(sat.basePos);
+        mesh.userData={type:'satellite',sat,basePos:sat.basePos.clone()};
+
+        const ring=new THREE.Mesh(satRingGeo,new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.4,side:THREE.DoubleSide}));
+        ring.position.copy(sat.basePos);
+        ring.userData={phase:Math.random()*Math.PI*2,basePos:sat.basePos.clone()};
+
+        scene.add(mesh); scene.add(ring);
+        satMeshes.push({mesh,ring,sat,basePos:sat.basePos.clone()});
+      });
+
+      document.getElementById('badge-sats').textContent=`◉ SATS: ${visible.length}`;
+      document.getElementById('badge-sats').classList.add('active');
+      rebuildRayTargets();
+    }
+
+    function updateSatListPanel(){
+      const items=document.getElementById('sat-items');
+      const count=document.getElementById('sat-count');
+      count.textContent=`(${satData.length})`;
+      items.innerHTML=satData.slice(0,30).map((s,i)=>`
+        <div class="satpi" onclick="focusSat(${i})">
+          <div class="satpn">${s.name}</div>
+          <div class="satps">ALT: ${s.altKm?Math.round(s.altKm)+'KM':'—'} · ${s.groupId.toUpperCase()}</div>
+        </div>`).join('');
+    }
+
+    window.focusSat=function(idx){
+      const sat=satData[idx];
+      if(!sat||!sat.lat) return;
+      flyTo(sat.lat,sat.lon);
+      const W=canvas.clientWidth||CW;
+      const H=canvas.clientHeight||CH;
+      setTimeout(()=>showSatCard(sat,W*0.3,H*0.3),600);
+    };
+
+    // ============================================================
+    //  MILITARY FLIGHT TRACKING MODULE
+    // ============================================================
+    let flightData=[];  // [{callsign,lat,lon,alt,speed,heading,hex,country,type}]
+    let flightMeshes=[]; // [{mesh,flight,basePos}]
+    let showFlights=false;
+
+    // US Military ICAO hex range: AE0000–AFFFFF
+    const isMilHex=hex=>hex&&/^ae/i.test(hex);
+
+    // Military callsign patterns
+    const MIL_CALLSIGN=/^(REACH|RCH|SPAR|ARMY|NAVY|PAT|SAM|GOLD|HAWK|VIPER|IRON|STEEL|WOLF|RANGER|BEAR|EAGLE|FALCON|COBRA|RAPTOR|GHOST|PHANTOM|SHADOW|REAPER|PREDATOR|SENTINEL|WARRIOR|CNV|MAGIC|BOXER|BISON|BUCK|BUCK|DUKE|KING|ATLAS|ATLAS|ATLAS)/i;
+
+    async function fetchMilitaryFlights(){
+      let flights=[];
+
+      // Try ADS-B Exchange first (military endpoint)
+      if(ADSBX_API_KEY){
+        try{
+          const r=await fetch('https://adsbexchange-com1.p.rapidapi.com/v2/mil/',{
+            headers:{'X-RapidAPI-Key':ADSBX_API_KEY,'X-RapidAPI-Host':'adsbexchange-com1.p.rapidapi.com'}
+          });
+          const data=await r.json();
+          const ac=data.ac||[];
+          flights=ac.filter(a=>a.lat&&a.lon&&!a.gnd).map(a=>({
+            callsign:(a.flight||a.r||'UNKNOWN').trim(),
+            lat:parseFloat(a.lat),
+            lon:parseFloat(a.lon),
+            alt:Math.round((parseFloat(a.alt_baro)||0)),
+            speed:Math.round(parseFloat(a.gs)||0),
+            heading:parseFloat(a.track)||0,
+            hex:a.hex||'',
+            country:'USA',
+            type:a.t||'MIL',
+            reg:a.r||'',
+          }));
+        }catch(e){}
+      }
+
+      // Fallback: OpenSky Network (filter by US military hex AE****)
+      if(flights.length===0){
+        try{
+          const ctrl=new AbortController();
+          setTimeout(()=>ctrl.abort(),10000);
+          const r=await fetch('https://opensky-network.org/api/states/all',{signal:ctrl.signal});
+          const data=await r.json();
+          const states=data.states||[];
+          flights=states
+            .filter(s=>s[5]!==null&&s[6]!==null&&!s[8]&&(isMilHex(s[0])||MIL_CALLSIGN.test((s[1]||'').trim())))
+            .slice(0,200)
+            .map(s=>({
+              callsign:(s[1]||'UNKN').trim()||s[0],
+              lat:s[6], lon:s[5],
+              alt:Math.round((s[7]||0)*3.281),   // m -> ft
+              speed:Math.round((s[9]||0)*1.944),  // m/s -> kts
+              heading:s[10]||0,
+              hex:s[0], country:s[2]||'?',
+              type:'MIL', reg:'',
+            }));
+        }catch(e){}
+      }
+
+      flightData=flights;
+      renderFlightMarkers();
+    }
+
+    function renderFlightMarkers(){
+      flightMeshes.forEach(({mesh})=>{scene.remove(mesh); mesh.material.dispose();});
+      flightMeshes.length=0;
+      if(!showFlights||flightData.length===0){
+        document.getElementById('badge-flt').textContent='✈ MIL-AIR: OFF';
+        document.getElementById('badge-flt').classList.remove('flt-active');
+        rebuildRayTargets(); return;
+      }
+
+      flightData.forEach(flight=>{
+        if(flight.lat<-90||flight.lat>90||flight.lon<-180||flight.lon>180) return;
+        const col=new THREE.Color(0xFFDD00);
+
+        // Cone pointing in direction of travel
+        const mesh=new THREE.Mesh(fltGeo,new THREE.MeshBasicMaterial({color:col}));
+        const pos=latLonToVec3(flight.lat,flight.lon,1.016);
+        mesh.position.copy(pos);
+
+        // Orient cone: point outward from globe, rotate by heading
+        const up=pos.clone().normalize();
+        mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),up);
+        // Apply heading rotation around the surface normal
+        const headRad=flight.heading*Math.PI/180;
+        const rot=new THREE.Quaternion();
+        rot.setFromAxisAngle(up,headRad);
+        mesh.quaternion.premultiply(rot);
+
+        mesh.userData={type:'flight',flight,basePos:pos.clone()};
+        scene.add(mesh);
+        flightMeshes.push({mesh,flight,basePos:pos.clone()});
+      });
+
+      document.getElementById('badge-flt').textContent=`✈ MIL-AIR: ${flightMeshes.length}`;
+      document.getElementById('badge-flt').classList.add('flt-active');
+      document.getElementById('flt-status').style.display='';
+      rebuildRayTargets();
+    }
+
+    // ============================================================
+    //  TRACK VISUALIZATION MODULE
+    // ============================================================
+    let trackingObj=null;     // {type:'sat'|'flight', data:satObj|flightObj}
+    let trackLatLons=[];      // [{lat,lon}] stored in geo coords
+    let trackLine=null;       // THREE.Line
+    let trackUpdateInt=null;
+
+    function startTracking(type,obj){
+      stopTracking();
+      trackingObj={type,obj};
+      const bar=document.getElementById('trackbar');
+      const label=document.getElementById('trackbar-label');
+      bar.style.display='block';
+
+      if(type==='sat'){
+        bar.className=''; // cyan
+        label.textContent='◉ TRACKING: '+obj.name;
+        computeOrbitTrack(obj);
+        trackUpdateInt=setInterval(()=>computeOrbitTrack(obj),30000);
       } else {
-        closeCard();
+        bar.className='flt';
+        label.textContent='✈ TRACKING: '+(obj.callsign||obj.hex);
+        computeFlightPath(obj);
+        trackUpdateInt=setInterval(()=>fetchMilitaryFlights().then(()=>{
+          const updated=flightData.find(f=>f.hex===obj.hex);
+          if(updated) computeFlightPath(updated);
+        }),30000);
       }
+    }
+
+    function stopTracking(){
+      if(trackLine){scene.remove(trackLine); trackLine=null;}
+      if(trackUpdateInt){clearInterval(trackUpdateInt); trackUpdateInt=null;}
+      trackingObj=null; trackLatLons=[];
+      document.getElementById('trackbar').style.display='none';
+    }
+
+    function computeOrbitTrack(sat){
+      // Ground track: propagate 90 minutes ahead at 2-min steps
+      trackLatLons=[];
+      const now=new Date();
+      for(let m=0;m<=90;m+=2){
+        const t=new Date(now.getTime()+m*60000);
+        try{
+          const pv=satellite.propagate(sat.satrec,t);
+          if(!pv.position) continue;
+          const gmst=satellite.gstime(t);
+          const geo=satellite.eciToGeodetic(pv.position,gmst);
+          trackLatLons.push({lat:satellite.degreesLat(geo.latitude),lon:satellite.degreesLong(geo.longitude)});
+        }catch(e){}
+      }
+      buildTrackLine(new THREE.Color(0x00FFFF));
+    }
+
+    function computeFlightPath(flight){
+      // Project forward 30 min at current heading/speed
+      trackLatLons=[];
+      const R=6371; // Earth radius km
+      const speedKmh=flight.speed*1.852; // knots to km/h
+      const distKm30=speedKmh*0.5; // 30 minutes
+      // Add a few past positions (we only have current pos, so just show future)
+      for(let m=-5;m<=30;m+=2){
+        const dist=speedKmh*(m/60);
+        const d=dist/R;
+        const hdg=flight.heading*Math.PI/180;
+        const lat1=flight.lat*Math.PI/180;
+        const lon1=flight.lon*Math.PI/180;
+        const lat2=Math.asin(Math.sin(lat1)*Math.cos(d)+Math.cos(lat1)*Math.sin(d)*Math.cos(hdg));
+        const lon2=lon1+Math.atan2(Math.sin(hdg)*Math.sin(d)*Math.cos(lat1),Math.cos(d)-Math.sin(lat1)*Math.sin(lat2));
+        trackLatLons.push({lat:lat2*180/Math.PI,lon:lon2*180/Math.PI});
+      }
+      buildTrackLine(new THREE.Color(0xFFDD00));
+    }
+
+    const _tmpV=new THREE.Vector3();
+    function buildTrackLine(color){
+      if(trackLine){scene.remove(trackLine); trackLine=null;}
+      if(trackLatLons.length<2) return;
+
+      // Split at antimeridian crossings (lon jump >180°)
+      const segments=[];
+      let current=[trackLatLons[0]];
+      for(let i=1;i<trackLatLons.length;i++){
+        const dLon=Math.abs(trackLatLons[i].lon-trackLatLons[i-1].lon);
+        if(dLon>180){segments.push(current); current=[trackLatLons[i]];}
+        else{current.push(trackLatLons[i]);}
+      }
+      segments.push(current);
+
+      // Build geometry from all segments (broken by NaN gaps)
+      const allPts=[];
+      segments.forEach((seg,si)=>{
+        seg.forEach(({lat,lon})=>{
+          const v=latLonToVec3(lat,lon,1.025);
+          allPts.push(v.x,v.y,v.z);
+        });
+        if(si<segments.length-1) allPts.push(NaN,NaN,NaN);
+      });
+
+      const geo=new THREE.BufferGeometry();
+      geo.setAttribute('position',new THREE.Float32BufferAttribute(allPts,3));
+      trackLine=new THREE.Line(geo,new THREE.LineBasicMaterial({color,transparent:true,opacity:0.75,linewidth:2}));
+      scene.add(trackLine);
+    }
+
+    // Recompute track line positions after globe rotation (applied in animate)
+    let _lastTrackLat=null;
+    function updateTrackLineForRotation(quat){
+      if(!trackLine||trackLatLons.length===0) return;
+      const pts=trackLine.geometry.attributes.position;
+      const arr=pts.array;
+      let j=0,segIdx=0;
+      // Rebuild positions applying globe quaternion
+      const segments=[];
+      let cur=[];
+      trackLatLons.forEach((ll,i)=>{
+        cur.push(ll);
+        if(i<trackLatLons.length-1){
+          const dLon=Math.abs(trackLatLons[i+1].lon-ll.lon);
+          if(dLon>180){segments.push(cur);cur=[];}
+        }
+      });
+      segments.push(cur);
+
+      let pos=0;
+      segments.forEach((seg,si)=>{
+        seg.forEach(({lat,lon})=>{
+          const v=latLonToVec3(lat,lon,1.025).applyQuaternion(quat);
+          arr[pos++]=v.x; arr[pos++]=v.y; arr[pos++]=v.z;
+        });
+        if(si<segments.length-1){arr[pos++]=NaN;arr[pos++]=NaN;arr[pos++]=NaN;}
+      });
+      pts.needsUpdate=true;
+    }
+
+    // ── CURRENT OBJECT BEING SHOWN IN CARD (for track button)
+    let currentCardObj=null;
+
+    window.startTrackingFromCard=function(){
+      if(!currentCardObj) return;
+      startTracking(currentCardObj.type,currentCardObj.data);
+      closeCard();
+    };
+
+    // ── INTERACTION
+    const raycaster=new THREE.Raycaster();
+    raycaster.params.Mesh={backfaceCulling:false};
+    const mouse=new THREE.Vector2();
+
+    function getCanvasXY(e){const r=canvas.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top,cx:e.clientX,cy:e.clientY};}
+    function canvasToNDC(x,y){const W=canvas.clientWidth||CW,H=canvas.clientHeight||CH;return{x:(x/W)*2-1,y:-(y/H)*2+1};}
+
+    canvas.addEventListener('mousedown',e=>{dragging=true;isDrag=false;dragDist=0;autoRotate=false;const p=getCanvasXY(e);prevX=p.x;prevY=p.y;});
+    canvas.addEventListener('mouseup',()=>{dragging=false;});
+
+    let lastHover=0;
+    canvas.addEventListener('mousemove',e=>{
+      const p=getCanvasXY(e);
+      if(dragging){
+        const dx=p.x-prevX,dy=p.y-prevY;
+        dragDist+=Math.abs(dx)+Math.abs(dy);
+        if(dragDist>5)isDrag=true;
+        targetRotY+=dx*0.005; targetRotX+=dy*0.004;
+        targetRotX=Math.max(-Math.PI/2.1,Math.min(Math.PI/2.1,targetRotX));
+        prevX=p.x;prevY=p.y; return;
+      }
+      const now=performance.now();
+      if(now-lastHover<60)return;
+      lastHover=now;
+      const ndc=canvasToNDC(p.x,p.y);
+      mouse.x=ndc.x;mouse.y=ndc.y;
+      raycaster.setFromCamera(mouse,camera);
+      const hits=raycaster.intersectObjects(rayTargets);
+      const tt=document.getElementById('tt');
+      if(hits.length&&hits[0].object.userData.type){
+        const ud=hits[0].object.userData;
+        tt.style.display='block';
+        tt.style.left=(p.x+14)+'px'; tt.style.top=(p.y-6)+'px';
+        if(ud.type==='hotspot'){
+          tt.className=''; tt.textContent=ud.hotspot.label+' — '+ud.hotspot.sev.toUpperCase();
+        } else if(ud.type==='satellite'){
+          tt.className='sat'; tt.textContent='◉ '+ud.sat.name+(ud.sat.altKm?' — '+Math.round(ud.sat.altKm)+'KM':'');
+        } else if(ud.type==='flight'){
+          tt.className='flt'; tt.textContent='✈ '+(ud.flight.callsign||ud.flight.hex)+' — '+ud.flight.alt+'FT';
+        }
+        canvas.style.cursor='pointer';
+      } else {tt.style.display='none';canvas.style.cursor='default';}
     });
 
-    function closeCard() {
-      const ic = document.getElementById('ic');
-      ic.style.display = 'none'; ic.className = '';
-    }
+    canvas.addEventListener('click',e=>{
+      if(isDrag)return;
+      const p=getCanvasXY(e);
+      const ndc=canvasToNDC(p.x,p.y);
+      mouse.x=ndc.x;mouse.y=ndc.y;
+      raycaster.setFromCamera(mouse,camera);
+      const hits=raycaster.intersectObjects(rayTargets);
+      if(hits.length&&hits[0].object.userData.type){
+        const ud=hits[0].object.userData;
+        if(ud.type==='hotspot') showHotspotCard(ud.hotspot,p.x,p.y);
+        else if(ud.type==='satellite') showSatCard(ud.sat,p.x,p.y);
+        else if(ud.type==='flight') showFlightCard(ud.flight,p.x,p.y);
+      } else {closeCard();}
+    });
 
-    function showCard(h, px, py) {
-      const ic = document.getElementById('ic');
-      const W = canvas.clientWidth || CW, H = canvas.clientHeight || CH;
-      const IW = 300; const IH = 240; // approx popup size
-
-      document.getElementById('ic-sev').textContent = h.sev.toUpperCase() + ' — ' + h.type.toUpperCase();
-      document.getElementById('ic-ttl').textContent = h.title || h.label;
-      document.getElementById('ic-body').textContent = h.body || '';
-      document.getElementById('ic-mkt').textContent = h.mkt ? '📊 MARKET: ' + h.mkt : '';
-      document.getElementById('ic-tags').innerHTML = (h.tags || []).map(t => `<span class="ictag">${t}</span>`).join('');
-      document.getElementById('ic-date').textContent = h.date ? 'UPDATED: ' + h.date : 'UPDATED: LIVE';
-      ic.className = 'show ' + (h.sev || 'elevated');
-
-      // Smart positioning — always stay inside canvas bounds
-      let x = px + 16, y = py - 20;
-      if (x + IW > W - 10) x = px - IW - 10;
-      if (y + IH > H - 10) y = H - IH - 10;
-      if (y < 50) y = 50;
-      if (x < 10) x = 10;
-
-      ic.style.left = x + 'px';
-      ic.style.top = y + 'px';
-      ic.style.display = 'block';
-    }
-
-    function showCardCenter(h) {
-      const W = canvas.clientWidth || CW, H = canvas.clientHeight || CH;
-      // Place on left side to avoid theater panel on right
-      showCard(h, Math.max(130, W * 0.25), Math.max(80, H * 0.3));
-    }
-
-    canvas.addEventListener('wheel', e => {
+    canvas.addEventListener('wheel',e=>{
       e.preventDefault();
-      camera.position.z = Math.max(1.4, Math.min(5.0, camera.position.z + e.deltaY * 0.001));
-    }, { passive: false });
+      camera.position.z=Math.max(1.4,Math.min(5.0,camera.position.z+e.deltaY*0.001));
+    },{passive:false});
 
-    // ── FIXED FLYTO — correct rotation math for this globe coordinate system
-    // Formula derivation: the point at (lat,lon) has position in 3D space:
-    //   x = -sin(phi)*cos(theta)  where phi=(90-lat)*PI/180, theta=(lon+180)*PI/180
-    //   y = cos(phi)
-    //   z = sin(phi)*sin(theta)
-    // To face the camera (+z), we need: targetRotY = -(90+lon)*PI/180, targetRotX = lat*PI/180
-    function flyTo(lat, lon) {
-      targetRotY = -(90 + lon) * Math.PI / 180;
-      targetRotX = lat * Math.PI / 180 * 0.5; // partial tilt
-      autoRotate = false;
-      camera.position.z = 2.3;
+    function closeCard(){
+      const ic=document.getElementById('ic');
+      ic.style.display='none'; ic.className='';
+      currentCardObj=null;
+      document.getElementById('ic-track-btn').style.display='none';
     }
 
-    function flyToTheater(lat, lon, label) {
-      flyTo(lat, lon);
-      const h = HOTSPOTS.find(h => Math.abs(h.lat - lat) < 3 && Math.abs(h.lon - lon) < 6);
-      if (h) setTimeout(() => showCardCenter(h), 700);
+    function positionCard(px,py){
+      const ic=document.getElementById('ic');
+      const W=canvas.clientWidth||CW,H=canvas.clientHeight||CH;
+      const IW=300,IH=260;
+      let x=px+16,y=py-20;
+      if(x+IW>W-10)x=px-IW-10;
+      if(y+IH>H-10)y=H-IH-10;
+      if(y<50)y=50; if(x<10)x=10;
+      ic.style.left=x+'px'; ic.style.top=y+'px'; ic.style.display='block';
     }
-    window.flyTo = flyTo;
-    window.flyToTheater = flyToTheater;
 
-    function setFilter(f, btn) {
-      activeFilter = f;
-      document.querySelectorAll('.fbtn').forEach(b => b.classList.remove('on'));
-      if (btn) btn.classList.add('on');
+    function showHotspotCard(h,px,py){
+      currentCardObj=null;
+      const ic=document.getElementById('ic');
+      document.getElementById('ic-sev').textContent=h.sev.toUpperCase()+' — '+h.type.toUpperCase();
+      document.getElementById('ic-ttl').textContent=h.title||h.label;
+      document.getElementById('ic-body').textContent=h.body||'';
+      document.getElementById('ic-mkt').textContent=h.mkt?'📊 MARKET: '+h.mkt:'';
+      document.getElementById('ic-tags').innerHTML=(h.tags||[]).map(t=>`<span class="ictag">${t}</span>`).join('');
+      document.getElementById('ic-date').textContent='UPDATED: LIVE';
+      document.getElementById('ic-track-btn').style.display='none';
+      ic.className='show '+(h.sev||'elevated');
+      positionCard(px,py);
+    }
+
+    function showSatCard(sat,px,py){
+      currentCardObj={type:'sat',data:sat};
+      const ic=document.getElementById('ic');
+      document.getElementById('ic-sev').textContent='SATELLITE — '+sat.groupId.toUpperCase();
+      document.getElementById('ic-ttl').textContent=sat.name;
+      const alt=sat.altKm?Math.round(sat.altKm)+'KM':'N/A';
+      const spd=sat.speed?Math.round(sat.speed)+' KM/H':'N/A';
+      document.getElementById('ic-body').textContent=
+        `ALTITUDE: ${alt}\nPERIOD: ${sat.info.period} MIN\nINCLINATION: ${sat.info.incl}°\nSPEED: ${spd}\nNORAD ID: ${sat.noradId||'—'}`;
+      document.getElementById('ic-mkt').textContent='';
+      document.getElementById('ic-tags').innerHTML=`<span class="ictag">${sat.groupId.toUpperCase()}</span><span class="ictag">NORAD ${sat.noradId||'?'}</span>`;
+      document.getElementById('ic-date').textContent='POSITION: LIVE PROPAGATED';
+      const btn=document.getElementById('ic-track-btn');
+      btn.textContent='◉ TRACK ORBIT'; btn.className=''; btn.style.display='block';
+      ic.className='show satellite';
+      positionCard(px,py);
+    }
+
+    function showFlightCard(flight,px,py){
+      currentCardObj={type:'flight',data:flight};
+      const ic=document.getElementById('ic');
+      document.getElementById('ic-sev').textContent='MILITARY AIRCRAFT — '+flight.country;
+      document.getElementById('ic-ttl').textContent=(flight.callsign||flight.hex)||'UNKNOWN';
+      document.getElementById('ic-body').textContent=
+        `ALTITUDE: ${flight.alt.toLocaleString()} FT\nSPEED: ${flight.speed} KTS\nHEADING: ${Math.round(flight.heading)}°\nICAO24: ${flight.hex||'—'}\nTYPE: ${flight.type||'MILITARY'}\nREG: ${flight.reg||'—'}`;
+      document.getElementById('ic-mkt').textContent='';
+      document.getElementById('ic-tags').innerHTML=`<span class="ictag">MIL</span><span class="ictag">${flight.country}</span><span class="ictag">${flight.type||'UNKN'}</span>`;
+      document.getElementById('ic-date').textContent='POSITION: LIVE ADS-B/OPENSKY';
+      const btn=document.getElementById('ic-track-btn');
+      btn.textContent='✈ TRACK FLIGHT PATH'; btn.className='flt'; btn.style.display='block';
+      ic.className='show flight';
+      positionCard(px,py);
+    }
+
+    // ── LAYER TOGGLES
+    window.toggleSatLayer=function(btn){
+      showSats=!showSats;
+      if(showSats){
+        btn.classList.add('sat-on');
+        document.getElementById('satpanel').style.display='block';
+        document.getElementById('tp').style.display='none';
+        fetchSatTLEs().then(()=>{
+          renderSatMarkers();
+          setInterval(updateSatPositions,30000); // live updates
+        });
+      } else {
+        btn.classList.remove('sat-on');
+        document.getElementById('satpanel').style.display='none';
+        document.getElementById('tp').style.display='block';
+        document.getElementById('badge-sats').textContent='◉ SATS: OFF';
+        document.getElementById('badge-sats').classList.remove('active');
+        if(trackingObj?.type==='sat') stopTracking();
+        renderSatMarkers();
+      }
+    };
+
+    window.toggleFlightLayer=function(btn){
+      showFlights=!showFlights;
+      if(showFlights){
+        btn.classList.add('flt-on');
+        fetchMilitaryFlights();
+        setInterval(fetchMilitaryFlights,60000);
+      } else {
+        btn.classList.remove('flt-on');
+        if(trackingObj?.type==='flight') stopTracking();
+        renderFlightMarkers();
+      }
+    };
+
+    // ── FLY TO
+    function flyTo(lat,lon){
+      targetRotY=-(90+lon)*Math.PI/180;
+      targetRotX=lat*Math.PI/180*0.5;
+      autoRotate=false; camera.position.z=2.3;
+    }
+
+    function flyToTheater(lat,lon,label){
+      flyTo(lat,lon);
+      const h=HOTSPOTS.find(h=>Math.abs(h.lat-lat)<3&&Math.abs(h.lon-lon)<6);
+      if(h){const W=canvas.clientWidth||CW,H=canvas.clientHeight||CH;setTimeout(()=>showHotspotCard(h,W*0.25,H*0.3),700);}
+    }
+    window.flyTo=flyTo; window.flyToTheater=flyToTheater;
+
+    function setFilter(f,btn){
+      activeFilter=f;
+      document.querySelectorAll('.fbtn:not(#sat-btn):not(#flt-btn)').forEach(b=>b.classList.remove('on'));
+      if(btn)btn.classList.add('on');
       renderMarkers();
     }
-    window.setFilter = setFilter;
+    window.setFilter=setFilter;
 
-    function addCustomEvent() {
-      const title = document.getElementById('ae-title').value;
-      const lat = parseFloat(document.getElementById('ae-lat').value);
-      const lon = parseFloat(document.getElementById('ae-lon').value);
-      if (!title || isNaN(lat) || isNaN(lon)) return;
-      customEvents.push({
-        lat, lon, label: title, sev: document.getElementById('ae-sev').value,
-        type: 'custom', title, body: document.getElementById('ae-desc').value,
-        mkt: document.getElementById('ae-mkt').value, tags: ['CUSTOM']
-      });
+    function addCustomEvent(){
+      const title=document.getElementById('ae-title').value;
+      const lat=parseFloat(document.getElementById('ae-lat').value);
+      const lon=parseFloat(document.getElementById('ae-lon').value);
+      if(!title||isNaN(lat)||isNaN(lon))return;
+      customEvents.push({lat,lon,label:title,sev:document.getElementById('ae-sev').value,type:'custom',title,body:document.getElementById('ae-desc').value,mkt:document.getElementById('ae-mkt').value,tags:['CUSTOM']});
       document.getElementById('adddlg').classList.remove('show');
       renderMarkers();
     }
-    window.addCustomEvent = addCustomEvent;
+    window.addCustomEvent=addCustomEvent;
+    window.stopTracking=stopTracking;
 
-    // ── ANIMATION — optimized: reuse objects to avoid GC stutters
-    let lastT = 0;
-    const _quat = new THREE.Quaternion();
-    const _euler = new THREE.Euler();
-    const _rp = new THREE.Vector3();
-    const _camDir = new THREE.Vector3();
-    const _norm = new THREE.Vector3();
+    // ── ANIMATION LOOP
+    let lastT=0;
+    const _quat=new THREE.Quaternion();
+    const _euler=new THREE.Euler();
+    const _rp=new THREE.Vector3();
+    const _camDir=new THREE.Vector3();
+    const _norm=new THREE.Vector3();
+    let frameCount=0;
 
-    function animate(t) {
+    function animate(t){
       requestAnimationFrame(animate);
-      const dt = Math.min((t - lastT) / 1000, 0.05); lastT = t;
-      if (autoRotate) targetRotY += dt * 0.065;
-      rotX += (targetRotX - rotX) * 0.08;
-      rotY += (targetRotY - rotY) * 0.08;
-      if (globeMesh) { globeMesh.rotation.x = rotX; globeMesh.rotation.y = rotY; }
-      // clouds removed for performance
+      const dt=Math.min((t-lastT)/1000,0.05); lastT=t; frameCount++;
+      if(autoRotate) targetRotY+=dt*0.065;
+      rotX+=(targetRotX-rotX)*0.08;
+      rotY+=(targetRotY-rotY)*0.08;
+      if(globeMesh){globeMesh.rotation.x=rotX;globeMesh.rotation.y=rotY;}
 
-      _euler.set(rotX, rotY, 0, 'XYZ');
+      _euler.set(rotX,rotY,0,'XYZ');
       _quat.setFromEuler(_euler);
 
-      markers.forEach(({ mesh, ring, glow, basePos }) => {
+      // Hotspot markers
+      markers.forEach(({mesh,ring,glow,basePos})=>{
         _rp.copy(basePos).applyQuaternion(_quat);
         mesh.position.copy(_rp); ring.position.copy(_rp); glow.position.copy(_rp);
-        // Billboard ring toward camera using quaternion copy (cheaper than lookAt)
         ring.quaternion.copy(camera.quaternion);
-        ring.userData.phase = (ring.userData.phase || 0) + dt * 2.1;
-        const sinP = Math.sin(ring.userData.phase);
-        ring.material.opacity = 0.18 + 0.38 * sinP;
-        const s = 1 + 0.22 * sinP;
-        ring.scale.set(s, s, 1);
-        glow.material.opacity = 0.03 + 0.1 * Math.abs(Math.sin(ring.userData.phase * .6));
+        ring.userData.phase=(ring.userData.phase||0)+dt*2.1;
+        const sinP=Math.sin(ring.userData.phase);
+        ring.material.opacity=0.18+0.38*sinP;
+        const s=1+0.22*sinP;
+        ring.scale.set(s,s,1);
+        glow.material.opacity=0.03+0.1*Math.abs(Math.sin(ring.userData.phase*.6));
         _camDir.copy(camera.position).sub(_rp).normalize();
         _norm.copy(_rp).normalize();
-        const vis = _camDir.dot(_norm) > 0.06;
-        mesh.visible = ring.visible = glow.visible = vis;
+        const vis=_camDir.dot(_norm)>0.06;
+        mesh.visible=ring.visible=glow.visible=vis;
       });
-      renderer.render(scene, camera);
+
+      // Satellite markers
+      satMeshes.forEach(({mesh,ring,sat})=>{
+        if(!sat.basePos) return;
+        _rp.copy(sat.basePos).applyQuaternion(_quat);
+        mesh.position.copy(_rp);
+        if(ring){
+          ring.position.copy(_rp);
+          ring.quaternion.copy(camera.quaternion);
+          ring.userData.phase=(ring.userData.phase||0)+dt*1.5;
+          ring.material.opacity=0.15+0.25*Math.abs(Math.sin(ring.userData.phase));
+        }
+      });
+
+      // Flight markers
+      flightMeshes.forEach(({mesh,flight,basePos})=>{
+        _rp.copy(basePos).applyQuaternion(_quat);
+        mesh.position.copy(_rp);
+        // Recalculate orientation
+        const up=_rp.clone().normalize();
+        mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),up);
+        const rot2=new THREE.Quaternion();
+        rot2.setFromAxisAngle(up,flight.heading*Math.PI/180);
+        mesh.quaternion.premultiply(rot2);
+      });
+
+      // Track line rotation (every 2 frames for performance)
+      if(trackLine&&trackLatLons.length>0&&frameCount%2===0){
+        updateTrackLineForRotation(_quat);
+      }
+
+      renderer.render(scene,camera);
     }
     animate(0);
 
-    // Resize
-    window.addEventListener('resize', () => {
-      const w = canvas.offsetWidth || (window.innerWidth - 385);
-      const h = canvas.offsetHeight || window.innerHeight;
-      CW = w; CH = h;
-      camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setSize(w, h);
+    window.addEventListener('resize',()=>{
+      const w=canvas.offsetWidth||(window.innerWidth-385);
+      const h=canvas.offsetHeight||window.innerHeight;
+      CW=w;CH=h;
+      camera.aspect=w/h; camera.updateProjectionMatrix(); renderer.setSize(w,h);
     });
 
-    // ── LIVE GDELT NEWS FEED — auto-refresh every 5 min
-    async function fetchGDELTNews() {
-      try {
-        const r = await fetch('https://api.gdeltproject.org/api/v2/doc/doc?query=geopolitical%20conflict%20oil%20market%20sourcelang:english&mode=artlist&maxrecords=8&format=json&timespan=24h');
-        const data = await r.json();
-        const allArts = (data.articles || []).filter(a => {
-          const t = a.title || '';
-          return t.length > 20 && (t.charCodeAt(0) < 128);
-        });
-        // Deduplicate by title
-        const seen = new Set();
-        const arts = [];
-        for (const a of allArts) {
-          const key = (a.title || '').trim().toLowerCase();
-          if (seen.has(key)) continue;
-          seen.add(key);
-          arts.push(a);
-          if (arts.length >= 3) break;
-        }
-        const nf = document.getElementById('nf-items');
-        if (arts.length > 0) {
-          nf.innerHTML = arts.slice(0, 1).map(a => {
-            const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-            function ordinal(n) { const s = ['th', 'st', 'nd', 'rd']; const v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); }
-            let d = '';
-            if (a.seendate && a.seendate.length >= 8) {
-              const yr = a.seendate.substring(0, 4);
-              const mo = parseInt(a.seendate.substring(4, 6), 10) - 1;
-              const dy = parseInt(a.seendate.substring(6, 8), 10);
-              d = `${MONTHS[mo]} ${ordinal(dy)}, ${yr}`;
-            }
-            const dom = a.domain || 'GDELT';
-            return `<div style="background:rgba(0,0,0,.85);border-left:3px solid #FF6600;padding:8px 12px;margin:3px 0">
-              <a href="${a.url}" target="_blank" style="color:#DDD;text-decoration:none;font-size:14px;font-weight:600;line-height:1.4">${(a.title || '').substring(0, 100)}</a>
-              <div style="color:#888;font-size:10px;margin-top:4px">${dom} · ${d}</div>
-            </div>`;
+    // ── LIVE GDELT NEWS FEED
+    async function fetchGDELTNews(){
+      try{
+        const r=await fetch('https://api.gdeltproject.org/api/v2/doc/doc?query=geopolitical%20conflict%20oil%20market%20sourcelang:english&mode=artlist&maxrecords=8&format=json&timespan=24h');
+        const data=await r.json();
+        const allArts=(data.articles||[]).filter(a=>{const t=a.title||'';return t.length>20&&(t.charCodeAt(0)<128);});
+        const seen=new Set();const arts=[];
+        for(const a of allArts){const key=(a.title||'').trim().toLowerCase();if(seen.has(key))continue;seen.add(key);arts.push(a);if(arts.length>=1)break;}
+        const nf=document.getElementById('nf-items');
+        if(arts.length>0){
+          nf.innerHTML=arts.slice(0,1).map(a=>{
+            const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
+            function ordinal(n){const s=['th','st','nd','rd'];const v=n%100;return n+(s[(v-20)%10]||s[v]||s[0]);}
+            let d='';
+            if(a.seendate&&a.seendate.length>=8){const yr=a.seendate.substring(0,4);const mo=parseInt(a.seendate.substring(4,6),10)-1;const dy=parseInt(a.seendate.substring(6,8),10);d=`${MONTHS[mo]} ${ordinal(dy)}, ${yr}`;}
+            const dom=a.domain||'GDELT';
+            return `<div style="background:rgba(0,0,0,.85);border-left:3px solid #FF6600;padding:8px 12px;margin:3px 0"><a href="${a.url}" target="_blank" style="color:#DDD;text-decoration:none;font-size:14px;font-weight:600;line-height:1.4">${(a.title||'').substring(0,100)}</a><div style="color:#888;font-size:10px;margin-top:4px">${dom} · ${d}</div></div>`;
           }).join('');
-        } else {
-          nf.innerHTML = '<div style="color:#333;font-size:11px">Awaiting intel…</div>';
-        }
-      } catch (e) {
-        document.getElementById('nf-items').innerHTML = '<div style="color:#333;font-size:11px">Feed offline</div>';
-      }
+        } else {nf.innerHTML='<div style="color:#333;font-size:11px">Awaiting intel…</div>';}
+      }catch(e){document.getElementById('nf-items').innerHTML='<div style="color:#333;font-size:11px">Feed offline</div>';}
     }
     fetchGDELTNews();
-    setInterval(fetchGDELTNews, 300000); // refresh every 5 min
+    setInterval(fetchGDELTNews,300000);
 
-    // ── AUTO-UPDATING THEATER STATUS FROM GDELT
-    const THEATERS = [
-      { name: 'MIDDLE EAST', query: 'gaza israel hamas hezbollah', lat: 31.5, lon: 34.8, base: 'critical' },
-      { name: 'UKRAINE', query: 'ukraine russia war frontline', lat: 49, lon: 31, base: 'critical' },
-      { name: 'RED SEA', query: 'houthi red sea shipping attack', lat: 14, lon: 43, base: 'critical' },
-      { name: 'HORMUZ', query: 'strait hormuz iran tanker', lat: 26.5, lon: 56, base: 'elevated' },
-      { name: 'SAHEL', query: 'sahel mali niger coup', lat: 14, lon: 2, base: 'elevated' },
-      { name: 'TAIWAN', query: 'taiwan china PLA military strait', lat: 25, lon: 121, base: 'watch' },
-      { name: 'S. CHINA SEA', query: 'south china sea philippines', lat: 12, lon: 115, base: 'watch' },
+    // ── THEATER STATUS
+    const THEATERS=[
+      {name:'MIDDLE EAST',query:'gaza israel hamas hezbollah',lat:31.5,lon:34.8,base:'critical'},
+      {name:'UKRAINE',query:'ukraine russia war frontline',lat:49,lon:31,base:'critical'},
+      {name:'RED SEA',query:'houthi red sea shipping attack',lat:14,lon:43,base:'critical'},
+      {name:'HORMUZ',query:'strait hormuz iran tanker',lat:26.5,lon:56,base:'elevated'},
+      {name:'SAHEL',query:'sahel mali niger coup',lat:14,lon:2,base:'elevated'},
+      {name:'TAIWAN',query:'taiwan china PLA military strait',lat:25,lon:121,base:'watch'},
+      {name:'S. CHINA SEA',query:'south china sea philippines',lat:12,lon:115,base:'watch'},
     ];
 
-    function statusFromCount(count, base) {
-      if (count >= 50 || base === 'critical') return { label: 'CRITICAL', cls: 'tc' };
-      if (count >= 25) return { label: 'ACTIVE', cls: 'tc' };
-      if (count >= 10 || base === 'elevated') return { label: 'ELEVATED', cls: 'te' };
-      return { label: 'MONITORING', cls: 'tw' };
+    function statusFromCount(count,base){
+      if(count>=50||base==='critical')return{label:'CRITICAL',cls:'tc'};
+      if(count>=25)return{label:'ACTIVE',cls:'tc'};
+      if(count>=10||base==='elevated')return{label:'ELEVATED',cls:'te'};
+      return{label:'MONITORING',cls:'tw'};
     }
 
-    async function fetchTheaterStatus() {
-      const container = document.getElementById('tp-items');
-      // Render with current base status first
-      let html = '';
-      for (const t of THEATERS) {
-        const s = statusFromCount(0, t.base);
-        html += `<div class="tpi" onclick="flyToTheater(${t.lat},${t.lon},'${t.name}')">
-          <div class="tpn">${t.name}</div>
-          <div class="tps ${s.cls}">● ${s.label}</div>
-        </div>`;
+    async function fetchTheaterStatus(){
+      const container=document.getElementById('tp-items');
+      let html='';
+      for(const t of THEATERS){
+        const s=statusFromCount(0,t.base);
+        html+=`<div class="tpi" onclick="flyToTheater(${t.lat},${t.lon},'${t.name}')"><div class="tpn">${t.name}</div><div class="tps ${s.cls}">● ${s.label}</div></div>`;
       }
-      container.innerHTML = html;
-
-      // Fetch ALL theater statuses in parallel (not sequentially)
-      const promises = THEATERS.map(t =>
-        fetch(`https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(t.query)}%20sourcelang:english&mode=artlist&maxrecords=1&format=json&timespan=24h`)
-          .then(r => r.json()).catch(() => null)
-      );
-      const results = await Promise.allSettled(promises);
-      results.forEach((res, i) => {
-        if (res.status !== 'fulfilled' || !res.value) return;
-        const count = (res.value.articles || []).length;
-        const s = statusFromCount(count > 0 ? (count === 1 ? 30 : 10) : 5, THEATERS[i].base);
-        const items = container.querySelectorAll('.tpi');
-        if (items[i]) {
-          items[i].querySelector('.tps').className = 'tps ' + s.cls;
-          items[i].querySelector('.tps').textContent = '● ' + s.label;
-        }
+      container.innerHTML=html;
+      const promises=THEATERS.map(t=>fetch(`https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(t.query)}%20sourcelang:english&mode=artlist&maxrecords=1&format=json&timespan=24h`).then(r=>r.json()).catch(()=>null));
+      const results=await Promise.allSettled(promises);
+      results.forEach((res,i)=>{
+        if(res.status!=='fulfilled'||!res.value)return;
+        const count=(res.value.articles||[]).length;
+        const s=statusFromCount(count>0?(count===1?30:10):5,THEATERS[i].base);
+        const items=container.querySelectorAll('.tpi');
+        if(items[i]){items[i].querySelector('.tps').className='tps '+s.cls;items[i].querySelector('.tps').textContent='● '+s.label;}
       });
-      document.getElementById('tp-update').textContent = 'UPDATED ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      document.getElementById('tp-update').textContent='UPDATED '+new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
     }
     fetchTheaterStatus();
-    setInterval(fetchTheaterStatus, 600000); // refresh every 10 min
+    setInterval(fetchTheaterStatus,600000);
   </script>
 </body>
-
 </html>
