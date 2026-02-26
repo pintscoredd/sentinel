@@ -48,13 +48,15 @@ def tv_chart(symbol, height=450):
 <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 <script type="text/javascript">
 new TradingView.widget({{
-  "width":"100%","height":{height},"symbol":"{symbol}","interval":"D",
+  "width":"100%","height":{height},"symbol":"{symbol}","interval":"60",
+  "range":"1M",
   "timezone":"America/Los_Angeles","theme":"dark","style":"1","locale":"en",
   "toolbar_bg":"#000000","enable_publishing":false,"hide_side_toolbar":false,
   "allow_symbol_change":true,"save_image":false,
   "container_id":"tv_c_{symbol.replace(':','_').replace('-','_')}",
   "backgroundColor":"rgba(0,0,0,1)","gridColor":"rgba(20,20,20,1)",
-  "studies":["RSI@tv-basicstudies","MASimple@tv-basicstudies"],
+  "studies":["STD;EMA","STD;RSI"],
+  "studies_overrides":{{"ema.length":20,"rsi.length":14}},
   "show_popup_button":true,"popup_width":"1000","popup_height":"650"
 }});
 </script></div></body></html>"""
@@ -202,6 +204,66 @@ def render_options_table(df, side="calls", current_price=None):
     return (f'<table class="opt-tbl"><thead><tr>'
             f'<th>Strike</th><th>Last</th><th>Bid</th><th>Ask</th>'
             f'<th>Volume</th><th>OI</th><th>IV</th></tr></thead><tbody>{rows}</tbody></table>')
+
+
+def render_scored_options(contracts, side="calls"):
+    """Render a compact scored options table (top 2 contracts)."""
+    if not contracts:
+        return '<p style="color:#555;font-family:monospace;font-size:12px">No scored contracts</p>'
+    cls = "opt-call" if side == "calls" else "opt-put"
+    rows = ""
+    for c in contracts:
+        s = c.get("strike", 0)
+        lp = c.get("lastPrice", 0)
+        b = c.get("bid", 0)
+        a = c.get("ask", 0)
+        v = c.get("volume", 0)
+        oi = c.get("openInterest", 0)
+        iv = c.get("iv", 0)
+        sc = c.get("score", 0)
+        voi = c.get("voi", 0)
+        sc_color = "#00CC44" if sc >= 0.3 else "#FF8C00" if sc >= 0.15 else "#FF4444"
+        rows += (f'<tr><td class="{cls}">{s:.2f}</td>'
+                 f'<td>{lp:.2f}</td><td>{b:.2f}</td><td>{a:.2f}</td>'
+                 f'<td>{v:,}</td><td>{oi:,}</td><td>{iv:.1%}</td>'
+                 f'<td style="font-weight:700;color:#FF8C00">{voi:.2f}</td>'
+                 f'<td style="font-weight:700;color:{sc_color}">{sc:.4f}</td></tr>')
+    return (f'<table class="opt-tbl"><thead><tr>'
+            f'<th>Strike</th><th>Last</th><th>Bid</th><th>Ask</th>'
+            f'<th>Vol</th><th>OI</th><th>IV</th><th>V/OI</th><th>Score</th>'
+            f'</tr></thead><tbody>{rows}</tbody></table>')
+
+
+def render_unusual_trade(contract, ticker="", expiry=""):
+    """Render a visually distinct 'Unusual Activity' card for the single highest V/OI contract."""
+    if not contract:
+        return ""
+    s = contract.get("strike", 0)
+    side = contract.get("side", "call")
+    direction = "BULLISH ▲" if side == "call" else "BEARISH ▼"
+    dir_color = "#00CC44" if side == "call" else "#FF4444"
+    v = contract.get("volume", 0)
+    oi = contract.get("openInterest", 0)
+    voi = contract.get("voi", 0)
+    sc = contract.get("score", 0)
+    iv = contract.get("iv", 0)
+
+    return (
+        f'<div style="background:#0A0500;border:1px solid #FF6600;border-left:4px solid #FF6600;'
+        f'padding:14px 18px;margin:12px 0;font-family:monospace">'
+        f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+        f'<span style="color:#FF6600;font-size:14px;font-weight:700;letter-spacing:1px">⚡ UNUSUAL OPTIONS ACTIVITY</span>'
+        f'<span style="color:{dir_color};font-size:13px;font-weight:700">{direction}</span>'
+        f'</div>'
+        f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:12px">'
+        f'<div><span style="color:#666">TICKER</span><br><span style="color:#FFF;font-weight:600">{_esc(ticker)}</span></div>'
+        f'<div><span style="color:#666">STRIKE</span><br><span style="color:#FFF;font-weight:600">${s:.2f}</span></div>'
+        f'<div><span style="color:#666">EXPIRY</span><br><span style="color:#FFF;font-weight:600">{_esc(str(expiry))}</span></div>'
+        f'<div><span style="color:#666">VOL / OI</span><br><span style="color:#FF8C00;font-weight:700">{v:,} / {oi:,} ({voi:.2f}x)</span></div>'
+        f'<div><span style="color:#666">IV</span><br><span style="color:#FFF;font-weight:600">{iv:.1%}</span></div>'
+        f'<div><span style="color:#666">SCORE</span><br><span style="color:#FF8C00;font-weight:700">{sc:.4f}</span></div>'
+        f'</div></div>'
+    )
 
 # ════════════════════════════════════════════════════════════════════
 # INSIDER TRANSACTIONS
