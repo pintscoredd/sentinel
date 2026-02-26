@@ -123,9 +123,10 @@ def get_futures():
             pass
     return rows
 
-@st.cache_data(ttl=300)
+@st.cache_resource(ttl=300)
 def get_heatmap_data():
-    """Fetch S&P sector heatmap data for FinViz-style display"""
+    """Fetch S&P sector heatmap data — concurrent batched fetching."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     SECTOR_STOCKS = {
         "Technology": ["AAPL", "MSFT", "NVDA", "AVGO", "META", "ORCL", "AMD", "INTC", "QCOM", "TXN", "ADBE", "CRM", "INTU", "IBM", "ACN"],
         "Healthcare": ["UNH", "JNJ", "LLY", "ABBV", "MRK", "TMO", "ABT", "PFE", "DHR", "BMY", "ISRG", "GILD", "MDT", "CVS", "CI"],
@@ -139,12 +140,19 @@ def get_heatmap_data():
         "Materials": ["LIN", "APD", "ECL", "SHW", "NEM", "FCX", "NUE", "VMC", "ALB", "MOS"],
         "Real Estate": ["PLD", "AMT", "CCI", "EQIX", "PSA", "SPG", "WELL", "O", "DLR", "AVB"],
     }
+    all_jobs = [(sector, tkr) for sector, tickers in SECTOR_STOCKS.items() for tkr in tickers]
     rows = []
-    for sector, tickers in SECTOR_STOCKS.items():
-        for tkr in tickers:
-            q = yahoo_quote(tkr)
-            if q: rows.append({"ticker": tkr, "sector": sector, "pct": q["pct"],
-                               "price": q["price"], "change": q["change"]})
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        futures = {pool.submit(yahoo_quote, tkr): (sector, tkr) for sector, tkr in all_jobs}
+        for f in as_completed(futures):
+            sector, tkr = futures[f]
+            try:
+                q = f.result()
+                if q:
+                    rows.append({"ticker": tkr, "sector": sector, "pct": q["pct"],
+                                 "price": q["price"], "change": q["change"]})
+            except Exception:
+                pass
     return rows
 
 @st.cache_data(ttl=300)
@@ -574,7 +582,7 @@ def _parse_type_from_symbol(sym):
         return "unknown"
 
 
-@st.cache_data(ttl=30)
+@st.cache_resource(ttl=30)
 def fetch_0dte_chain(underlying="SPY"):
     """Fetch nearest options chain with Greeks from Alpaca snapshots.
     Gets nearest active expiry first, then fetches snapshots.
@@ -695,7 +703,7 @@ def find_gamma_flip(gex_profile):
 
 
 def compute_max_pain(chain):
-    """argmin_K sum(OI * max(0, pain)) across all strikes."""
+    """O(N) prefix-sum max pain: argmin_K Σ(OI × |K-strike|)."""
     if not chain:
         return None
     strikes = sorted(set(opt["strike"] for opt in chain))
@@ -708,18 +716,43 @@ def compute_max_pain(chain):
             call_oi[k] = call_oi.get(k, 0) + opt.get("oi", 0)
         else:
             put_oi[k] = put_oi.get(k, 0) + opt.get("oi", 0)
-    min_pain = float("inf")
-    mp_strike = strikes[len(strikes) // 2]
-    for sp in strikes:
-        pain = 0
-        for k in strikes:
-            if k in call_oi and sp > k:
-                pain += call_oi[k] * (sp - k)
-            if k in put_oi and sp < k:
-                pain += put_oi[k] * (k - sp)
+
+    # Baseline pain at strikes[0]
+    s0 = strikes[0]
+    pain = 0
+    for k in strikes:
+        c = call_oi.get(k, 0)
+        p = put_oi.get(k, 0)
+        if s0 > k:
+            pain += c * (s0 - k)
+        if s0 < k:
+            pain += p * (k - s0)
+
+    min_pain = pain
+    mp_strike = s0
+
+    # Running tallies: cumulative call OI to the left, put OI to the right
+    cum_call_left = call_oi.get(s0, 0)   # calls at or below current sp
+    total_put = sum(put_oi.get(k, 0) for k in strikes)
+    cum_put_left = put_oi.get(s0, 0)     # puts at or below current sp
+    # put_right = total_put - cum_put_left
+
+    for i in range(1, len(strikes)):
+        gap = strikes[i] - strikes[i - 1]
+        # Moving sp up by 'gap':
+        #   All calls at strikes <= sp(i-1) now cost +gap more each → +gap * cum_call_left
+        #   All puts at strikes > sp(i-1) now cost -gap less each  → -gap * (total_put - cum_put_left)
+        put_right = total_put - cum_put_left
+        pain += gap * cum_call_left - gap * put_right
+
         if pain < min_pain:
             min_pain = pain
-            mp_strike = sp
+            mp_strike = strikes[i]
+
+        # Update running tallies for the current strike
+        cum_call_left += call_oi.get(strikes[i], 0)
+        cum_put_left += put_oi.get(strikes[i], 0)
+
     return mp_strike
 
 
@@ -730,7 +763,7 @@ def compute_pcr(chain):
     return round(put_oi / call_oi, 2) if call_oi > 0 else None
 
 
-@st.cache_data(ttl=60)
+@st.cache_resource(ttl=60)
 def fetch_vix_data():
     """Fetch VIX and VIX9D from yfinance. Contango = VIX > VIX9D."""
     result = {"vix": None, "vix9d": None, "contango": None}
@@ -764,12 +797,13 @@ def _score_option(opt, chain_ivs, spot_spy):
       W4  Volume/OI Flow     — detects unusual institutional activity today
       W5  IV Relative Value   — prefer options near/below chain median IV
     """
-    import math
+    import math, sys
     W1, W2, W3, W4, W5 = 0.25, 0.25, 0.20, 0.15, 0.15
+    _EPS = sys.float_info.epsilon
 
     abs_delta = abs(opt.get("delta", 0))
     gamma    = abs(opt.get("gamma", 0))
-    theta    = abs(opt.get("theta", 0.001))  # avoid /0
+    theta    = abs(opt.get("theta", 0))
     iv       = opt.get("iv", 0)
     bid      = opt.get("bid", 0)
     ask      = opt.get("ask", 0)
@@ -782,7 +816,7 @@ def _score_option(opt, chain_ivs, spot_spy):
 
     # ── F2: Gamma/Theta Ratio  (higher = more intraday leverage per $ decay)
     #    Normalise via sigmoid so extreme values don't blow up the score
-    gt_ratio = gamma / theta if theta > 0.0001 else 0
+    gt_ratio = (gamma / theta) if theta > _EPS else 0.0
     f2 = 1 - 1 / (1 + gt_ratio)  # sigmoid: 0→0, 1→0.5, ∞→1
 
     # ── F3: Bid-Ask Tightness  (spread as % of mid; 0 spread → score 1)
