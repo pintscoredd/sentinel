@@ -753,15 +753,102 @@ def fetch_vix_data():
     return result
 
 
-def find_target_strike(chain, bias, target_delta=0.30):
-    """Find OTM option nearest target delta. Bull=call ~+0.30, Bear=put ~-0.30."""
-    if bias == "bull":
-        cands = [o for o in chain if o["type"] == "call" and 0 < o["delta"] < 0.50]
+def _score_option(opt, chain_ivs, spot_spy):
+    """Score a single option candidate using multi-factor Greeks analysis.
+    Returns (score, breakdown_dict). Higher score = better trade.
+
+    Factors (each normalised 0-1, then weighted):
+      W1  Delta Sweet Spot   — peak at |Δ|=0.30, penalise <0.15 or >0.50
+      W2  Gamma/Theta Ratio  — intraday edge: high γ relative to θ decay
+      W3  Bid-Ask Tightness  — liquidity proxy; tighter spread = better fills
+      W4  Volume/OI Flow     — detects unusual institutional activity today
+      W5  IV Relative Value   — prefer options near/below chain median IV
+    """
+    import math
+    W1, W2, W3, W4, W5 = 0.25, 0.25, 0.20, 0.15, 0.15
+
+    abs_delta = abs(opt.get("delta", 0))
+    gamma    = abs(opt.get("gamma", 0))
+    theta    = abs(opt.get("theta", 0.001))  # avoid /0
+    iv       = opt.get("iv", 0)
+    bid      = opt.get("bid", 0)
+    ask      = opt.get("ask", 0)
+    mid      = opt.get("mid", 0)
+    vol      = opt.get("volume", 0)
+    oi       = max(opt.get("oi", 1), 1)
+
+    # ── F1: Delta Sweet-Spot  (Gaussian around 0.30, σ=0.10)
+    f1 = math.exp(-((abs_delta - 0.30) ** 2) / (2 * 0.10 ** 2))
+
+    # ── F2: Gamma/Theta Ratio  (higher = more intraday leverage per $ decay)
+    #    Normalise via sigmoid so extreme values don't blow up the score
+    gt_ratio = gamma / theta if theta > 0.0001 else 0
+    f2 = 1 - 1 / (1 + gt_ratio)  # sigmoid: 0→0, 1→0.5, ∞→1
+
+    # ── F3: Bid-Ask Tightness  (spread as % of mid; 0 spread → score 1)
+    spread = ask - bid
+    spread_pct = spread / mid if mid > 0 else 1.0
+    f3 = max(0, 1 - spread_pct * 5)  # 0% → 1.0, 20%+ → 0.0
+
+    # ── F4: Volume/OI Flow Ratio (>0.5 is unusual; cap at 1.0)
+    flow = vol / oi if oi > 0 else 0
+    f4 = min(flow, 1.0)
+
+    # ── F5: IV Relative Value  (prefer below median IV in the chain)
+    median_iv = sorted(chain_ivs)[len(chain_ivs) // 2] if chain_ivs else iv
+    if median_iv > 0:
+        iv_ratio = iv / median_iv
+        f5 = max(0, min(1, 2 - iv_ratio))  # ratio 1→1.0, ratio 2→0.0
     else:
-        cands = [o for o in chain if o["type"] == "put" and -0.50 < o["delta"] < 0]
+        f5 = 0.5
+
+    total = W1 * f1 + W2 * f2 + W3 * f3 + W4 * f4 + W5 * f5
+
+    breakdown = {
+        "delta_score": round(f1, 3), "gt_score": round(f2, 3),
+        "liq_score": round(f3, 3), "flow_score": round(f4, 3),
+        "iv_score": round(f5, 3), "total": round(total, 4),
+        "gt_ratio": round(gt_ratio, 2), "spread_pct": round(spread_pct * 100, 1),
+        "flow_ratio": round(flow, 2),
+    }
+    return total, breakdown
+
+
+def find_target_strike(chain, bias):
+    """Greeks-weighted option selection. Scores every OTM candidate and picks the best.
+
+    Candidate filters:
+      Bull → calls with 0.10 < Δ < 0.50  (OTM calls)
+      Bear → puts  with -0.50 < Δ < -0.10 (OTM puts)
+
+    Returns the option dict augmented with '_score' and '_breakdown' keys,
+    or None if no viable candidates exist.
+    """
+    if bias == "bull":
+        cands = [o for o in chain if o["type"] == "call" and 0.10 < o.get("delta", 0) < 0.50]
+    else:
+        cands = [o for o in chain if o["type"] == "put" and -0.50 < o.get("delta", 0) < -0.10]
+
+    # Require at least a valid mid price and non-zero gamma
+    cands = [o for o in cands if o.get("mid", 0) > 0 and abs(o.get("gamma", 0)) > 0]
+
     if not cands:
         return None
-    return min(cands, key=lambda o: abs(abs(o["delta"]) - target_delta))
+
+    # Pre-compute chain IV distribution for relative value scoring
+    chain_ivs = [o["iv"] for o in chain if o.get("iv", 0) > 0]
+    spot_spy = cands[0]["strike"]  # approximate; not critical
+
+    scored = []
+    for o in cands:
+        s, bd = _score_option(o, chain_ivs, spot_spy)
+        o_copy = dict(o)
+        o_copy["_score"] = s
+        o_copy["_breakdown"] = bd
+        scored.append(o_copy)
+
+    scored.sort(key=lambda x: x["_score"], reverse=True)
+    return scored[0]
 
 
 def parse_trade_input(text):
@@ -858,13 +945,14 @@ def generate_recommendation(chain, spx_metrics, vix_data):
     target = find_target_strike(chain, bias)
     if not target:
         return {"recommendation": "NO TRADE — No suitable option found",
-                "rationale": f"Could not find a valid ~0.30 delta {bias} option.",
+                "rationale": f"No viable {bias} options passed the Greeks quality filter.",
                 "stats": "", "action": "", "conditions_met": met, "conditions_failed": failed,
                 "confidence": "LOW", "strike_spx": 0, "opt_type": "", "mid_price": 0}
 
     strike_spx = round(target["strike"] * 10, 0)
     delta_pct = round(abs(target["delta"]) * 100)
     opt_label = "CALL" if target["type"] == "call" else "PUT"
+    bd = target.get("_breakdown", {})
 
     # Find hedging wall
     hedge_wall = None
@@ -895,16 +983,37 @@ def generate_recommendation(chain, spx_metrics, vix_data):
     target_pts = target_pts if target_pts > 0 else 10
     stop_pts = int(abs(strike_spx - max_pain)) if max_pain else 10
     stop_pts = stop_pts if stop_pts > 0 else 10
-    
+
     target_desc = f"Target the {int(hedge_wall)} Hedging Wall (+{target_pts}pts)" if hedge_wall else "Target +10pts"
     stop_desc = f"Set a strict stop-loss at Max Pain {int(max_pain)} (-{stop_pts}pts)" if max_pain else "Set a strict stop-loss at -10pts"
 
+    # Greeks Detail Line
+    greeks_line = (
+        f"Δ={target['delta']:+.3f}  Γ={target['gamma']:.4f}  "
+        f"Θ={target['theta']:.4f}  V={target['vega']:.4f}  IV={target['iv']:.1%}"
+    )
+    scoring_line = (
+        f"Selection Score: {bd.get('total', 0):.3f} "
+        f"(Δ-fit:{bd.get('delta_score', 0):.2f} "
+        f"Γ/Θ:{bd.get('gt_score', 0):.2f} "
+        f"Liq:{bd.get('liq_score', 0):.2f} "
+        f"Flow:{bd.get('flow_score', 0):.2f} "
+        f"IV-val:{bd.get('iv_score', 0):.2f})"
+    )
+    stats_text = (
+        f"Greeks: {greeks_line}\n"
+        f"Stats: ~{delta_pct}% P(ITM) | Γ/Θ ratio: {bd.get('gt_ratio', 0):.1f}x | "
+        f"Spread: {bd.get('spread_pct', 0):.1f}% | Flow: {bd.get('flow_ratio', 0):.2f}x OI\n"
+        f"{scoring_line}"
+    )
+
     return {
         "recommendation": f"RECOMMENDATION: BUY {int(strike_spx)} {opt_label}",
-        "rationale": getattr(st, "empty", None) and f"Rationale: {rationale}" or f"Rationale: {rationale}",
-        "stats": f"Stats: ~{delta_pct}% chance to finish In-The-Money.",
+        "rationale": f"Rationale: {rationale}",
+        "stats": stats_text,
         "action": f"Action Plan: Enter now. {target_desc}. {stop_desc}. Size: 1 contract.",
         "confidence": confidence, "conditions_met": met, "conditions_failed": failed,
         "strike_spx": strike_spx, "opt_type": opt_label, "mid_price": target.get("mid", 0),
     }
+
 
