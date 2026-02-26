@@ -34,6 +34,8 @@ from data_fetchers import (
     fetch_0dte_chain, compute_gex_profile, compute_max_pain, compute_pcr,
     find_gamma_flip, fetch_vix_data, find_target_strike,
     parse_trade_input, generate_recommendation,
+    get_whale_trades, get_exchange_netflow, get_funding_rates,
+    get_open_interest, get_liquidations,
 )
 from ui_components import (
     CHART_LAYOUT, dark_fig, tv_chart, tv_mini, tv_tape,
@@ -1158,6 +1160,206 @@ with tabs[4]:
     st.markdown('<div class="bb-ph">📈 ETH/USD — TRADINGVIEW</div>', unsafe_allow_html=True)
     components.html(tv_chart("COINBASE:ETHUSD", 320), height=325, scrolling=False)
 
+    # ── SECTION 1: WHALE FLOWS + EXCHANGE NETFLOW ──────────────────
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+    st.markdown('<div class="bb-ph">🐋 WHALE FLOWS — LARGE TRADES (≥$500K) + EXCHANGE NETFLOW</div>', unsafe_allow_html=True)
+
+    whale_col, exch_col = st.columns([3, 2])
+
+    with whale_col:
+        whale_asset = st.radio("Asset", ["BTCUSDT", "ETHUSDT"], horizontal=True, key="whale_asset")
+        with st.spinner("Loading whale trades…"):
+            whales = get_whale_trades(whale_asset)
+        if whales:
+            total_buy = sum(t["usd"] for t in whales if t["side"] == "BUY")
+            total_sell = sum(t["usd"] for t in whales if t["side"] == "SELL")
+            net = total_buy - total_sell
+            net_c = "#00CC44" if net >= 0 else "#FF4444"
+            net_lbl = "NET BUY" if net >= 0 else "NET SELL"
+            st.markdown(
+                f'<div style="display:flex;gap:18px;margin-bottom:8px;font-family:monospace;font-size:12px">'
+                f'<span style="color:#00CC44;font-weight:700">BUY: ${total_buy:,.0f}</span>'
+                f'<span style="color:#FF4444;font-weight:700">SELL: ${total_sell:,.0f}</span>'
+                f'<span style="color:{net_c};font-weight:700">{net_lbl}: ${abs(net):,.0f}</span>'
+                f'</div>', unsafe_allow_html=True)
+            # Trade table
+            hdr = ('<div style="display:grid;grid-template-columns:70px 55px 100px 110px 100px;gap:6px;'
+                   'padding:4px 8px;border-bottom:1px solid #FF6600;font-family:monospace;'
+                   'font-size:9px;color:#FF6600;letter-spacing:1px">'
+                   '<span>TIME</span><span>SIDE</span><span>AMOUNT</span><span>USD VALUE</span><span>PRICE</span></div>')
+            st.markdown(hdr, unsafe_allow_html=True)
+            for t in whales:
+                sc = "#00CC44" if t["side"] == "BUY" else "#FF4444"
+                st.markdown(
+                    f'<div style="display:grid;grid-template-columns:70px 55px 100px 110px 100px;gap:6px;'
+                    f'padding:4px 8px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:12px">'
+                    f'<span style="color:#888">{t["time"]}</span>'
+                    f'<span style="color:{sc};font-weight:700">{t["side"]}</span>'
+                    f'<span style="color:#FFF">{t["qty"]:,.4f}</span>'
+                    f'<span style="color:{sc};font-weight:600">${t["usd"]:,.0f}</span>'
+                    f'<span style="color:#888">${t["price"]:,.2f}</span></div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No whale trades detected in recent window.</p>', unsafe_allow_html=True)
+
+    with exch_col:
+        st.markdown('<div style="color:#FF6600;font-size:10px;letter-spacing:1px;margin-bottom:6px;font-family:monospace">EXCHANGE BTC VOLUME (24H)</div>', unsafe_allow_html=True)
+        with st.spinner("Loading exchanges…"):
+            exchanges = get_exchange_netflow()
+        if exchanges:
+            names = [e["name"][:15] for e in exchanges]
+            vols = [e["btc_vol_24h"] for e in exchanges]
+            trusts = [e["trust_score"] for e in exchanges]
+            colors = ["#FF6600" if t >= 8 else "#AA3300" if t >= 5 else "#442200" for t in trusts]
+            fig_ex = dark_fig(340)
+            fig_ex.add_trace(go.Bar(
+                x=vols, y=names, orientation="h",
+                marker=dict(color=colors, line=dict(width=0)),
+                text=[f"{v:,.0f} BTC (Trust:{t})" for v, t in zip(vols, trusts)],
+                textposition="outside",
+                textfont=dict(size=9, color="#FF8C00"),
+            ))
+            fig_ex.update_layout(
+                margin=dict(l=0, r=100, t=10, b=0), height=340,
+                xaxis=dict(showgrid=False, color="#444"),
+                yaxis=dict(autorange="reversed", tickfont=dict(size=10, color="#CCC")),
+            )
+            st.plotly_chart(fig_ex, use_container_width=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Exchange data unavailable.</p>', unsafe_allow_html=True)
+
+    # ── SECTION 2: LIQUIDATION HEATMAP + RISK DASHBOARD ────────────
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+    st.markdown('<div class="bb-ph">💥 LIQUIDATION HEATMAP + CRYPTO RISK DASHBOARD</div>', unsafe_allow_html=True)
+
+    liq_col, risk_col = st.columns([3, 2])
+
+    with liq_col:
+        # Liquidation grouped bar chart
+        with st.spinner("Loading liquidations…"):
+            liqs = get_liquidations()
+        if liqs:
+            coins_l = list(liqs.keys())
+            long_vals = [liqs[c]["long_liq"] / 1e6 for c in coins_l]
+            short_vals = [liqs[c]["short_liq"] / 1e6 for c in coins_l]
+            fig_liq = dark_fig(280)
+            fig_liq.add_trace(go.Bar(name="Long Liqs", x=coins_l, y=long_vals,
+                                     marker_color="#FF4444", text=[f"${v:.1f}M" for v in long_vals],
+                                     textposition="outside", textfont=dict(size=9, color="#FF4444")))
+            fig_liq.add_trace(go.Bar(name="Short Liqs", x=coins_l, y=short_vals,
+                                     marker_color="#00CC44", text=[f"${v:.1f}M" for v in short_vals],
+                                     textposition="outside", textfont=dict(size=9, color="#00CC44")))
+            fig_liq.update_layout(
+                barmode="group", margin=dict(l=0, r=0, t=30, b=0), height=280,
+                title=dict(text="LIQUIDATIONS ($M) — LONG vs SHORT", font=dict(size=11, color="#FF6600"), x=0),
+                xaxis=dict(color="#666"), yaxis=dict(showgrid=False, color="#444"),
+                legend=dict(font=dict(size=9, color="#888"), bgcolor="rgba(0,0,0,0)"),
+            )
+            st.plotly_chart(fig_liq, use_container_width=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Liquidation data unavailable (may be restricted by region).</p>', unsafe_allow_html=True)
+
+        # Open Interest bar chart
+        with st.spinner("Loading open interest…"):
+            oi_data = get_open_interest()
+        if oi_data:
+            oi_coins = [o["symbol"] for o in oi_data]
+            oi_vals = [o["oi_usd"] / 1e9 for o in oi_data]
+            fig_oi = dark_fig(250)
+            fig_oi.add_trace(go.Bar(
+                x=oi_coins, y=oi_vals,
+                marker_color="#FF8C00",
+                text=[f"${v:.2f}B" for v in oi_vals],
+                textposition="outside",
+                textfont=dict(size=9, color="#FF8C00"),
+            ))
+            fig_oi.update_layout(
+                margin=dict(l=0, r=0, t=30, b=0), height=250,
+                title=dict(text="OPEN INTEREST ($B)", font=dict(size=11, color="#FF6600"), x=0),
+                xaxis=dict(color="#666"), yaxis=dict(showgrid=False, color="#444"),
+            )
+            st.plotly_chart(fig_oi, use_container_width=True)
+
+    with risk_col:
+        # Funding rates table
+        with st.spinner("Loading funding rates…"):
+            funding = get_funding_rates()
+        if funding:
+            st.markdown(
+                '<div style="display:grid;grid-template-columns:55px 75px 80px 100px;gap:6px;'
+                'padding:4px 8px;border-bottom:1px solid #FF6600;font-family:monospace;'
+                'font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
+                '<span>COIN</span><span>RATE 8H</span><span>RATE ANN</span><span>SIGNAL</span></div>',
+                unsafe_allow_html=True)
+            for f in funding:
+                rate = f["rate_pct"]
+                # Signal logic
+                if rate > 0.05:
+                    sig, sig_c = "OVER-LONG", "#FF4444"
+                elif rate > 0.01:
+                    sig, sig_c = "LONG SKEW", "#FF8C00"
+                elif rate < -0.05:
+                    sig, sig_c = "OVER-SHORT", "#00CC44"
+                elif rate < -0.01:
+                    sig, sig_c = "SHORT SKEW", "#4488FF"
+                else:
+                    sig, sig_c = "NEUTRAL", "#666"
+                rc = "#00CC44" if rate < 0 else "#FF4444" if rate > 0.03 else "#FF8C00"
+                st.markdown(
+                    f'<div style="display:grid;grid-template-columns:55px 75px 80px 100px;gap:6px;'
+                    f'padding:5px 8px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:12px">'
+                    f'<span style="color:#FF6600;font-weight:700">{f["symbol"]}</span>'
+                    f'<span style="color:{rc};font-weight:600">{rate:+.4f}%</span>'
+                    f'<span style="color:#888">{f["rate_ann"]:+.1f}%</span>'
+                    f'<span style="color:{sig_c};font-weight:700;font-size:10px">{sig}</span></div>',
+                    unsafe_allow_html=True)
+
+            # Aggregate signal banner
+            avg_rate = sum(f["rate_pct"] for f in funding) / len(funding) if funding else 0
+            if avg_rate > 0.03:
+                agg_sig, agg_c, agg_bg = "⚠️ MARKET OVER-LEVERAGED LONG", "#FF4444", "#1A0000"
+            elif avg_rate > 0.005:
+                agg_sig, agg_c, agg_bg = "📊 MILD LONG BIAS", "#FF8C00", "#0A0500"
+            elif avg_rate < -0.03:
+                agg_sig, agg_c, agg_bg = "⚠️ MARKET OVER-LEVERAGED SHORT", "#00CC44", "#001A00"
+            elif avg_rate < -0.005:
+                agg_sig, agg_c, agg_bg = "📊 MILD SHORT BIAS", "#4488FF", "#000A1A"
+            else:
+                agg_sig, agg_c, agg_bg = "✅ NEUTRAL — NO EXTREME POSITIONING", "#888", "#0A0A0A"
+            st.markdown(
+                f'<div style="background:{agg_bg};border:1px solid {agg_c};border-left:4px solid {agg_c};'
+                f'padding:10px 14px;margin:10px 0;font-family:monospace;font-size:12px;color:{agg_c};font-weight:700">'
+                f'{agg_sig}<br><span style="font-size:10px;font-weight:400;color:#888">Avg Funding: {avg_rate:+.4f}%</span></div>',
+                unsafe_allow_html=True)
+
+            # Risk Dashboard card
+            total_liq = sum(liqs[c]["total"] for c in liqs) if liqs else 0
+            btc_oi = next((o["oi_usd"] for o in oi_data if o["symbol"] == "BTC"), 0) if oi_data else 0
+
+            # Risk level logic
+            risk_factors = 0
+            if abs(avg_rate) > 0.03: risk_factors += 1
+            if total_liq > 50_000_000: risk_factors += 1
+            if btc_oi > 10_000_000_000: risk_factors += 1
+
+            if risk_factors >= 2:
+                risk_lvl, risk_c = "HIGH", "#FF4444"
+            elif risk_factors == 1:
+                risk_lvl, risk_c = "MEDIUM", "#FF8C00"
+            else:
+                risk_lvl, risk_c = "LOW", "#00CC44"
+
+            st.markdown(
+                f'<div style="background:#0A0A0A;border:1px solid {risk_c};border-left:4px solid {risk_c};'
+                f'padding:14px 16px;margin:8px 0;font-family:monospace">'
+                f'<div style="color:{risk_c};font-size:14px;font-weight:700;letter-spacing:1px;margin-bottom:8px">'
+                f'🛡️ CRYPTO RISK LEVEL: {risk_lvl}</div>'
+                f'<div style="font-size:11px;color:#888;line-height:1.8">'
+                f'Funding: <span style="color:{"#FF4444" if abs(avg_rate)>0.03 else "#00CC44"}">{"ELEVATED" if abs(avg_rate)>0.03 else "NORMAL"}</span><br>'
+                f'Liquidations: <span style="color:{"#FF4444" if total_liq>50e6 else "#00CC44"}">${total_liq/1e6:.1f}M {"(HIGH)" if total_liq>50e6 else "(NORMAL)"}</span><br>'
+                f'BTC OI: <span style="color:{"#FF4444" if btc_oi>10e9 else "#00CC44"}">${btc_oi/1e9:.1f}B {"(CROWDED)" if btc_oi>10e9 else "(HEALTHY)"}</span>'
+                f'</div></div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Funding rate data unavailable.</p>', unsafe_allow_html=True)
 # ════════════════════════════════════════════════════════════════════
 # TAB 4 — POLYMARKET
 # ════════════════════════════════════════════════════════════════════
