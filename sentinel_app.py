@@ -526,17 +526,17 @@ font-family:monospace;font-size:9px;color:#FF6600;letter-spacing:1px;margin-bott
         # ── Polymarket top
         st.markdown('<div class="bb-ph">🎲 POLYMARKET ACTIVE MARKETS</div>', unsafe_allow_html=True)
         with st.spinner("Loading markets…"):
-            poly = polymarket_markets(30)
+            poly = polymarket_events(30)
         if poly:
             # Separate active and closed
-            active_poly = [m for m in poly if poly_status(m)[0]=="ACTIVE"]
-            closed_poly = [m for m in poly if poly_status(m)[0] in ("RESOLVED","CLOSED","EXPIRED (pending resolve)")]
-            for m in active_poly[:5]:
-                st.markdown(render_poly_card(m), unsafe_allow_html=True)
+            active_poly = [e for e in poly if poly_status(e)[0]=="ACTIVE"]
+            closed_poly = [e for e in poly if poly_status(e)[0] in ("RESOLVED","CLOSED","EXPIRED (pending resolve)")]
+            for e in active_poly[:5]:
+                st.markdown(render_poly_card(e), unsafe_allow_html=True)
             if closed_poly:
                 st.markdown('<div style="color:#FF6600;font-size:10px;letter-spacing:1px;margin:8px 0 4px">RECENTLY CLOSED</div>', unsafe_allow_html=True)
-                for m in closed_poly[:3]:
-                    st.markdown(render_poly_card(m), unsafe_allow_html=True)
+                for e in closed_poly[:3]:
+                    st.markdown(render_poly_card(e), unsafe_allow_html=True)
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Could not reach Polymarket API. Check network connectivity.</p>', unsafe_allow_html=True)
 
@@ -1109,83 +1109,92 @@ with tabs[5]:
     st.markdown('<div class="bb-ph">🎲 POLYMARKET — PREDICTION INTELLIGENCE & UNUSUAL FLOW</div>', unsafe_allow_html=True)
 
     with st.spinner("Loading Polymarket…"):
-        all_poly = polymarket_markets(100)
+        all_poly = polymarket_events(100)
 
     if not all_poly:
         st.markdown('<div style="background:#0A0500;border-left:4px solid #FF6600;padding:12px;font-family:monospace;font-size:12px;color:#FF8C00">⚠️ Could not reach Polymarket API. May be temporarily unavailable.</div>', unsafe_allow_html=True)
     else:
-        # ── Filter to ACTIVE markets only, sorted by 24h volume, top 10
-        def is_active(m):
-            if m.get("closed", False) or m.get("resolved", False): return False
-            end = m.get("endDate","") or ""
+        # ── Filter to ACTIVE events only, sorted by volume, top 10
+        def is_active(e):
+            if e.get("closed", False) or e.get("resolved", False): return False
+            end = e.get("endDate","") or ""
             if end:
                 try:
                     from datetime import timezone
-                    e = datetime.fromisoformat(end.replace("Z","+00:00"))
-                    if e < datetime.now(timezone.utc): return False
+                    ed = datetime.fromisoformat(end.replace("Z","+00:00"))
+                    if ed < datetime.now(timezone.utc): return False
                 except: pass
             return True
 
-        active_markets = [m for m in all_poly if is_active(m)]
-        active_markets.sort(key=lambda m: _safe_float(m.get("volume24hr",0)), reverse=True)
-        top10 = active_markets[:10]
+        active_events = [e for e in all_poly if is_active(e)]
+        active_events.sort(key=lambda e: _safe_float(e.get("volume",0)), reverse=True)
+        top10 = active_events[:10]
 
-        poly_search = st.text_input("🔍 SEARCH ALL ACTIVE MARKETS", placeholder="Fed rate, oil, Taiwan, BTC…", key="ps")
+        poly_search = st.text_input("🔍 SEARCH ALL ACTIVE EVENTS", placeholder="Fed rate, oil, Taiwan, BTC…", key="ps")
         if poly_search:
-            top10 = [m for m in active_markets if poly_search.lower() in str(m.get("question","")).lower()][:10]
+            top10 = [e for e in active_events if poly_search.lower() in str(e.get("title","")).lower()][:10]
+
+        # ── Helper: get the leading participant probability from an event
+        def _event_lead_prob(evt):
+            """Return the highest participant probability (0-100) from the event's markets."""
+            markets = evt.get("markets", [])
+            if not markets:
+                return 50.0
+            best = 0.0
+            for mk in markets:
+                pp = _parse_poly_field(mk.get("outcomePrices", []))
+                p = _safe_float(pp[0]) if pp else 0.0
+                if p > best:
+                    best = p
+            return max(0.0, min(100.0, best * 100))
 
         # ── VISUALIZATIONS — STACKED VERTICALLY ─────────────────
-        st.markdown('<div class="bb-ph" style="margin-top:10px">📊 MARKET INTELLIGENCE DASHBOARD</div>', unsafe_allow_html=True)
+        st.markdown('<div class="bb-ph" style="margin-top:10px">📊 EVENT INTELLIGENCE DASHBOARD</div>', unsafe_allow_html=True)
 
         if top10:
             # Build clickable labels with URLs
-            def make_poly_label(m, max_len=35):
-                q = m.get("question","")
-                url = poly_url(m)
+            def make_poly_label(e, max_len=35):
+                q = e.get("title", e.get("question",""))
+                url = poly_url(e)
                 short = q[:max_len]+"…" if len(q)>max_len else q
                 return short, url
 
-            labels_with_url = [make_poly_label(m) for m in top10]
+            labels_with_url = [make_poly_label(e) for e in top10]
             labels = [l for l,u in labels_with_url]
             urls   = [u for l,u in labels_with_url]
 
-            # Chart 1: 24h Volume bar chart (full width)
-            vols   = [_safe_float(m.get("volume24hr",0))/1e3 for m in top10]
+            # Chart 1: Total Volume bar chart (full width) — events don't have volume24hr
+            vols   = [_safe_float(e.get("volume",0))/1e6 for e in top10]
             colors = ["#FF6600" if i==0 else "#AA3300" if i<3 else "#662200" for i in range(len(top10))]
             fig_vol = dark_fig(320)
             fig_vol.add_trace(go.Bar(
                 x=vols, y=labels, orientation="h",
                 marker=dict(color=colors, line=dict(width=0)),
-                text=[f"${v:,.0f}K" for v in vols], textposition="outside",
+                text=[f"${v:,.1f}M" for v in vols], textposition="outside",
                 textfont=dict(size=10, color="#FF8C00"),
                 customdata=urls,
             ))
             fig_vol.update_layout(
                 margin=dict(l=10,r=80,t=32,b=0), height=320,
-                title=dict(text="24H VOLUME ($K) — Click bars to open market", font=dict(size=11,color="#FF6600"), x=0),
+                title=dict(text="TOTAL VOLUME ($M) — Click bars to open event", font=dict(size=11,color="#FF6600"), x=0),
                 xaxis=dict(showgrid=False, color="#444"),
                 yaxis=dict(autorange="reversed", tickfont=dict(size=9,color="#CCC"))
             )
             st.plotly_chart(fig_vol, width="stretch")
 
-            # Clickable market links below chart 1
-            with st.expander("🔗 CLICK TO OPEN MARKETS", expanded=False):
-                for m in top10:
-                    q = m.get("question","")[:70]
-                    url = poly_url(m)
-                    pp = _parse_poly_field(m.get("outcomePrices",[]))
-                    p = _safe_float(pp[0])*100 if pp else 50
+            # Clickable event links below chart 1
+            with st.expander("🔗 CLICK TO OPEN EVENTS", expanded=False):
+                for e in top10:
+                    q = e.get("title", e.get("question",""))[:70]
+                    url = poly_url(e)
+                    p = _event_lead_prob(e)
                     c = "#00CC44" if p>=50 else "#FF4444"
                     st.markdown(f'<div style="padding:3px 0;font-family:monospace;font-size:11px"><a href="{url}" target="_blank" style="color:#FF6600">↗ {_esc(q)}</a> <span style="color:{c};font-weight:700">{p:.0f}%</span></div>', unsafe_allow_html=True)
 
             st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-            # Chart 2: YES probability (full width)
-            y_probs = []
-            for m in top10:
-                pp = _parse_poly_field(m.get("outcomePrices",[]))
-                p = _safe_float(pp[0])*100 if pp else 50
-                y_probs.append(round(p,1))
+            # Chart 2: Lead probability (full width)
+            y_probs = [_event_lead_prob(e) for e in top10]
             bar_colors = ["#00CC44" if p>=50 else "#FF4444" for p in y_probs]
             fig_prob = dark_fig(320)
             fig_prob.add_trace(go.Bar(
@@ -1198,7 +1207,7 @@ with tabs[5]:
             fig_prob.add_vline(x=50, line_dash="dash", line_color="#555", opacity=0.6)
             fig_prob.update_layout(
                 margin=dict(l=10,r=60,t=32,b=0), height=320,
-                title=dict(text="YES PROBABILITY (%)", font=dict(size=11,color="#FF6600"), x=0),
+                title=dict(text="LEADING OUTCOME PROBABILITY (%)", font=dict(size=11,color="#FF6600"), x=0),
                 xaxis=dict(range=[0,115], showgrid=False, color="#444"),
                 yaxis=dict(autorange="reversed", tickfont=dict(size=9,color="#CCC"))
             )
@@ -1206,58 +1215,12 @@ with tabs[5]:
 
             st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-            # Chart 3: Activity ratio (full width)
-            ratios = []
-            for m in top10:
-                v24 = _safe_float(m.get("volume24hr",0))
-                vt  = _safe_float(m.get("volume",1))
-                ratios.append(round(v24/vt*100,1) if vt>0 else 0)
-            r_colors = ["#FF4444" if r>=38 else "#FF6600" if r>=20 else "#333333" for r in ratios]
-            fig_ratio = dark_fig(320)
-            fig_ratio.add_trace(go.Bar(
-                x=ratios, y=labels, orientation="h",
-                marker=dict(color=r_colors, line=dict(width=0)),
-                text=[f"{r:.0f}%" for r in ratios], textposition="outside",
-                textfont=dict(size=10, color="#CCCCCC"),
-                customdata=urls,
-            ))
-            fig_ratio.add_vline(x=38, line_dash="dash", line_color="#FF4444", opacity=0.5)
-            fig_ratio.update_layout(
-                margin=dict(l=10,r=60,t=32,b=0), height=320,
-                title=dict(text="24H / TOTAL VOLUME RATIO — ≥38% = UNUSUAL ACTIVITY", font=dict(size=11,color="#FF6600"), x=0),
-                xaxis=dict(range=[0,115], showgrid=False, color="#444"),
-                yaxis=dict(autorange="reversed", tickfont=dict(size=9,color="#CCC"))
-            )
-            st.plotly_chart(fig_ratio, width="stretch")
-
-        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-        # ── Unusual activity ──
-        unusual = detect_unusual_poly(active_markets)
-        if unusual:
-            st.markdown('<div class="bb-ph" style="color:#FF4444;border-color:#FF4444">🚨 UNUSUAL ACTIVITY DETECTED</div>', unsafe_allow_html=True)
-            for m in unusual:
-                raw_t = m.get("question",m.get("title","")) or ""
-                v24 = _safe_float(m.get("volume24hr",0)); vtot = _safe_float(m.get("volume",0))
-                ratio = v24/vtot*100 if vtot>0 else 0
-                url = poly_url(m)
-                side, side_cls = unusual_side(m)
-                side_html = f' &nbsp;— <span class="{side_cls or "poly-unusual-yes"}" style="font-size:13px">Favoring {side or "UNKNOWN"}</span>' if side else ""
-                st.markdown(
-                    f'<div style="background:#0D0000;border:1px solid #FF0000;border-left:4px solid #FF0000;'
-                    f'padding:14px 16px;margin:6px 0;font-family:monospace">'
-                    f'🚨 <a href="{url}" target="_blank" style="color:#FF4444;font-weight:700;font-size:15px">{_esc(raw_t[:90])}</a>'
-                    f'<div style="margin-top:7px;font-size:13px"><span style="color:#FF6600;font-weight:600">24h Vol: ${v24:,.0f} &nbsp;({ratio:.0f}% of total volume)</span>'
-                    f'{side_html}</div></div>', unsafe_allow_html=True)
-            st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-        # ── Top 10 ACTIVE market cards + guide ──
+        # ── Top 10 ACTIVE event cards + guide ──
         poly_col, guide_col = st.columns([3,1])
         with poly_col:
-            st.markdown(f'<div class="bb-ph">📋 TOP 10 ACTIVE MARKETS BY 24H VOLUME ({len(active_markets)} active total)</div>', unsafe_allow_html=True)
-            for m in top10:
-                is_unusual = m in unusual
-                st.markdown(render_poly_card(m, show_unusual=is_unusual), unsafe_allow_html=True)
+            st.markdown(f'<div class="bb-ph">📋 TOP 10 ACTIVE EVENTS ({len(active_events)} active total)</div>', unsafe_allow_html=True)
+            for e in top10:
+                st.markdown(render_poly_card(e), unsafe_allow_html=True)
 
         with guide_col:
             st.markdown("""<div style="background:#080808;border:1px solid #1A1A1A;padding:12px;font-family:monospace;font-size:10px;color:#888;line-height:1.9">
