@@ -669,7 +669,7 @@
         emissive: new THREE.Color(0x020815),
         emissiveIntensity: 0.08,
       });
-      if (globeMesh) scene.remove(globeMesh);
+      if (globeMesh) { scene.remove(globeMesh); if (globeMesh.material.map) globeMesh.material.map.dispose(); globeMesh.material.dispose(); }
       globeMesh = new THREE.Mesh(globeGeo, mat);
       scene.add(globeMesh);
       document.getElementById('ls').classList.add('gone');
@@ -831,7 +831,11 @@
     }
 
     function renderMarkers() {
-      markers.forEach(({ mesh, ring, glow }) => { scene.remove(mesh); scene.remove(ring); scene.remove(glow); });
+      markers.forEach(({ mesh, ring, glow }) => {
+        scene.remove(mesh); mesh.material.dispose();
+        scene.remove(ring); ring.material.dispose();
+        scene.remove(glow); glow.material.dispose();
+      });
       markers.length = 0;
       HOTSPOTS.filter(h => activeFilter === 'all' || h.type === activeFilter).forEach(makeMarker);
       if (activeFilter === 'custom' || activeFilter === 'all') customEvents.forEach(makeMarker);
