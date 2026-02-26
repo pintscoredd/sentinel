@@ -1163,18 +1163,26 @@ def generate_recommendation(chain, spx_metrics, vix_data):
 
 
 # ════════════════════════════════════════════════════════════════════
-# CRYPTO WHALE FLOWS & ON-CHAIN DATA
+# CRYPTO WHALE FLOWS & ON-CHAIN DATA  (US-accessible APIs)
 # ════════════════════════════════════════════════════════════════════
+
+# ── Symbol mapping: callers pass "BTCUSDT" / "ETHUSDT" style keys ──
+_COINBASE_PRODUCT_MAP = {
+    "BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD",
+    "SOLUSDT": "SOL-USD", "BNBUSDT": "BNB-USD",
+}
 
 @st.cache_data(ttl=120)
 def get_whale_trades(symbol="BTCUSDT", min_usd=500_000):
-    """Binance public trades — filter for whale-size orders (≥ min_usd).
+    """Coinbase Exchange public trades — filter for whale-size orders (>= min_usd).
     Returns top 25 by USD value descending.
     """
+    product = _COINBASE_PRODUCT_MAP.get(symbol, "BTC-USD")
     try:
         r = requests.get(
-            "https://api.binance.com/api/v3/trades",
-            params={"symbol": symbol, "limit": 1000},
+            f"https://api.exchange.coinbase.com/products/{product}/trades",
+            params={"limit": 1000},
+            headers={"Accept": "application/json"},
             timeout=10,
         )
         r.raise_for_status()
@@ -1182,15 +1190,22 @@ def get_whale_trades(symbol="BTCUSDT", min_usd=500_000):
         result = []
         for t in trades:
             price = float(t.get("price", 0))
-            qty = float(t.get("qty", 0))
+            qty = float(t.get("size", 0))
             usd = price * qty
             if usd < min_usd:
                 continue
-            # isBuyerMaker=True means the buyer placed a limit order (taker sold into it)
-            side = "SELL" if t.get("isBuyerMaker", False) else "BUY"
-            ts = t.get("time", 0)
-            from datetime import datetime, timezone
-            time_str = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%H:%M:%S") if ts else ""
+            # Coinbase side: "buy" = taker bought (aggressor buy), "sell" = taker sold
+            raw_side = str(t.get("side", "")).upper()
+            side = raw_side if raw_side in ("BUY", "SELL") else "BUY"
+            time_str = ""
+            ts = t.get("time", "")
+            if ts:
+                try:
+                    from datetime import datetime, timezone
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    time_str = dt.strftime("%H:%M:%S")
+                except:
+                    time_str = str(ts)[:8]
             result.append({
                 "time": time_str,
                 "side": side,
@@ -1228,27 +1243,32 @@ def get_exchange_netflow():
         return []
 
 
-_FUNDING_COINS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
-                   "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "MATICUSDT", "ADAUSDT"]
+_FUNDING_COINS_BYBIT = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+                         "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "MATICUSDT", "ADAUSDT"]
 
 @st.cache_data(ttl=120)
 def get_funding_rates():
-    """Binance Futures premiumIndex — funding rates for top 10 coins."""
+    """Bybit v5 linear tickers — funding rates for top 10 coins.
+    Uses api.bybit.com which is accessible from the US.
+    """
     try:
         r = requests.get(
-            "https://fapi.binance.com/fapi/v1/premiumIndex",
+            "https://api.bybit.com/v5/market/tickers",
+            params={"category": "linear"},
             timeout=10,
         )
         r.raise_for_status()
         data = r.json()
-        lookup = {d["symbol"]: d for d in data if d.get("symbol") in _FUNDING_COINS}
+        tickers = data.get("result", {}).get("list", [])
+        lookup = {t["symbol"]: t for t in tickers if t.get("symbol") in _FUNDING_COINS_BYBIT}
         result = []
-        for sym in _FUNDING_COINS:
-            d = lookup.get(sym)
-            if not d:
+        for sym in _FUNDING_COINS_BYBIT:
+            t = lookup.get(sym)
+            if not t:
                 continue
-            rate = float(d.get("lastFundingRate", 0) or 0)
-            mark = float(d.get("markPrice", 0) or 0)
+            # Bybit returns fundingRate as a decimal string (e.g. "0.0001")
+            rate = float(t.get("fundingRate", 0) or 0)
+            mark = float(t.get("markPrice", 0) or 0)
             result.append({
                 "symbol": sym.replace("USDT", ""),
                 "rate_pct": round(rate * 100, 4),
@@ -1260,28 +1280,38 @@ def get_funding_rates():
         return []
 
 
-_OI_COINS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "AVAXUSDT"]
+_OI_COINS_BYBIT = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "AVAXUSDT"]
 
 @st.cache_data(ttl=120)
 def get_open_interest():
-    """Binance Futures open interest per coin, enriched with mark price for USD value."""
+    """Bybit v5 open interest per coin.
+    Uses /v5/market/open-interest endpoint (public, no API key).
+    """
     try:
         result = []
-        # Get mark prices in one call
-        pi = requests.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=10)
-        pi.raise_for_status()
-        marks = {d["symbol"]: float(d.get("markPrice", 0) or 0) for d in pi.json()}
+        # Get mark prices from tickers in one call
+        tr = requests.get(
+            "https://api.bybit.com/v5/market/tickers",
+            params={"category": "linear"},
+            timeout=10,
+        )
+        tr.raise_for_status()
+        tickers = tr.json().get("result", {}).get("list", [])
+        marks = {t["symbol"]: float(t.get("markPrice", 0) or 0) for t in tickers}
 
-        for sym in _OI_COINS:
+        for sym in _OI_COINS_BYBIT:
             try:
                 r = requests.get(
-                    "https://fapi.binance.com/fapi/v1/openInterest",
-                    params={"symbol": sym},
+                    "https://api.bybit.com/v5/market/open-interest",
+                    params={"category": "linear", "symbol": sym, "intervalTime": "5min", "limit": 1},
                     timeout=8,
                 )
                 r.raise_for_status()
-                d = r.json()
-                oi_coins = float(d.get("openInterest", 0) or 0)
+                items = r.json().get("result", {}).get("list", [])
+                if not items:
+                    continue
+                # openInterest is in coin terms
+                oi_coins = float(items[0].get("openInterest", 0) or 0)
                 mark = marks.get(sym, 0)
                 oi_usd = oi_coins * mark
                 result.append({
@@ -1297,39 +1327,34 @@ def get_open_interest():
         return []
 
 
-_LIQ_COINS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"]
+_LIQ_COINS = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]
 
 @st.cache_data(ttl=180)
 def get_liquidations():
-    """Binance Futures forced liquidation orders.
-    NOTE: /fapi/v1/allForceOrders may return 403 based on region/IP.
-    Returns empty dict gracefully on any error.
+    """Coinglass public liquidation data.
+    Falls back to empty dict gracefully on 403 / rate-limit / any error.
     """
     result = {}
-    for sym in _LIQ_COINS:
-        coin = sym.replace("USDT", "")
+    for coin in _LIQ_COINS:
         try:
             r = requests.get(
-                "https://fapi.binance.com/fapi/v1/allForceOrders",
-                params={"symbol": sym, "limit": 200},
+                "https://open-api.coinglass.com/public/v2/liquidation_chart",
+                params={"symbol": coin, "time_type": "1"},
+                headers={"Accept": "application/json"},
                 timeout=10,
             )
-            # Graceful fallback on 403 / any HTTP error
-            if r.status_code == 403:
+            if r.status_code in (403, 429):
                 result[coin] = {"long_liq": 0, "short_liq": 0, "total": 0}
                 continue
             r.raise_for_status()
-            orders = r.json()
-            long_liq = 0.0
-            short_liq = 0.0
-            for o in orders:
-                qty = float(o.get("price", 0) or 0) * float(o.get("origQty", 0) or 0)
-                side = o.get("side", "")
-                # SELL side = long position liquidated, BUY side = short position liquidated
-                if side == "SELL":
-                    long_liq += qty
-                elif side == "BUY":
-                    short_liq += qty
+            data = r.json()
+            # Coinglass returns {code, data: {buyVolUsd: [...], sellVolUsd: [...]}}
+            chart = data.get("data", {})
+            # Sum the most recent array values for buys (short liqs) and sells (long liqs)
+            buy_vols = chart.get("buyVolUsd", [])   # short liquidations (forced buys)
+            sell_vols = chart.get("sellVolUsd", [])  # long liquidations (forced sells)
+            short_liq = sum(float(v) for v in buy_vols[-24:]) if buy_vols else 0
+            long_liq = sum(float(v) for v in sell_vols[-24:]) if sell_vols else 0
             result[coin] = {
                 "long_liq": round(long_liq, 2),
                 "short_liq": round(short_liq, 2),
@@ -1338,3 +1363,4 @@ def get_liquidations():
         except:
             result[coin] = {"long_liq": 0, "short_liq": 0, "total": 0}
     return result
+
