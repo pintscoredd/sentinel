@@ -642,7 +642,7 @@ with tabs[1]:
                     st.markdown(render_unusual_trade(scored["unusual"], ticker=tkr, expiry=exp_fmt), unsafe_allow_html=True)
 
                 # ── Full chain in expander
-                with st.expander("📄 FULL OPTIONS CHAIN", expanded=False):
+                with st.expander("� **FULL OPTIONS CHAIN**", expanded=False):
                     fc, fp = st.columns(2)
                     with fc:
                         st.markdown('<div style="color:#00CC44;font-size:9px;font-weight:700;letter-spacing:2px">▲ ALL CALLS</div>', unsafe_allow_html=True)
