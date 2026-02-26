@@ -190,6 +190,117 @@ def options_chain(ticker, expiry=None):
     except:
         return None, None, None
 
+
+def score_options_chain(calls_df, puts_df, current_price, vix=None):
+    """Adaptive options scoring engine.
+
+    1. Trims 13 deep OTM/ITM strikes (furthest from current price).
+    2. Scores each contract: S = (norm_VOI * w1) + (IV_pct * w2) - (|delta_proxy - 0.5| * w3)
+    3. Adapts weights based on VIX regime.
+    4. Returns dict with 'top_calls' (2), 'top_puts' (2), 'unusual' (single highest V/OI).
+    """
+    import pandas as pd
+
+    result = {"top_calls": [], "top_puts": [], "unusual": None}
+    if calls_df is None or puts_df is None:
+        return result
+    if calls_df.empty and puts_df.empty:
+        return result
+
+    # ── Adaptive Weights ──
+    w1, w2, w3 = 0.40, 0.30, 0.30
+    vix_val = float(vix) if vix is not None else 20.0
+    if vix_val > 25:
+        # High-vol regime: prioritize directional certainty (delta)
+        w3 += 0.15
+        w1 -= 0.075
+        w2 -= 0.075
+    elif vix_val < 15:
+        # Low-vol regime: prioritize unusual volume flow
+        w1 += 0.15
+        w2 -= 0.075
+        w3 -= 0.075
+
+    def _score_side(df, side):
+        if df is None or df.empty:
+            return []
+        df = df.copy()
+        # Ensure numeric columns
+        for col in ["strike", "volume", "openInterest", "impliedVolatility"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+        # ── Trim deep OTM/ITM: keep strikes nearest to current_price ──
+        if current_price and "strike" in df.columns and len(df) > 13:
+            df["_dist"] = (df["strike"] - current_price).abs()
+            df = df.nsmallest(len(df) - 13, "_dist").drop(columns=["_dist"])
+
+        if df.empty:
+            return []
+
+        # ── Volume / OI ratio ──
+        df["_voi"] = df.apply(
+            lambda r: r.get("volume", 0) / max(r.get("openInterest", 1), 1), axis=1
+        )
+        max_voi = df["_voi"].max()
+        df["_norm_voi"] = df["_voi"] / max_voi if max_voi > 0 else 0
+
+        # ── IV Percentile within this side ──
+        iv_col = "impliedVolatility"
+        if iv_col in df.columns:
+            iv_min, iv_max = df[iv_col].min(), df[iv_col].max()
+            iv_range = iv_max - iv_min
+            df["_iv_pct"] = (df[iv_col] - iv_min) / iv_range if iv_range > 0 else 0.5
+        else:
+            df["_iv_pct"] = 0.5
+
+        # ── Delta proxy from moneyness ──
+        if current_price and current_price > 0 and "strike" in df.columns:
+            df["_delta_proxy"] = 1.0 - (df["strike"] - current_price).abs() / current_price
+            df["_delta_proxy"] = df["_delta_proxy"].clip(0, 1)
+        else:
+            df["_delta_proxy"] = 0.5
+
+        # ── Score ──
+        df["_score"] = (
+            df["_norm_voi"] * w1
+            + df["_iv_pct"] * w2
+            - (df["_delta_proxy"] - 0.5).abs() * w3
+        )
+
+        # Build output rows
+        rows = []
+        for _, r in df.iterrows():
+            rows.append({
+                "strike": float(r.get("strike", 0)),
+                "lastPrice": float(r.get("lastPrice", 0)),
+                "bid": float(r.get("bid", 0)),
+                "ask": float(r.get("ask", 0)),
+                "volume": int(r.get("volume", 0)),
+                "openInterest": int(r.get("openInterest", 0)),
+                "iv": float(r.get("impliedVolatility", 0)),
+                "voi": round(float(r.get("_voi", 0)), 2),
+                "score": round(float(r.get("_score", 0)), 4),
+                "side": side,
+            })
+        return rows
+
+    call_rows = _score_side(calls_df, "call")
+    put_rows = _score_side(puts_df, "put")
+
+    # Top 2 per side by score
+    call_rows.sort(key=lambda r: r["score"], reverse=True)
+    put_rows.sort(key=lambda r: r["score"], reverse=True)
+    result["top_calls"] = call_rows[:2]
+    result["top_puts"] = put_rows[:2]
+
+    # Unusual: single highest V/OI across entire chain
+    all_rows = call_rows + put_rows
+    if all_rows:
+        result["unusual"] = max(all_rows, key=lambda r: r["voi"])
+
+    return result
+
 @st.cache_data(ttl=600)
 def sector_etfs():
     S = {"Technology": "XLK", "Financials": "XLF", "Energy": "XLE", "Healthcare": "XLV",
