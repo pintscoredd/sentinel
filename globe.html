@@ -23,11 +23,11 @@
 
     #c {
       display: block;
-      width: 100%;
-      height: 100%;
       position: absolute;
       top: 0;
-      left: 0;
+      left: 170px;
+      width: calc(100% - 385px);
+      height: 100%;
     }
 
     /* Header */
@@ -547,9 +547,9 @@
 
     // ── CANVAS SIZE (use actual canvas dimensions for correct picking)
     const canvas = document.getElementById('c');
-    let CW = canvas.offsetWidth || window.innerWidth;
+    let CW = canvas.offsetWidth || (window.innerWidth - 385);
     let CH = canvas.offsetHeight || window.innerHeight;
-    if (CW < 10) CW = window.innerWidth;
+    if (CW < 10) CW = window.innerWidth - 385;
     if (CH < 10) CH = window.innerHeight;
 
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
@@ -1038,8 +1038,9 @@
 
     // Resize
     window.addEventListener('resize', () => {
-      const w = canvas.clientWidth || window.innerWidth;
-      const h = canvas.clientHeight || window.innerHeight;
+      const w = canvas.offsetWidth || (window.innerWidth - 385);
+      const h = canvas.offsetHeight || window.innerHeight;
+      CW = w; CH = h;
       camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setSize(w, h);
     });
 
