@@ -541,7 +541,7 @@ Below Gamma Flip = dealers amplify moves (trend).</span>
 </div></div>"""
 
 def render_0dte_recommendation(rec):
-    """Renders the 0DTE Trade Analyzer recommendation output."""
+    """Renders the 0DTE Trade Analyzer recommendation output with Greeks breakdown."""
     conf_c = {"HIGH": "#00CC44", "MODERATE": "#FF8C00", "LOW": "#FF4444"}.get(rec["confidence"], "#888888")
     if "NO TRADE" in rec['recommendation']:
         conf_c = "#555555"
@@ -549,13 +549,21 @@ def render_0dte_recommendation(rec):
     met_str = ', '.join(rec['conditions_met']) if rec['conditions_met'] else 'None'
     failed_str = ', '.join(rec['conditions_failed']) if rec['conditions_failed'] else 'None'
 
+    # Handle multi-line stats (Greeks breakdown)
+    stats_html = rec['stats'].replace('\n', '<br>') if rec.get('stats') else ''
+
     return f"""
 <div style="background:#0A0A0A;border:1px solid #222;border-left:4px solid {conf_c};
 padding:16px 18px;font-family:monospace;font-size:12px;line-height:1.9;margin:8px 0">
 <div style="color:{conf_c};font-weight:700;font-size:14px;letter-spacing:1px;margin-bottom:10px">
 {rec['recommendation']}</div>
 <div style="color:#CCCCCC">{rec['rationale']}</div>
-<div style="color:#FF8C00;margin-top:6px">{rec['stats']}</div>
+<div style="background:#050505;border:1px solid #1A1A1A;padding:10px 12px;margin:10px 0;
+font-size:11px;line-height:1.8;letter-spacing:0.3px">
+<div style="color:#FF6600;font-weight:700;font-size:10px;letter-spacing:1px;margin-bottom:4px">
+GREEKS ANALYSIS</div>
+<div style="color:#FF8C00">{stats_html}</div>
+</div>
 <div style="color:#CCCCCC;margin-top:6px">{rec['action']}</div>
 <hr style="border-color:#222;margin:10px 0">
 <div style="font-size:10px">
