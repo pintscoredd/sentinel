@@ -34,6 +34,7 @@ from data_fetchers import (
     fetch_0dte_chain, compute_gex_profile, compute_max_pain, compute_pcr,
     find_gamma_flip, fetch_vix_data, find_target_strike,
     parse_trade_input, generate_recommendation,
+    fetch_cboe_gex, compute_cboe_gex_profile, compute_cboe_total_gex,
     get_whale_trades, get_exchange_netflow, get_funding_rates,
     get_open_interest, get_liquidations,
 )
@@ -950,34 +951,69 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
         # ── GEX Profile Chart
-        if _0dte_chain and _spx:
+        if _spx:
             st.markdown('<div class="bb-ph">📊 GAMMA EXPOSURE (GEX) PROFILE</div>', unsafe_allow_html=True)
-            _spy_spot = _spx["spot"] / 10
-            _gex = compute_gex_profile(_0dte_chain, _spy_spot)
-            _gf_spy = find_gamma_flip(_gex)
-            _mp_spy = compute_max_pain(_0dte_chain)
 
-            _gex_col, _info_col = st.columns([3, 2])
-            with _gex_col:
-                _fig = render_0dte_gex_chart(_gex, _gf_spy, _mp_spy)
-                if _fig:
-                    st.plotly_chart(_fig, use_container_width=True, config={'displayModeBar': False})
-                else:
-                    st.markdown('<div style="color:#555;font-family:monospace;font-size:11px">GEX data unavailable.</div>', unsafe_allow_html=True)
-            with _info_col:
-                _wall_strike, _wall_gex = None, 0
-                if _gex:
+            # ── Try CBOE full surface first (most accurate, all expirations)
+            _cboe_spot, _cboe_opts = fetch_cboe_gex("SPX")
+            _use_cboe = _cboe_spot is not None and _cboe_opts is not None
+
+            if _use_cboe:
+                _gex = compute_cboe_gex_profile(_cboe_spot, _cboe_opts)
+                _total_gex_bn = compute_cboe_total_gex(_cboe_spot, _cboe_opts)
+                _spy_spot = _cboe_spot / 10          # keep SPY-scale keys for chart compat
+                _gex_source = f"CBOE • All Expirations • Spot: ${_cboe_spot:,.0f}"
+            elif _0dte_chain:
+                # Fallback: Alpaca 0DTE chain (nearest expiry, ±2% strikes)
+                _spy_spot = _spx["spot"] / 10
+                _gex = compute_gex_profile(_0dte_chain, _spy_spot)
+                _total_gex_bn = None
+                _gex_source = "Alpaca • 0DTE Only • ±2% Strikes"
+            else:
+                _gex = {}
+                _total_gex_bn = None
+                _gex_source = ""
+
+            _gf_spy = find_gamma_flip(_gex) if _gex else None
+            _mp_spy = compute_max_pain(_0dte_chain) if _0dte_chain else None
+
+            if _gex:
+                # Source label + total GEX banner
+                _src_html = (
+                    f'<div style="color:#888;font-family:monospace;font-size:10px;margin-bottom:4px">'
+                    f'Source: {_gex_source}'
+                )
+                if _total_gex_bn is not None:
+                    _gex_color = "#00CC44" if _total_gex_bn >= 0 else "#FF4444"
+                    _src_html += (
+                        f' &nbsp;|&nbsp; Total Net GEX: '
+                        f'<span style="color:{_gex_color};font-weight:600">'
+                        f'${_total_gex_bn:+.2f} Bn</span>'
+                    )
+                _src_html += "</div>"
+                st.markdown(_src_html, unsafe_allow_html=True)
+
+                _gex_col, _info_col = st.columns([3, 2])
+                with _gex_col:
+                    _fig = render_0dte_gex_chart(_gex, _gf_spy, _mp_spy)
+                    if _fig:
+                        st.plotly_chart(_fig, use_container_width=True, config={'displayModeBar': False})
+                    else:
+                        st.markdown('<div style="color:#555;font-family:monospace;font-size:11px">GEX data unavailable.</div>', unsafe_allow_html=True)
+                with _info_col:
+                    _wall_strike, _wall_gex = None, 0
                     for _wk, _wv in _gex.items():
                         if abs(_wv) > abs(_wall_gex):
                             _wall_gex, _wall_strike = _wv, _wk
-                _wall_spx = f"${_wall_strike * 10:,.0f}" if _wall_strike else "—"
-                _wall_dir = "Call Wall" if _wall_gex >= 0 else "Put Wall"
-                st.markdown(render_0dte_gex_decoder(_gf_spy, _mp_spy, _wall_spx, _wall_dir), unsafe_allow_html=True)
-
-        elif not _0dte_open:
-            st.markdown('<div style="color:#555;font-family:monospace;font-size:11px;padding:20px;text-align:center">'
-                        '📊 GEX Profile will populate when the market opens and 0DTE chain data is available.</div>',
-                        unsafe_allow_html=True)
+                    _wall_spx = f"${_wall_strike * 10:,.0f}" if _wall_strike else "—"
+                    _wall_dir = "Call Wall" if _wall_gex >= 0 else "Put Wall"
+                    st.markdown(render_0dte_gex_decoder(_gf_spy, _mp_spy, _wall_spx, _wall_dir), unsafe_allow_html=True)
+            else:
+                st.markdown(
+                    '<div style="color:#555;font-family:monospace;font-size:11px;padding:20px;text-align:center">'
+                    '📊 GEX Profile unavailable — CBOE data could not be fetched and no 0DTE chain loaded.</div>',
+                    unsafe_allow_html=True
+                )
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
