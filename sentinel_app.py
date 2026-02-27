@@ -34,7 +34,7 @@ from data_fetchers import (
     fetch_0dte_chain, compute_gex_profile, compute_max_pain, compute_pcr,
     find_gamma_flip, fetch_vix_data, find_target_strike,
     parse_trade_input, generate_recommendation,
-    fetch_cboe_gex, compute_cboe_gex_profile, compute_cboe_total_gex,
+    fetch_cboe_gex, compute_cboe_gex_profile, compute_cboe_total_gex, compute_cboe_pcr,
     get_whale_trades, get_exchange_netflow, get_funding_rates,
     get_open_interest, get_liquidations,
 )
@@ -942,82 +942,22 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                           delta_color="normal" if _ctg else "inverse")
             else: st.metric("TERM STRUCTURE", "—")
         with _v4:
+            # Try Alpaca 0DTE chain first, fall back to CBOE surface PCR
             _pcr = compute_pcr(_0dte_chain) if _0dte_chain else None
+            if _pcr is None:
+                _cboe_spot_pcr, _cboe_opts_pcr = fetch_cboe_gex("SPX")
+                _pcr = compute_cboe_pcr(_cboe_opts_pcr)
+                _pcr_src = "CBOE" if _pcr is not None else None
+            else:
+                _pcr_src = "0DTE"
             if _pcr is not None:
                 _pl = "Bullish" if _pcr < 0.8 else ("Bearish" if _pcr > 1.0 else "Neutral")
-                st.metric("PUT/CALL RATIO", f"{_pcr:.2f}", delta=_pl)
+                st.metric("PUT/CALL RATIO", f"{_pcr:.2f}", delta=f"{_pl} ({_pcr_src})" if _pcr_src else _pl)
             else: st.metric("PUT/CALL RATIO", "—")
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-        # ── GEX Profile Chart
-        if _spx:
-            st.markdown('<div class="bb-ph">📊 GAMMA EXPOSURE (GEX) PROFILE</div>', unsafe_allow_html=True)
-
-            # ── Try CBOE full surface first (most accurate, all expirations)
-            _cboe_spot, _cboe_opts = fetch_cboe_gex("SPX")
-            _use_cboe = _cboe_spot is not None and _cboe_opts is not None
-
-            if _use_cboe:
-                _gex = compute_cboe_gex_profile(_cboe_spot, _cboe_opts)
-                _total_gex_bn = compute_cboe_total_gex(_cboe_spot, _cboe_opts)
-                _spy_spot = _cboe_spot / 10          # keep SPY-scale keys for chart compat
-                _gex_source = f"CBOE • All Expirations • Spot: ${_cboe_spot:,.0f}"
-            elif _0dte_chain:
-                # Fallback: Alpaca 0DTE chain (nearest expiry, ±2% strikes)
-                _spy_spot = _spx["spot"] / 10
-                _gex = compute_gex_profile(_0dte_chain, _spy_spot)
-                _total_gex_bn = None
-                _gex_source = "Alpaca • 0DTE Only • ±2% Strikes"
-            else:
-                _gex = {}
-                _total_gex_bn = None
-                _gex_source = ""
-
-            _gf_spy = find_gamma_flip(_gex) if _gex else None
-            _mp_spy = compute_max_pain(_0dte_chain) if _0dte_chain else None
-
-            if _gex:
-                # Source label + total GEX banner
-                _src_html = (
-                    f'<div style="color:#888;font-family:monospace;font-size:10px;margin-bottom:4px">'
-                    f'Source: {_gex_source}'
-                )
-                if _total_gex_bn is not None:
-                    _gex_color = "#00CC44" if _total_gex_bn >= 0 else "#FF4444"
-                    _src_html += (
-                        f' &nbsp;|&nbsp; Total Net GEX: '
-                        f'<span style="color:{_gex_color};font-weight:600">'
-                        f'${_total_gex_bn:+.2f} Bn</span>'
-                    )
-                _src_html += "</div>"
-                st.markdown(_src_html, unsafe_allow_html=True)
-
-                _gex_col, _info_col = st.columns([3, 2])
-                with _gex_col:
-                    _fig = render_0dte_gex_chart(_gex, _gf_spy, _mp_spy)
-                    if _fig:
-                        st.plotly_chart(_fig, use_container_width=True, config={'displayModeBar': False})
-                    else:
-                        st.markdown('<div style="color:#555;font-family:monospace;font-size:11px">GEX data unavailable.</div>', unsafe_allow_html=True)
-                with _info_col:
-                    _wall_strike, _wall_gex = None, 0
-                    for _wk, _wv in _gex.items():
-                        if abs(_wv) > abs(_wall_gex):
-                            _wall_gex, _wall_strike = _wv, _wk
-                    _wall_spx = f"${_wall_strike * 10:,.0f}" if _wall_strike else "—"
-                    _wall_dir = "Call Wall" if _wall_gex >= 0 else "Put Wall"
-                    st.markdown(render_0dte_gex_decoder(_gf_spy, _mp_spy, _wall_spx, _wall_dir), unsafe_allow_html=True)
-            else:
-                st.markdown(
-                    '<div style="color:#555;font-family:monospace;font-size:11px;padding:20px;text-align:center">'
-                    '📊 GEX Profile unavailable — CBOE data could not be fetched and no 0DTE chain loaded.</div>',
-                    unsafe_allow_html=True
-                )
-
-        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-        # ── 0DTE Trade Assistant
+        # ── AUTONOMOUS TRADE ANALYZER (moved above GEX)
         with st.expander("⚡ AUTONOMOUS TRADE ANALYZER", expanded=False):
             st.markdown('<div style="color:#888;font-family:monospace;font-size:10px;margin-bottom:8px">'
                         'Automatically evaluates real-time VWAP, Gamma profile, PCR, and Volatility to generate '
@@ -1040,18 +980,118 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                     _rec = generate_recommendation(_0dte_chain, _spx, _vix_data)
                     if _rec:
                         st.markdown(render_0dte_recommendation(_rec), unsafe_allow_html=True)
-                        
-                        # Only log actionable trades
                         if "NO TRADE" not in _rec['recommendation']:
                             _ET_log = pytz.timezone("US/Eastern")
                             _log_time = datetime.now(_ET_log).strftime("%I:%M %p")
                             st.session_state.trade_log_0dte.append(
                                 f"[{_log_time}] {_rec['recommendation'].replace('RECOMMENDATION: ', '')}")
 
-        # ── Compact Trade Log
         if st.session_state.trade_log_0dte:
             _log_entries = st.session_state.trade_log_0dte[-10:]
             st.markdown(render_0dte_trade_log(_log_entries), unsafe_allow_html=True)
+
+        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+        # ── GEX Profile Chart
+        st.markdown('<div class="bb-ph">📊 GAMMA EXPOSURE (GEX) PROFILE</div>', unsafe_allow_html=True)
+
+        # Expiration filter controls
+        _exp_col, _range_col = st.columns([2, 2])
+        with _exp_col:
+            _exp_choice = st.selectbox(
+                "Expiration Filter",
+                options=["0DTE (Today Only)", "≤ 7 Days (Weekly)", "≤ 30 Days", "≤ 45 DTE", "All (≤ 1 Year)"],
+                index=3,
+                key="gex_exp_filter",
+                help="Which expirations to include in the GEX calculation"
+            )
+        with _range_col:
+            _chart_range_pct = st.selectbox(
+                "Chart Strike Range",
+                options=["±2% (~±140 pts)", "±3% (~±210 pts)", "±5% (~±350 pts)", "±7% (~±490 pts)"],
+                index=2,
+                key="gex_range",
+                help="Strike range displayed on the chart"
+            )
+
+        _exp_days_map = {
+            "0DTE (Today Only)": 1,
+            "≤ 7 Days (Weekly)": 7,
+            "≤ 30 Days": 30,
+            "≤ 45 DTE": 45,
+            "All (≤ 1 Year)": 365,
+        }
+        _range_pct_map = {
+            "±2% (~±140 pts)": 0.02,
+            "±3% (~±210 pts)": 0.03,
+            "±5% (~±350 pts)": 0.05,
+            "±7% (~±490 pts)": 0.07,
+        }
+        _exp_limit = _exp_days_map.get(_exp_choice, 45)
+        _chart_pct = _range_pct_map.get(_chart_range_pct, 0.05)
+
+        # Fetch CBOE full surface (primary source)
+        _cboe_spot, _cboe_opts = fetch_cboe_gex("SPX")
+        _use_cboe = _cboe_spot is not None and _cboe_opts is not None
+
+        if _use_cboe:
+            _gex = compute_cboe_gex_profile(_cboe_spot, _cboe_opts,
+                                             expiry_limit_days=_exp_limit,
+                                             strike_pct=_chart_pct + 0.02)  # fetch slightly wider, chart clips
+            _total_gex_bn = compute_cboe_total_gex(_cboe_spot, _cboe_opts)
+            _spy_spot_gex = _cboe_spot / 10
+            _gex_source = f"CBOE Delayed • {_exp_choice} • Spot: ${_cboe_spot:,.0f}"
+        elif _0dte_chain and _spx:
+            _spy_spot_gex = _spx["spot"] / 10
+            _gex = compute_gex_profile(_0dte_chain, _spy_spot_gex)
+            _total_gex_bn = None
+            _gex_source = "Alpaca 0DTE (CBOE unavailable)"
+        else:
+            _gex = {}
+            _total_gex_bn = None
+            _gex_source = ""
+
+        _gf_spy = find_gamma_flip(_gex) if _gex else None
+        _mp_spy = compute_max_pain(_0dte_chain) if _0dte_chain else None
+        _spot_for_chart = _cboe_spot if _use_cboe else (_spx["spot"] if _spx else None)
+
+        if _gex:
+            # Source + total GEX banner
+            _src_html = (f'<div style="color:#555;font-family:monospace;font-size:10px;margin-bottom:4px">'
+                         f'Source: {_gex_source}')
+            if _total_gex_bn is not None:
+                _gex_clr = "#00CC44" if _total_gex_bn >= 0 else "#FF4444"
+                _src_html += (f' &nbsp;|&nbsp; Total Net GEX: '
+                              f'<span style="color:{_gex_clr};font-weight:600">'
+                              f'${_total_gex_bn:+.2f} Bn</span>')
+            _src_html += "</div>"
+            st.markdown(_src_html, unsafe_allow_html=True)
+
+            _gex_col, _info_col = st.columns([3, 2])
+            with _gex_col:
+                _fig = render_0dte_gex_chart(_gex, _gf_spy, _mp_spy,
+                                             spot_spx=_spot_for_chart,
+                                             display_pct=_chart_pct)
+                if _fig:
+                    st.plotly_chart(_fig, width="stretch", config={'displayModeBar': False})
+                else:
+                    st.markdown('<div style="color:#555;font-family:monospace;font-size:11px">GEX data unavailable.</div>', unsafe_allow_html=True)
+            with _info_col:
+                _wall_strike, _wall_gex = None, 0
+                for _wk, _wv in _gex.items():
+                    if abs(_wv) > abs(_wall_gex):
+                        _wall_gex, _wall_strike = _wv, _wk
+                _wall_spx = f"${_wall_strike * 10:,.0f}" if _wall_strike else "—"
+                _wall_dir = "Call Wall" if _wall_gex >= 0 else "Put Wall"
+                st.markdown(render_0dte_gex_decoder(
+                    _gf_spy, _mp_spy, _wall_spx, _wall_dir,
+                    spot_spx=_spot_for_chart,
+                    wall_gex_m=abs(_wall_gex) if _wall_gex else None
+                ), unsafe_allow_html=True)
+        else:
+            st.markdown('<div style="color:#555;font-family:monospace;font-size:11px;padding:20px;text-align:center">'
+                        '📊 GEX Profile unavailable — CBOE could not be fetched and no 0DTE chain loaded.</div>',
+                        unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════
 # TAB 3 — MACRO
@@ -1259,7 +1299,7 @@ with tabs[4]:
                 xaxis=dict(showgrid=False, color="#444"),
                 yaxis=dict(autorange="reversed", tickfont=dict(size=10, color="#CCC")),
             )
-            st.plotly_chart(fig_ex, use_container_width=True)
+            st.plotly_chart(fig_ex, width="stretch")
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Exchange data unavailable.</p>', unsafe_allow_html=True)
 
@@ -1290,7 +1330,7 @@ with tabs[4]:
                 xaxis=dict(color="#666"), yaxis=dict(showgrid=False, color="#444"),
                 legend=dict(font=dict(size=9, color="#888"), bgcolor="rgba(0,0,0,0)"),
             )
-            st.plotly_chart(fig_liq, use_container_width=True)
+            st.plotly_chart(fig_liq, width="stretch")
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Liquidation data unavailable (may be restricted by region).</p>', unsafe_allow_html=True)
 
@@ -1313,7 +1353,7 @@ with tabs[4]:
                 title=dict(text="OPEN INTEREST ($B)", font=dict(size=11, color="#FF6600"), x=0),
                 xaxis=dict(color="#666"), yaxis=dict(showgrid=False, color="#444"),
             )
-            st.plotly_chart(fig_oi, use_container_width=True)
+            st.plotly_chart(fig_oi, width="stretch")
 
     with risk_col:
         # Funding rates table
