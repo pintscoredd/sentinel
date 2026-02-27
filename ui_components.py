@@ -571,25 +571,54 @@ def gemini_response(user_msg, history, context=""):
 # 0DTE TAB HELPERS
 # ════════════════════════════════════════════════════════════════════
 
-def render_0dte_gex_chart(gex, gf_spy, mp_spy):
-    """Renders the Gamma Exposure (GEX) Plotly bar chart."""
+def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
+    """Renders the Gamma Exposure (GEX) Plotly bar chart.
+
+    Args:
+        gex: dict {spy_key: $M}
+        gf_spy: gamma flip in SPY scale
+        mp_spy: max pain in SPY scale
+        spot_spx: SPX spot price for range filtering + spot line
+        display_pct: ±% window around spot to display (default 0.05 = ±5%)
+    """
     if not gex or go is None: return None
-    strikes_spx = [k * 10 for k in sorted(gex.keys())]
-    gex_vals = [gex[k / 10] for k in strikes_spx]
+
+    all_strikes_spx = [k * 10 for k in sorted(gex.keys())]
+    all_gex_vals = [gex[k / 10] for k in all_strikes_spx]
+
+    # Filter to ±display_pct around spot for a tight, readable chart
+    if spot_spx and spot_spx > 0:
+        lo = spot_spx * (1 - display_pct)
+        hi = spot_spx * (1 + display_pct)
+        pairs = [(s, v) for s, v in zip(all_strikes_spx, all_gex_vals) if lo <= s <= hi]
+    else:
+        pairs = list(zip(all_strikes_spx, all_gex_vals))
+
+    if not pairs:
+        pairs = list(zip(all_strikes_spx, all_gex_vals))
+
+    strikes_spx, gex_vals = zip(*pairs) if pairs else ([], [])
     colors = ["#00CC44" if v >= 0 else "#FF4444" for v in gex_vals]
-    
+
     fig = go.Figure(go.Bar(
-        x=strikes_spx, y=gex_vals,
+        x=list(strikes_spx), y=list(gex_vals),
         marker=dict(color=colors, line=dict(width=0)),
         text=[f"${v:.1f}M" for v in gex_vals], textposition="outside",
         textfont=dict(color="#FF8C00", size=9),
         hovertemplate="Strike: %{x}<br>GEX: $%{y:.2f}M<extra></extra>",
     ))
-    
-    fig.update_layout(**CHART_LAYOUT, height=350, xaxis_title="SPX Strike",
+
+    fig.update_layout(**CHART_LAYOUT, height=360, xaxis_title="SPX Strike",
                       yaxis_title="GEX ($M)",
                       title=dict(text="Dealer Gamma Exposure by Strike",
                                  font=dict(color="#FF6600", size=12)))
+
+    # White spot price line
+    if spot_spx:
+        fig.add_vline(x=spot_spx, line=dict(color="#FFFFFF", dash="solid", width=1.5),
+                      annotation_text=f"Spot: {spot_spx:,.0f}",
+                      annotation_font=dict(color="#FFFFFF", size=10),
+                      annotation_position="top left")
     if gf_spy:
         fig.add_vline(x=gf_spy * 10, line=dict(color="#FFCC00", dash="dash", width=1),
                       annotation_text=f"Gamma Flip: {gf_spy * 10:.0f}",
@@ -601,26 +630,73 @@ def render_0dte_gex_chart(gex, gf_spy, mp_spy):
                       annotation_position="bottom right")
     return fig
 
-def render_0dte_gex_decoder(gf_spy, mp_spy, wall_spx, wall_dir):
-    """Renders the GEX Decoder informational block."""
+
+def render_0dte_gex_decoder(gf_spy, mp_spy, wall_spx, wall_dir, spot_spx=None, wall_gex_m=None):
+    """Renders the GEX Decoder with dynamic wall-hit explanation."""
     gf_str = f"${gf_spy * 10:,.0f}" if gf_spy else "—"
     mp_str = f"${mp_spy * 10:,.0f}" if mp_spy else "—"
+
+    # Distance from spot to wall
+    wall_rel = ""
+    if spot_spx and wall_spx and wall_spx != "—":
+        try:
+            wall_val = float(wall_spx.replace("$", "").replace(",", ""))
+            dist = wall_val - spot_spx
+            direction = "above" if dist > 0 else "below"
+            wall_rel = f"<span style='color:#888'>({abs(dist):,.0f} pts {direction} spot)</span>"
+        except Exception:
+            pass
+
+    # Dynamic wall-hit explanation
+    if wall_dir == "Call Wall":
+        wall_action = (
+            "<b style='color:#00CC44'>Call Wall</b> — Dealers are long gamma here. "
+            "As price rallies toward this strike, dealers must <b>sell futures/stock</b> to stay delta-neutral, "
+            "creating a natural ceiling. Price tends to <b>stall or pin</b> at this level. "
+            "A confirmed break above it forces dealers to <b>flip long</b> → can trigger a sharp squeeze."
+        )
+    elif wall_dir == "Put Wall":
+        wall_action = (
+            "<b style='color:#FF4444'>Put Wall</b> — Dealers are short gamma here. "
+            "As price drops toward this strike, dealers must <b>sell more futures/stock</b> to hedge, "
+            "which <b>accelerates the decline</b>. Acts as a momentum amplifier, not a floor. "
+            "A bounce above it forces dealers to <b>cover shorts</b> → snap-back risk."
+        )
+    else:
+        wall_action = "<span style='color:#888'>No dominant wall identified.</span>"
+
+    # Gamma flip context
+    if gf_spy and spot_spx:
+        gf_spx = gf_spy * 10
+        if spot_spx > gf_spx:
+            flip_ctx = (f"<span style='color:#00CC44'>▲ Above Gamma Flip ({gf_str}) — "
+                        f"Positive gamma: dealers dampen volatility, mean-reversion bias.</span>")
+        else:
+            flip_ctx = (f"<span style='color:#FF4444'>▼ Below Gamma Flip ({gf_str}) — "
+                        f"Negative gamma: dealers amplify moves, trend-following bias.</span>")
+    else:
+        flip_ctx = f"<span style='color:#888'>Gamma Flip: {gf_str}</span>"
+
+    wall_size_str = f" (${wall_gex_m:.1f}M notional)" if wall_gex_m is not None else ""
+
     return f"""
 <div style="background:#0A0A0A;border:1px solid #222;border-left:3px solid #FF6600;
-padding:14px 16px;font-family:monospace;font-size:11px;line-height:1.8">
+padding:14px 16px;font-family:monospace;font-size:11px;line-height:1.9">
 <div style="color:#FF6600;font-weight:700;font-size:12px;letter-spacing:1px;margin-bottom:8px">
 GEX DECODER</div>
 <div style="color:#CCCCCC">
-<span style="color:#FFCC00">▸ Gamma Flip:</span> {gf_str}<br>
+{flip_ctx}<br>
 <span style="color:#AA44FF">▸ Max Pain:</span> {mp_str}<br>
-<span style="color:#FF8C00">▸ Biggest Wall:</span> {wall_spx} ({wall_dir})<br>
+<span style="color:#FF8C00">▸ Biggest Wall:</span> {wall_spx} ({wall_dir}){wall_size_str} {wall_rel}<br>
 <hr style="border-color:#222;margin:8px 0">
-<span style="color:#00CC44">Green bars</span> = Call GEX (dealers sell strength → resistance)<br>
-<span style="color:#FF4444">Red bars</span> = Put GEX (dealers buy weakness → support)<br>
+<div style="color:#FF8C00;font-size:10px;font-weight:700;letter-spacing:1px;margin-bottom:4px">
+⚡ IF PRICE HITS THE WALL</div>
+<div style="color:#CCCCCC;line-height:1.8">{wall_action}</div>
 <hr style="border-color:#222;margin:8px 0">
-<span style="color:#888">Wall hit → dealers hedge aggressively → price pins or reverses at the wall.</span><br>
-<span style="color:#888">Above Gamma Flip = dealers dampen moves (mean-revert).<br>
-Below Gamma Flip = dealers amplify moves (trend).</span>
+<span style="color:#888;font-size:10px">
+<span style="color:#00CC44">Green bars</span> = Call GEX → dealer resistance (sells into strength)<br>
+<span style="color:#FF4444">Red bars</span> = Put GEX → dealer acceleration (sells into weakness)
+</span>
 </div></div>"""
 
 def render_0dte_recommendation(rec):
