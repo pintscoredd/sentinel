@@ -660,18 +660,29 @@ def get_stock_snapshot(symbol="SPY"):
 
 
 def get_spx_metrics():
-    """Get SPX-equivalent spot and VWAP by scaling SPY x10."""
-    snap = get_stock_snapshot("SPY")
-    if not snap:
-        return None
-    return {
-        "spot": round(snap["price"] * 10, 2),
-        "vwap": round(snap["vwap"] * 10, 2),
-        "open": round(snap["open"] * 10, 2),
-        "high": round(snap["high"] * 10, 2),
-        "low": round(snap["low"] * 10, 2),
-        "volume": snap["volume"],
-    }
+    """Get SPX spot directly from ^GSPC (accurate), VWAP/range from SPY×10 (Alpaca)."""
+    spy_snap = get_stock_snapshot("SPY")
+    # Prefer real SPX price from Yahoo Finance to avoid SPY tracking-error offset
+    try:
+        spx_q = yahoo_quote("^GSPC")
+        spx_price = round(spx_q["price"], 2) if spx_q and spx_q.get("price", 0) > 0 else None
+    except Exception:
+        spx_price = None
+
+    if spy_snap:
+        # Use actual SPX for spot; SPY×10 for intraday levels (VWAP, range)
+        spot = spx_price if spx_price else round(spy_snap["price"] * 10, 2)
+        return {
+            "spot": spot,
+            "vwap": round(spy_snap["vwap"] * 10, 2),
+            "open": round(spy_snap["open"] * 10, 2),
+            "high": round(spy_snap["high"] * 10, 2),
+            "low": round(spy_snap["low"] * 10, 2),
+            "volume": spy_snap["volume"],
+        }
+    elif spx_price:
+        return {"spot": spx_price, "vwap": spx_price, "open": 0, "high": 0, "low": 0, "volume": 0}
+    return None
 
 
 def _parse_strike_from_symbol(sym):
@@ -791,124 +802,17 @@ def fetch_0dte_chain(underlying="SPY"):
 def compute_gex_profile(chain, spot):
     """GEX at strike K = OI * gamma * S^2 * contract_size * 0.01.
     Calls +, Puts -. Returns {strike: $M}.
-
-    Formula matches: spot * gamma * OI * 100 * spot * 0.01 = OI * gamma * S^2 * 1
-    (contract_size=100, notional_pct=0.01 → 100×0.01=1, not 100)
+    contract_size=100, notional_pct=0.01 → net multiplier = 1 (not 100).
     """
     gex = {}
     if spot <= 0:
         return gex
     for opt in chain:
         k = opt["strike"]
-        # Correct formula: S² × gamma × OI × (100 × 0.01) = S² × gamma × OI × 1
         raw_gex = opt.get("oi", 0) * abs(opt.get("gamma", 0)) * (spot ** 2)
         sign = 1.0 if opt["type"] == "call" else -1.0
         gex[k] = gex.get(k, 0) + sign * raw_gex / 1_000_000
     return dict(sorted(gex.items()))
-
-
-# ════════════════════════════════════════════════════════════════════
-# CBOE GEX — Full option surface from CBOE delayed quotes
-# ════════════════════════════════════════════════════════════════════
-
-@st.cache_data(ttl=300)
-def fetch_cboe_gex(ticker="SPX"):
-    """Fetch full option chain from CBOE delayed quotes API.
-
-    Returns (spot_price: float, option_df: pd.DataFrame | None).
-    option_df columns: option, type (C/P), strike, expiration, gamma, open_interest
-    Falls back to underscore-prefixed URL for index tickers like SPX.
-    """
-    urls = [
-        f"https://cdn.cboe.com/api/global/delayed_quotes/options/_{ticker}.json",
-        f"https://cdn.cboe.com/api/global/delayed_quotes/options/{ticker}.json",
-    ]
-    for url in urls:
-        try:
-            r = requests.get(url, timeout=15)
-            if r.status_code != 200:
-                continue
-            raw = pd.DataFrame.from_dict(r.json())
-            spot = float(raw.loc["current_price", "data"])
-            opts = pd.DataFrame(raw.loc["options", "data"])
-
-            # Parse option symbol → type, strike, expiration
-            opts["type"] = opts["option"].str.extract(r"\d([A-Z])\d")
-            opts["strike"] = (
-                opts["option"].str.extract(r"\d[A-Z](\d+)\d\d\d").astype(float)
-            )
-            opts["expiration"] = pd.to_datetime(
-                opts["option"].str.extract(r"[A-Z](\d+)")[0], format="%y%m%d"
-            )
-
-            # Ensure numeric Greeks / OI
-            for col in ("gamma", "open_interest", "iv", "delta", "theta", "vega"):
-                if col in opts.columns:
-                    opts[col] = pd.to_numeric(opts[col], errors="coerce").fillna(0)
-
-            return spot, opts
-        except Exception:
-            continue
-    return None, None
-
-
-def compute_cboe_gex_profile(spot, option_df, expiry_limit_days=365, strike_pct=0.15):
-    """Compute GEX-by-strike from a CBOE option_df.
-
-    Args:
-        spot: Current spot price (SPX points)
-        option_df: DataFrame from fetch_cboe_gex
-        expiry_limit_days: Only include options expiring within this many days
-        strike_pct: Band around spot to include (e.g. 0.15 = ±15%)
-
-    Returns:
-        dict {spy_equiv_strike: gex_millions}  (SPX/10 keys to stay compatible
-        with the existing render_0dte_gex_chart which multiplies by 10)
-    """
-    import numpy as np
-    from datetime import datetime as _dt
-
-    if option_df is None or option_df.empty or spot <= 0:
-        return {}
-
-    df = option_df.copy()
-    cutoff = pd.Timestamp(_dt.today()) + pd.Timedelta(days=expiry_limit_days)
-    lo, hi = spot * (1 - strike_pct), spot * (1 + strike_pct)
-
-    df = df[
-        (df["expiration"] <= cutoff)
-        & (df["strike"] >= lo)
-        & (df["strike"] <= hi)
-        & (df["gamma"] > 0)
-        & (df["open_interest"] > 0)
-    ]
-
-    if df.empty:
-        return {}
-
-    # GEX per row: spot * gamma * OI * 100 * spot * 0.01 = spot² × gamma × OI
-    df["gex"] = spot * df["gamma"] * df["open_interest"] * 100 * spot * 0.01
-    df["gex"] = df.apply(lambda r: -r["gex"] if r["type"] == "P" else r["gex"], axis=1)
-
-    # Aggregate by strike
-    by_strike = df.groupby("strike")["gex"].sum() / 1_000_000  # → $M
-
-    # Return as {spy_key: $M} to stay compatible with render_0dte_gex_chart
-    # (which multiplies keys × 10 to get SPX labels)
-    return {k / 10: v for k, v in by_strike.items()}
-
-
-def compute_cboe_total_gex(spot, option_df):
-    """Return total net notional GEX in $Bn from CBOE data."""
-    if option_df is None or option_df.empty or spot <= 0:
-        return None
-    df = option_df.copy()
-    for col in ("gamma", "open_interest"):
-        if col not in df.columns:
-            return None
-    df["gex"] = spot * df["gamma"] * df["open_interest"] * 100 * spot * 0.01
-    df["gex"] = df.apply(lambda r: -r["gex"] if r["type"] == "P" else r["gex"], axis=1)
-    return round(df["gex"].sum() / 1_000_000_000, 4)  # → $Bn
 
 
 def find_gamma_flip(gex_profile):
@@ -981,6 +885,107 @@ def compute_pcr(chain):
     """Put/Call ratio from total put OI / total call OI."""
     call_oi = sum(o.get("oi", 0) for o in chain if o["type"] == "call")
     put_oi = sum(o.get("oi", 0) for o in chain if o["type"] == "put")
+    return round(put_oi / call_oi, 2) if call_oi > 0 else None
+
+
+# ════════════════════════════════════════════════════════════════════
+# CBOE GEX — Full option surface (all expirations, all strikes)
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=300)
+def fetch_cboe_gex(ticker="SPX"):
+    """Fetch full option surface from CBOE delayed quotes API.
+    Returns (spot_price: float, option_df: DataFrame | None).
+    Tries underscore-prefix URL first (required for index tickers like SPX/NDX).
+    """
+    urls = [
+        f"https://cdn.cboe.com/api/global/delayed_quotes/options/_{ticker}.json",
+        f"https://cdn.cboe.com/api/global/delayed_quotes/options/{ticker}.json",
+    ]
+    for url in urls:
+        try:
+            r = requests.get(url, timeout=15)
+            if r.status_code != 200:
+                continue
+            raw = pd.DataFrame.from_dict(r.json())
+            spot = float(raw.loc["current_price", "data"])
+            opts = pd.DataFrame(raw.loc["options", "data"])
+
+            # Parse option symbol → type, strike, expiration
+            opts["type"] = opts["option"].str.extract(r"\d([A-Z])\d")
+            opts["strike"] = opts["option"].str.extract(r"\d[A-Z](\d+)\d\d\d").astype(float)
+            opts["expiration"] = pd.to_datetime(
+                opts["option"].str.extract(r"[A-Z](\d+)")[0], format="%y%m%d"
+            )
+
+            for col in ("gamma", "open_interest", "iv", "delta", "theta", "vega"):
+                if col in opts.columns:
+                    opts[col] = pd.to_numeric(opts[col], errors="coerce").fillna(0)
+
+            return spot, opts
+        except Exception:
+            continue
+    return None, None
+
+
+def compute_cboe_gex_profile(spot, option_df, expiry_limit_days=365, strike_pct=0.05):
+    """Compute GEX-by-strike from CBOE surface.
+
+    Args:
+        spot: SPX spot price
+        option_df: DataFrame from fetch_cboe_gex
+        expiry_limit_days: max days to expiration to include
+        strike_pct: ±% band around spot (default 0.05 = ±5%)
+
+    Returns:
+        dict {spy_key: gex_millions}  (keys = SPX/10 for chart compat)
+    """
+    if option_df is None or option_df.empty or spot <= 0:
+        return {}
+
+    df = option_df.copy()
+    cutoff = pd.Timestamp("today") + pd.Timedelta(days=expiry_limit_days)
+    lo, hi = spot * (1 - strike_pct), spot * (1 + strike_pct)
+
+    df = df[
+        (df["expiration"] <= cutoff)
+        & (df["strike"] >= lo)
+        & (df["strike"] <= hi)
+        & (df["gamma"] > 0)
+        & (df["open_interest"] > 0)
+    ]
+
+    if df.empty:
+        return {}
+
+    # Correct formula: spot * gamma * OI * 100 * spot * 0.01 = spot² × gamma × OI
+    df = df.copy()
+    df["gex"] = spot * df["gamma"] * df["open_interest"] * 100 * spot * 0.01
+    df["gex"] = df.apply(lambda r: -r["gex"] if r["type"] == "P" else r["gex"], axis=1)
+
+    by_strike = df.groupby("strike")["gex"].sum() / 1_000_000
+    # Return as spy-scale keys (SPX/10) for chart compat with render_0dte_gex_chart
+    return {k / 10: v for k, v in by_strike.items()}
+
+
+def compute_cboe_total_gex(spot, option_df):
+    """Total net notional GEX in $Bn from full CBOE surface."""
+    if option_df is None or option_df.empty or spot <= 0:
+        return None
+    df = option_df.copy()
+    df["gex"] = spot * df["gamma"] * df["open_interest"] * 100 * spot * 0.01
+    df["gex"] = df.apply(lambda r: -r["gex"] if r["type"] == "P" else r["gex"], axis=1)
+    return round(df["gex"].sum() / 1_000_000_000, 4)
+
+
+def compute_cboe_pcr(option_df):
+    """Put/Call Open Interest ratio from full CBOE surface."""
+    if option_df is None or option_df.empty:
+        return None
+    if "type" not in option_df.columns or "open_interest" not in option_df.columns:
+        return None
+    call_oi = option_df[option_df["type"] == "C"]["open_interest"].sum()
+    put_oi  = option_df[option_df["type"] == "P"]["open_interest"].sum()
     return round(put_oi / call_oi, 2) if call_oi > 0 else None
 
 
