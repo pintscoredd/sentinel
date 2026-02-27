@@ -176,17 +176,14 @@ def render_options_table(df, side="calls", current_price=None):
     if df is None or df.empty: return '<p style="color:#555;font-family:monospace;font-size:11px">No data</p>'
     import pandas as pd
     df = df.copy()
-    # Ensure strike is numeric
     if "strike" in df.columns:
         df["strike"] = pd.to_numeric(df["strike"], errors="coerce").fillna(0)
 
-    # ── Remove 13 deepest OTM/ITM strikes ──
     if current_price and "strike" in df.columns and len(df) > 13:
         df["_dist"] = (df["strike"] - current_price).abs()
         df = df.nsmallest(len(df) - 13, "_dist").drop(columns=["_dist"])
 
     strike_color = "#00CC44" if side == "calls" else "#FF4444"
-    # Find ATM strike (nearest to current price)
     atm_strike = None
     if current_price and not df.empty:
         strikes = df["strike"].tolist() if "strike" in df.columns else []
@@ -301,7 +298,6 @@ def render_insider_cards(data, ticker="", finnhub_key=""):
     if not data:
         return '<p style="color:#555;font-family:monospace;font-size:11px">No insider data. Add Finnhub key.</p>'
     role_map = finnhub_officers(ticker, finnhub_key) if ticker and finnhub_key else {}
-    # Complete SEC transaction code mapping
     CODE = {
         "P": ("PURCHASE", "buy"), "S": ("SALE", "sell"),
         "A": ("AWARD", "buy"), "D": ("DISPOSAL", "sell"),
@@ -321,30 +317,22 @@ def render_insider_cards(data, ticker="", finnhub_key=""):
         code = str(tx.get("transactionCode", "?") or "?").upper()
         shares_own = _safe_int(tx.get("share", 0))
         lbl, cls = CODE.get(code, (code if code else "UNKNOWN", "buy" if chg >= 0 else "sell"))
-        # Determine buy/sell from change direction if code is ambiguous
         if chg < 0 and cls == "buy" and code not in ("P", "A", "M", "X", "C"):
             cls = "sell"
         if chg > 0 and cls == "sell" and code not in ("S", "D", "G", "F"):
             cls = "buy"
 
-        # Role detection: try multiple name formats against executive map
         name_upper = str(tx.get("name", "")).upper().strip()
         filing_name = str(tx.get("filingName", "") or "")
-
-        # Try exact match first
         raw_role = role_map.get(name_upper, "")
 
-        # Try without middle initial/suffix: "KRESS COLETTE M" → "KRESS COLETTE"
         if not raw_role and name_upper:
             name_parts = name_upper.split()
             if len(name_parts) >= 2:
-                # Try just first two parts (LAST FIRST)
                 raw_role = role_map.get(" ".join(name_parts[:2]), "")
             if not raw_role and len(name_parts) >= 2:
-                # Try reversed: "KRESS COLETTE" → check "COLETTE KRESS"
                 raw_role = role_map.get(name_parts[1] + " " + name_parts[0], "")
             if not raw_role:
-                # Partial match: check if any key in role_map contains the last name
                 last = name_parts[0] if name_parts else ""
                 first = name_parts[1] if len(name_parts) > 1 else ""
                 for k, v in role_map.items():
@@ -352,7 +340,6 @@ def render_insider_cards(data, ticker="", finnhub_key=""):
                         raw_role = v
                         break
 
-        # Fallback: check filingName for role info
         if not raw_role and filing_name:
             parts = filing_name.split(" - ")
             if len(parts) > 1:
@@ -378,10 +365,9 @@ def render_insider_cards(data, ticker="", finnhub_key=""):
     return html
 
 # ════════════════════════════════════════════════════════════════════
-# POLYMARKET HELPERS — Fix #4: robust slug stripping
+# POLYMARKET HELPERS
 # ════════════════════════════════════════════════════════════════════
 
-# Regex to strip outcome suffixes like -yes, -no, -1t, -above, -below, etc.
 _POLY_OUTCOME_SUFFIX = re.compile(
     r'-(?:yes|no|above|below|over|under|before|after|\d+[a-z]*)$',
     re.IGNORECASE
@@ -392,7 +378,6 @@ def poly_url(evt):
     slug = evt.get("slug", "") or ""
     if slug:
         return f"https://polymarket.com/event/{slug.strip().strip('/')}"
-    # Fallback: try title
     title = evt.get("title", "") or evt.get("question", "") or ""
     if title:
         auto_slug = re.sub(r'[^a-z0-9]+', '-', title.lower())[:60].strip('-')
@@ -432,10 +417,7 @@ def unusual_side(m):
         return None, None
 
 def _extract_participants(evt, limit=5):
-    """Extract top participants from an event's nested markets array.
-    Each market's outcomePrices[0] is the 'Yes' probability for that participant.
-    Returns [(name, probability_float), ...] sorted by probability desc, limited to `limit`.
-    """
+    """Extract top participants from an event's nested markets array."""
     markets = evt.get("markets", [])
     if not markets:
         return []
@@ -461,12 +443,10 @@ def render_poly_card(evt, show_unusual=False):
 
     is_settled = status_lbl in ("RESOLVED", "CLOSED")
 
-    # Extract participants from nested markets
     participants = _extract_participants(evt, limit=5)
 
     prob_rows = ""
     if participants:
-        # Multi-participant event (e.g., "Who will be Fed Chair?")
         for name, p_raw in participants:
             p = max(0.0, min(100.0, p_raw * 100))
             bar_c = "#00CC44" if p >= 50 else ("#FF8C00" if p >= 20 else "#FF4444")
@@ -483,7 +463,6 @@ def render_poly_card(evt, show_unusual=False):
                 f'<div style="width:{min(p, 100):.0f}%;height:100%;background:{bar_c};border-radius:1px"></div>'
                 f'</div></div>')
     else:
-        # Fallback: simple binary Yes/No from the event's own outcomes
         outcomes = _parse_poly_field(evt.get("outcomes", []))
         out_prices = _parse_poly_field(evt.get("outcomePrices", []))
         if outcomes and out_prices:
@@ -574,6 +553,10 @@ def gemini_response(user_msg, history, context=""):
 def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
     """Renders the Gamma Exposure (GEX) Plotly bar chart.
 
+    FIX: Removed text labels above bars (too small/overlapping).
+         Added large, readable hover tooltip via hoverlabel.
+         Staggered annotations vertically to prevent overlap.
+
     Args:
         gex: dict {spy_key: $M}
         gf_spy: gamma flip in SPY scale
@@ -603,31 +586,64 @@ def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
     fig = go.Figure(go.Bar(
         x=list(strikes_spx), y=list(gex_vals),
         marker=dict(color=colors, line=dict(width=0)),
-        text=[f"${v:.1f}M" for v in gex_vals], textposition="outside",
-        textfont=dict(color="#FF8C00", size=9),
-        hovertemplate="Strike: %{x}<br>GEX: $%{y:.2f}M<extra></extra>",
+        # ── FIX: No text labels on bars — they were too small and overlapping
+        hovertemplate=(
+            "<b style='font-size:15px'>Strike: %{x:,.0f}</b><br>"
+            "<b style='font-size:14px'>GEX: $%{y:.2f}M</b>"
+            "<extra></extra>"
+        ),
     ))
 
-    fig.update_layout(**CHART_LAYOUT, height=360, xaxis_title="SPX Strike",
-                      yaxis_title="GEX ($M)",
-                      title=dict(text="Dealer Gamma Exposure by Strike",
-                                 font=dict(color="#FF6600", size=12)))
+    fig.update_layout(
+        **CHART_LAYOUT,
+        height=360,
+        xaxis_title="SPX Strike",
+        yaxis_title="GEX ($M)",
+        title=dict(
+            text="Dealer Gamma Exposure by Strike",
+            font=dict(color="#FF6600", size=12)
+        ),
+        bargap=0.15,
+        # ── FIX: Larger, more readable hover tooltip
+        hoverlabel=dict(
+            bgcolor="#0D0D0D",
+            bordercolor="#FF6600",
+            font=dict(size=14, color="#FF8C00", family="IBM Plex Mono"),
+            namelength=0,
+        ),
+    )
 
-    # White spot price line
+    # ── FIX: Stagger annotation y-positions to prevent overlap
+    # Spot line — top right, yref paper so it's always visible
     if spot_spx:
-        fig.add_vline(x=spot_spx, line=dict(color="#FFFFFF", dash="solid", width=1.5),
-                      annotation_text=f"Spot: {spot_spx:,.0f}",
-                      annotation_font=dict(color="#FFFFFF", size=10),
-                      annotation_position="top left")
+        fig.add_vline(
+            x=spot_spx,
+            line=dict(color="#FFFFFF", dash="solid", width=1.5),
+            annotation_text=f"Spot: {spot_spx:,.0f}",
+            annotation_font=dict(color="#FFFFFF", size=11, family="IBM Plex Mono"),
+            annotation_position="top right",
+            annotation_yshift=0,
+        )
+    # Gamma flip — top left, shifted down to avoid spot label
     if gf_spy:
-        fig.add_vline(x=gf_spy * 10, line=dict(color="#FFCC00", dash="dash", width=1),
-                      annotation_text=f"Gamma Flip: {gf_spy * 10:.0f}",
-                      annotation_font=dict(color="#FFCC00", size=10))
+        fig.add_vline(
+            x=gf_spy * 10,
+            line=dict(color="#FFCC00", dash="dash", width=1.2),
+            annotation_text=f"γ Flip: {gf_spy * 10:,.0f}",
+            annotation_font=dict(color="#FFCC00", size=11, family="IBM Plex Mono"),
+            annotation_position="top left",
+            annotation_yshift=-22,   # shift down so it doesn't collide with spot
+        )
+    # Max pain — bottom right, well separated from top labels
     if mp_spy:
-        fig.add_vline(x=mp_spy * 10, line=dict(color="#AA44FF", dash="dot", width=1),
-                      annotation_text=f"Max Pain: {mp_spy * 10:.0f}",
-                      annotation_font=dict(color="#AA44FF", size=10),
-                      annotation_position="bottom right")
+        fig.add_vline(
+            x=mp_spy * 10,
+            line=dict(color="#AA44FF", dash="dot", width=1.2),
+            annotation_text=f"Max Pain: {mp_spy * 10:,.0f}",
+            annotation_font=dict(color="#AA44FF", size=11, family="IBM Plex Mono"),
+            annotation_position="bottom right",
+            annotation_yshift=8,
+        )
     return fig
 
 
@@ -636,7 +652,6 @@ def render_0dte_gex_decoder(gf_spy, mp_spy, wall_spx, wall_dir, spot_spx=None, w
     gf_str = f"${gf_spy * 10:,.0f}" if gf_spy else "—"
     mp_str = f"${mp_spy * 10:,.0f}" if mp_spy else "—"
 
-    # Distance from spot to wall
     wall_rel = ""
     if spot_spx and wall_spx and wall_spx != "—":
         try:
@@ -647,7 +662,6 @@ def render_0dte_gex_decoder(gf_spy, mp_spy, wall_spx, wall_dir, spot_spx=None, w
         except Exception:
             pass
 
-    # Dynamic wall-hit explanation
     if wall_dir == "Call Wall":
         wall_action = (
             "<b style='color:#00CC44'>Call Wall</b> — Dealers are long gamma here. "
@@ -665,7 +679,6 @@ def render_0dte_gex_decoder(gf_spy, mp_spy, wall_spx, wall_dir, spot_spx=None, w
     else:
         wall_action = "<span style='color:#888'>No dominant wall identified.</span>"
 
-    # Gamma flip context
     if gf_spy and spot_spx:
         gf_spx = gf_spy * 10
         if spot_spx > gf_spx:
@@ -708,7 +721,6 @@ def render_0dte_recommendation(rec):
     met_str = ', '.join(rec['conditions_met']) if rec['conditions_met'] else 'None'
     failed_str = ', '.join(rec['conditions_failed']) if rec['conditions_failed'] else 'None'
 
-    # Handle multi-line stats (Greeks breakdown)
     stats_html = rec['stats'].replace('\n', '<br>') if rec.get('stats') else ''
 
     return f"""
