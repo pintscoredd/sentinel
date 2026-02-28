@@ -44,7 +44,7 @@ from ui_components import (
     CHART_LAYOUT, dark_fig, tv_chart, tv_mini, tv_tape,
     yield_curve_chart, yield_history_chart, cpi_vs_rates_chart,
     render_news_card, render_wl_row, render_options_table,
-    render_scored_options, render_unusual_trade,
+    render_scored_options, render_unusual_trade, render_combined_options_chain,
     render_insider_cards, poly_url, poly_status, unusual_side,
     render_poly_card,
     SENTINEL_PROMPT, GEMINI_MODELS, list_gemini_models, gemini_response,
@@ -741,14 +741,29 @@ with tabs[1]:
                 if scored.get("unusual"):
                     st.markdown(render_unusual_trade(scored["unusual"], ticker=tkr, expiry=exp_fmt), unsafe_allow_html=True)
 
-                with st.expander("📊 **FULL OPTIONS CHAIN**", expanded=False):
-                    fc, fp = st.columns(2)
-                    with fc:
-                        st.markdown('<div style="color:#00CC44;font-size:9px;font-weight:700;letter-spacing:2px">▲ ALL CALLS</div>', unsafe_allow_html=True)
-                        st.markdown(render_options_table(calls, "calls", q["price"]), unsafe_allow_html=True)
-                    with fp:
-                        st.markdown('<div style="color:#FF4444;font-size:9px;font-weight:700;letter-spacing:2px">▼ ALL PUTS</div>', unsafe_allow_html=True)
-                        st.markdown(render_options_table(puts, "puts", q["price"]), unsafe_allow_html=True)
+                with st.expander("📊 **FULL OPTIONS CHAIN** — Brokerage Style (CALLS | STRIKE | PUTS)", expanded=False):
+                    _sc_col, _sp_col = st.columns([1, 3])
+                    with _sc_col:
+                        _strike_count = st.select_slider(
+                            "Strikes to display",
+                            options=[8, 10, 12, 14, 16, 20, 24, 30],
+                            value=16,
+                            key=f"sc_{tkr}",
+                        )
+                    with _sp_col:
+                        _atm_approx = q["price"]
+                        st.markdown(
+                            f'<div style="color:#555;font-family:monospace;font-size:10px;padding-top:22px">'
+                            f'Showing {_strike_count} strikes centered around ATM ≈ ${_atm_approx:.2f} &nbsp;·&nbsp; '
+                            f'<span style="color:#00CC44">■</span> ITM Calls &nbsp; '
+                            f'<span style="color:#FF6600">■</span> ATM &nbsp; '
+                            f'<span style="color:#FF4444">■</span> ITM Puts</div>',
+                            unsafe_allow_html=True
+                        )
+                    st.markdown(
+                        render_combined_options_chain(calls, puts, q["price"], strike_count=_strike_count),
+                        unsafe_allow_html=True
+                    )
             else:
                 st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Options unavailable for this ticker.</p>', unsafe_allow_html=True)
 
@@ -1224,42 +1239,84 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
         # ════════════════════════════════════════
         # MACRO CALENDAR — Upcoming economic events
         # ════════════════════════════════════════
-        st.markdown('<div class="bb-ph">📅 MACRO ECONOMIC CALENDAR — UPCOMING RELEASES</div>', unsafe_allow_html=True)
+        st.markdown('<div class="bb-ph">📅 MACRO ECONOMIC CALENDAR — NEXT 14 DAYS</div>', unsafe_allow_html=True)
         with st.spinner("Loading macro calendar…"):
             macro_cal = get_macro_calendar(st.session_state.fred_key)
 
         if macro_cal:
             from datetime import date as _today_date
             _today = _today_date.today()
-            _cal_hdr = (
-                '<div style="display:grid;grid-template-columns:100px 1fr 90px;gap:8px;'
-                'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
-                'font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
-                '<span>DATE</span><span>EVENT</span><span>IMPORTANCE</span></div>'
-            )
-            st.markdown(_cal_hdr, unsafe_allow_html=True)
-            for evt in macro_cal[:20]:
-                _ed = evt["date"]
-                _days_away = (_ed - _today).days
-                _date_str = _ed.strftime("%b %d, %Y")
-                _badge = "TODAY" if _days_away == 0 else (f"IN {_days_away}D" if _days_away > 0 else "PAST")
-                _imp = evt.get("importance", "MEDIUM")
-                _imp_c = "#FF4444" if _imp == "HIGH" else "#FF8C00"
-                _row_bg = "background:rgba(255,102,0,0.05);" if _days_away <= 2 else ""
-                st.markdown(
-                    f'<div style="display:grid;grid-template-columns:100px 1fr 90px;gap:8px;'
-                    f'padding:6px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:12px;{_row_bg}">'
-                    f'<span style="color:#888">{_date_str}</span>'
-                    f'<span style="color:#CCC">{evt["name"]} '
-                    f'<span style="color:#555;font-size:10px">({_badge})</span></span>'
-                    f'<span style="color:{_imp_c};font-weight:700;font-size:10px">{_imp}</span>'
-                    f'</div>', unsafe_allow_html=True)
+            # Detect if we have richer FF data
+            _has_ff = any(e.get("source") == "forexfactory" for e in macro_cal)
+            _has_actuals = any(e.get("actual") or e.get("forecast") for e in macro_cal)
+
+            if _has_actuals:
+                # Rich Forex Factory view with actual/forecast/previous
+                _cal_hdr = (
+                    '<div style="display:grid;grid-template-columns:90px 50px 1fr 70px 70px 70px 80px;gap:6px;'
+                    'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
+                    'font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
+                    '<span>DATE</span><span>TIME ET</span><span>EVENT</span>'
+                    '<span>ACTUAL</span><span>FORECAST</span><span>PREV</span><span>IMPACT</span></div>'
+                )
+                st.markdown(_cal_hdr, unsafe_allow_html=True)
+                for evt in macro_cal[:25]:
+                    _ed = evt["date"]
+                    _days_away = (_ed - _today).days
+                    _date_str = _ed.strftime("%b %d")
+                    _badge = "TODAY" if _days_away == 0 else (f"IN {_days_away}D" if _days_away > 0 else "PAST")
+                    _imp = evt.get("importance","MEDIUM")
+                    _imp_c = "#FF4444" if _imp == "HIGH" else "#FF8C00"
+                    _row_bg = "background:rgba(255,102,0,0.07);" if _days_away <= 1 else ""
+                    _actual = evt.get("actual","") or ""
+                    _fcast  = evt.get("forecast","") or ""
+                    _prev   = evt.get("previous","") or ""
+                    _time   = evt.get("time","") or ""
+                    _ac = "#00CC44" if _actual else "#333"
+                    st.markdown(
+                        f'<div style="display:grid;grid-template-columns:90px 50px 1fr 70px 70px 70px 80px;gap:6px;'
+                        f'padding:5px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px;{_row_bg}">'
+                        f'<span style="color:#888">{_date_str} <span style="color:#555;font-size:9px">({_badge})</span></span>'
+                        f'<span style="color:#555">{_time}</span>'
+                        f'<span style="color:#{"FF6600" if _imp=="HIGH" else "CCC"};{"font-weight:700" if _imp=="HIGH" else ""}">{_esc(evt["name"])}</span>'
+                        f'<span style="color:{_ac};font-weight:700">{_esc(_actual) if _actual else "—"}</span>'
+                        f'<span style="color:#888">{_esc(_fcast) if _fcast else "—"}</span>'
+                        f'<span style="color:#555">{_esc(_prev) if _prev else "—"}</span>'
+                        f'<span style="color:{_imp_c};font-weight:700;font-size:10px">{_imp}</span>'
+                        f'</div>', unsafe_allow_html=True)
+            else:
+                # Basic date/name/importance view (static fallback)
+                _cal_hdr = (
+                    '<div style="display:grid;grid-template-columns:100px 1fr 90px;gap:8px;'
+                    'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
+                    'font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
+                    '<span>DATE</span><span>EVENT</span><span>IMPORTANCE</span></div>'
+                )
+                st.markdown(_cal_hdr, unsafe_allow_html=True)
+                for evt in macro_cal[:20]:
+                    _ed = evt["date"]
+                    _days_away = (_ed - _today).days
+                    _date_str = _ed.strftime("%b %d, %Y")
+                    _badge = "TODAY" if _days_away == 0 else (f"IN {_days_away}D" if _days_away > 0 else "PAST")
+                    _imp = evt.get("importance","MEDIUM")
+                    _imp_c = "#FF4444" if _imp == "HIGH" else "#FF8C00"
+                    _row_bg = "background:rgba(255,102,0,0.05);" if _days_away <= 2 else ""
+                    st.markdown(
+                        f'<div style="display:grid;grid-template-columns:100px 1fr 90px;gap:8px;'
+                        f'padding:6px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:12px;{_row_bg}">'
+                        f'<span style="color:#888">{_date_str}</span>'
+                        f'<span style="color:#CCC">{_esc(evt["name"])} '
+                        f'<span style="color:#555;font-size:10px">({_badge})</span></span>'
+                        f'<span style="color:{_imp_c};font-weight:700;font-size:10px">{_imp}</span>'
+                        f'</div>', unsafe_allow_html=True)
+            src = macro_cal[0].get("source","") if macro_cal else ""
+            src_label = "Forex Factory" if src == "forexfactory" else ("FRED" if src == "fred" else "estimated schedule")
+            st.markdown(f'<div style="color:#333;font-family:monospace;font-size:9px;padding:4px 10px">Source: {src_label}</div>', unsafe_allow_html=True)
         else:
             st.markdown(
                 '<div style="background:#080808;border-left:3px solid #FF6600;padding:10px 14px;'
                 'font-family:monospace;font-size:11px;color:#888">'
-                'Economic calendar requires FRED API key. Releases shown include: CPI, Jobs Report, '
-                'FOMC decisions, PCE, GDP, Retail Sales, PPI, PMIs, and more.</div>',
+                '📅 Economic calendar loading… (uses Forex Factory, no API key required)</div>',
                 unsafe_allow_html=True)
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
@@ -1704,28 +1761,48 @@ with tabs[5]:
 
         if top10:
             def _event_best_outcome(evt):
-                """Return (leading_outcome_name, probability_0_to_100) for the best sub-market."""
+                """Return (leading_outcome_name, probability_0_to_100).
+                For multi-outcome markets (sports, elections) uses groupItemTitle.
+                For binary markets uses outcome[0] label from the event or sub-market.
+                Starts search at p=0 so even low-probability leaders are captured.
+                """
                 markets = evt.get("markets", [])
-                best_name, best_p = "YES", 50.0
+                best_name, best_p = None, -1.0
+
                 for mk in markets:
                     pp = _parse_poly_field(mk.get("outcomePrices", []))
                     outcomes = _parse_poly_field(mk.get("outcomes", []))
-                    if pp:
-                        p = _safe_float(pp[0]) * 100
-                        if p > best_p:
-                            best_p = p
-                            # Use groupItemTitle (the multi-outcome participant name) if available
-                            candidate = mk.get("groupItemTitle") or (outcomes[0] if outcomes else None) or mk.get("question","")
-                            best_name = str(candidate)[:35] if candidate else "YES"
-                # Fallback to event-level outcomes
-                if best_p == 50.0:
-                    pp = _parse_poly_field(evt.get("outcomePrices", []))
-                    outcomes = _parse_poly_field(evt.get("outcomes", []))
-                    if pp and outcomes:
-                        p0 = _safe_float(pp[0]) * 100
-                        best_p = max(0.0, min(100.0, p0))
-                        best_name = str(outcomes[0])[:35] if outcomes else "YES"
-                return best_name, round(best_p, 1)
+                    if not pp:
+                        continue
+                    p0 = _safe_float(pp[0]) * 100  # YES probability for this sub-market
+
+                    if p0 > best_p:
+                        best_p = p0
+                        # For multi-outcome events each sub-market IS a candidate
+                        # groupItemTitle = "Boston Celtics", "Kevin Warsh", "Arsenal", etc.
+                        candidate = (
+                            mk.get("groupItemTitle")  # multi-outcome participant name
+                            or (str(outcomes[0]) if outcomes and str(outcomes[0]).upper() not in ("YES","NO","TRUE","FALSE") else None)
+                            or mk.get("question", "")
+                        )
+                        best_name = str(candidate).strip()[:40] if candidate else None
+
+                # If we found a named outcome, use it
+                if best_name and best_p >= 0:
+                    # If best_name is still generic Yes/No, use event title as context
+                    if best_name.upper() in ("YES", "NO", "TRUE", "FALSE", ""):
+                        best_name = best_name.upper()
+                    return best_name, round(max(0.0, min(100.0, best_p)), 1)
+
+                # Fallback: event-level outcomePrices
+                pp = _parse_poly_field(evt.get("outcomePrices", []))
+                outcomes = _parse_poly_field(evt.get("outcomes", []))
+                if pp and outcomes:
+                    p0 = _safe_float(pp[0]) * 100
+                    name = str(outcomes[0]).strip()[:40]
+                    return name, round(max(0.0, min(100.0, p0)), 1)
+
+                return "YES", 50.0
 
             event_urls   = [poly_url(e) for e in top10]
             event_titles = [e.get("title", e.get("question",""))[:38] for e in top10]
