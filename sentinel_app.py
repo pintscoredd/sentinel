@@ -28,7 +28,7 @@ from data_fetchers import (
     gdelt_news, newsapi_headlines, finnhub_news, finnhub_insider, finnhub_officers,
     vix_price, options_chain, options_expiries, sector_etfs, top_movers,
     detect_unusual_poly, market_snapshot_str, _parse_poly_field,
-    score_options_chain,
+    score_options_chain, score_poly_mispricing,
     get_earnings_calendar, is_market_open,
     get_macro_overview, get_macro_calendar, get_ticker_exchange,
     get_full_financials, get_stock_news,
@@ -769,8 +769,8 @@ with tabs[1]:
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-    st.markdown('<div class="bb-ph">🏆 TOP MOVERS — S&P 100 UNIVERSE</div>', unsafe_allow_html=True)
-    with st.spinner("Scanning universe for top movers…"):
+    st.markdown('<div class="bb-ph">🏆 TOP MOVERS — S&P 500 UNIVERSE</div>', unsafe_allow_html=True)
+    with st.spinner("Scanning S&P 500 for top movers…"):
         gainers, losers = top_movers()
     gco, lco = st.columns(2)
     with gco:
@@ -938,10 +938,9 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                 fetch_vix_data.clear()
                 st.rerun()
         with _0dte_stat:
-            _ET = pytz.timezone("US/Eastern")
-            _now_et = datetime.now(_ET).strftime("%H:%M:%S ET")
+            _now_pst_str = datetime.now(PST).strftime("%H:%M:%S PST")
             st.markdown(f'<div style="text-align:right;font-family:monospace;padding:6px 0;color:#555;font-size:10px">'
-                        f'Last refresh: {_now_et} | Auto-refresh: 30s cache</div>', unsafe_allow_html=True)
+                        f'Last refresh: {_now_pst_str} | Auto-refresh: 30s cache</div>', unsafe_allow_html=True)
 
         _spx = get_spx_metrics()
         _vix_data = fetch_vix_data()
@@ -1016,8 +1015,7 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                     if _rec:
                         st.markdown(render_0dte_recommendation(_rec), unsafe_allow_html=True)
                         if "NO TRADE" not in _rec['recommendation']:
-                            _ET_log = pytz.timezone("US/Eastern")
-                            _log_time = datetime.now(_ET_log).strftime("%I:%M %p")
+                            _log_time = datetime.now(PST).strftime("%I:%M %p PST")
                             st.session_state.trade_log_0dte.append(
                                 f"[{_log_time}] {_rec['recommendation'].replace('RECOMMENDATION: ', '')}")
 
@@ -1034,7 +1032,7 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
             _exp_choice = st.selectbox(
                 "Expiration Filter",
                 options=["0DTE (Today Only)", "≤ 7 Days (Weekly)", "≤ 30 Days", "≤ 45 DTE", "All (≤ 1 Year)"],
-                index=3,
+                index=0,
                 key="gex_exp_filter",
                 help="Which expirations to include in the GEX calculation"
             )
@@ -1042,7 +1040,7 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
             _chart_range_pct = st.selectbox(
                 "Chart Strike Range",
                 options=["±2% (~±140 pts)", "±3% (~±210 pts)", "±5% (~±350 pts)", "±7% (~±490 pts)"],
-                index=2,
+                index=0,
                 key="gex_range",
                 help="Strike range displayed on the chart"
             )
@@ -1148,49 +1146,51 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
             _total     = macro_ov["total_score"]
             _max       = macro_ov["max_score"]
 
-            # Big environment banner
+            # Big environment banner with trade implications
+            _trade_guidance = {
+                "EXPANSIONARY 🟢": "Favor: Equities (cyclicals, tech, small-caps) · Long risk-assets · Steepener trades · Commodities on reflation",
+                "MIXED / NEUTRAL 🟡": "Favor: Quality large-caps · Sector-selective · Hedge with Treasuries · Reduce leverage · Watch credit spreads",
+                "CAUTIONARY ⚠️": "Favor: Defensives (staples, healthcare, utilities) · Short duration · Gold hedge · Reduce cyclicals exposure",
+                "CONTRACTIONARY 🔴": "Favor: Cash/T-Bills · Gold · Short equities (SPY puts) · Long USD · Avoid junk credit · Recession playbook",
+            }
+            _guidance = _trade_guidance.get(_env_label, "")
             st.markdown(
                 f'<div style="background:#0A0A0A;border:1px solid {_env_color};border-left:5px solid {_env_color};'
-                f'padding:14px 18px;font-family:monospace;margin-bottom:8px">'
-                f'<div style="display:flex;justify-content:space-between;align-items:center">'
-                f'<div>'
+                f'padding:14px 18px;font-family:monospace;margin-bottom:10px">'
+                f'<div style="display:flex;justify-content:space-between;align-items:flex-start">'
+                f'<div style="flex:1">'
                 f'<div style="color:{_env_color};font-size:18px;font-weight:900;letter-spacing:2px">{_env_label}</div>'
-                f'<div style="color:#AAA;font-size:11px;margin-top:4px;max-width:580px;line-height:1.6">{_env_desc}</div>'
+                f'<div style="color:#AAA;font-size:11px;margin-top:4px;line-height:1.6">{_env_desc}</div>'
+                f'<div style="color:{_env_color};font-size:10px;margin-top:8px;border-top:1px solid #1A1A1A;padding-top:8px;">'
+                f'<span style="color:#555">TRADE POSITIONING →</span> {_guidance}</div>'
                 f'</div>'
-                f'<div style="text-align:right;min-width:90px">'
+                f'<div style="text-align:right;min-width:90px;margin-left:16px">'
                 f'<div style="color:{_env_color};font-size:30px;font-weight:900">{_total:+d}</div>'
                 f'<div style="color:#555;font-size:10px">of ±{_max} pts</div>'
                 f'</div>'
                 f'</div></div>', unsafe_allow_html=True)
 
-            # Signal grid
-            _sig_cols = st.columns(len(_signals) if len(_signals) <= 4 else 4)
-            for i, (sig_name, sig) in enumerate(_signals.items()):
-                col_idx = i % 4
-                with _sig_cols[col_idx]:
-                    _sc = sig["color"]
-                    _arrow = "▲" if sig["score"] > 0 else ("▼" if sig["score"] < 0 else "─")
-                    st.markdown(
-                        f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid {_sc};'
-                        f'padding:10px 12px;font-family:monospace;margin-bottom:6px">'
-                        f'<div style="color:#666;font-size:9px;letter-spacing:1px;margin-bottom:3px">{sig_name.upper()}</div>'
-                        f'<div style="color:{_sc};font-size:12px;font-weight:700">{_arrow} {sig["label"]}</div>'
-                        f'</div>', unsafe_allow_html=True)
-
-            # Second row of signals if > 4
-            if len(_signals) > 4:
-                _sig_list = list(_signals.items())
-                _sig_cols2 = st.columns(min(len(_sig_list) - 4, 4))
-                for i, (sig_name, sig) in enumerate(_sig_list[4:8]):
-                    with _sig_cols2[i]:
+            # Signal grid — always 4 columns, signals wrap into new rows naturally
+            _sig_list = list(_signals.items())
+            _n_rows = (len(_sig_list) + 3) // 4
+            for _row in range(_n_rows):
+                _row_items = _sig_list[_row * 4 : _row * 4 + 4]
+                _row_cols = st.columns(4)
+                for _ci, (sig_name, sig) in enumerate(_row_items):
+                    with _row_cols[_ci]:
                         _sc = sig["color"]
                         _arrow = "▲" if sig["score"] > 0 else ("▼" if sig["score"] < 0 else "─")
+                        _score_dots = "●" * abs(sig["score"]) + "○" * (2 - abs(sig["score"]))
                         st.markdown(
-                            f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid {_sc};'
-                            f'padding:10px 12px;font-family:monospace;margin-bottom:6px">'
-                            f'<div style="color:#666;font-size:9px;letter-spacing:1px;margin-bottom:3px">{sig_name.upper()}</div>'
-                            f'<div style="color:{_sc};font-size:12px;font-weight:700">{_arrow} {sig["label"]}</div>'
+                            f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:3px solid {_sc};'
+                            f'padding:12px;font-family:monospace;height:80px;display:flex;flex-direction:column;justify-content:space-between">'
+                            f'<div style="color:#555;font-size:9px;letter-spacing:1px">{sig_name.upper()}</div>'
+                            f'<div style="color:{_sc};font-size:12px;font-weight:700;line-height:1.3">{_arrow} {sig["label"]}</div>'
+                            f'<div style="color:{_sc};font-size:9px;opacity:0.6">{_score_dots}</div>'
                             f'</div>', unsafe_allow_html=True)
+                # spacer between rows
+                if _row < _n_rows - 1:
+                    st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Macro overview loading…</p>', unsafe_allow_html=True)
 
@@ -1546,21 +1546,36 @@ with tabs[5]:
     st.markdown('<div class="bb-ph">🎲 POLYMARKET — PREDICTION INTELLIGENCE & UNUSUAL FLOW</div>', unsafe_allow_html=True)
 
     with st.spinner("Loading Polymarket…"):
-        all_poly = polymarket_events(100)
+        all_poly   = polymarket_events(100)
+        all_mkts   = polymarket_markets(100)
 
     if not all_poly:
-        st.markdown('<div style="background:#0A0500;border-left:4px solid #FF6600;padding:12px;font-family:monospace;font-size:12px;color:#FF8C00">⚠️ Could not reach Polymarket API. May be temporarily unavailable.</div>', unsafe_allow_html=True)
+        st.markdown('<div style="background:#0A0500;border-left:4px solid #FF6600;padding:12px;font-family:monospace;font-size:12px;color:#FF8C00">⚠️ Could not reach Polymarket API.</div>', unsafe_allow_html=True)
     else:
+        from datetime import timezone as _tz
+        _now_utc = datetime.now(_tz.utc)
+        _two_months_ago = _now_utc - timedelta(days=60)
+
         def is_active(e):
             if e.get("closed", False) or e.get("resolved", False): return False
             end = e.get("endDate","") or ""
             if end:
                 try:
-                    from datetime import timezone
                     ed = datetime.fromisoformat(end.replace("Z","+00:00"))
-                    if ed < datetime.now(timezone.utc): return False
+                    if ed < _now_utc: return False
                 except: pass
             return True
+
+        def is_recently_closed(e):
+            """Only show closed markets resolved within last 60 days."""
+            if not (e.get("closed", False) or e.get("resolved", False)): return False
+            end = e.get("endDate","") or e.get("resolvedAt","") or ""
+            if end:
+                try:
+                    ed = datetime.fromisoformat(end.replace("Z","+00:00"))
+                    return ed >= _two_months_ago
+                except: pass
+            return False
 
         active_events = [e for e in all_poly if is_active(e)]
         active_events.sort(key=lambda e: _safe_float(e.get("volume",0)), reverse=True)
@@ -1580,10 +1595,81 @@ with tabs[5]:
                 if p > best: best = p
             return max(0.0, min(100.0, best * 100))
 
-        st.markdown('<div class="bb-ph" style="margin-top:10px">📊 EVENT INTELLIGENCE DASHBOARD</div>', unsafe_allow_html=True)
+        # ═══════════════════════════════════════════════════════
+        # SECTION 1: MISPRICING SCANNER (main alpha tool)
+        # ═══════════════════════════════════════════════════════
+        st.markdown('<div class="bb-ph" style="margin-top:4px">🔬 MISPRICING SCANNER — ALGORITHMIC ALPHA DETECTOR</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div style="color:#555;font-family:monospace;font-size:10px;margin-bottom:8px">'
+            'Finds markets where crowd pricing appears unreliable due to low liquidity, '
+            'herd behavior, or extreme probability with thin volume. '
+            '<b style="color:#FF8C00">FADE</b> = bet against crowd. '
+            '<b style="color:#00CC44">RIDE</b> = crowd is right. '
+            '<b style="color:#888">MONITOR</b> = watch for entry.</div>', unsafe_allow_html=True)
+
+        if all_mkts:
+            mispriced = score_poly_mispricing(all_mkts)
+            if mispriced:
+                # Table header
+                st.markdown(
+                    '<div style="display:grid;grid-template-columns:1fr 70px 70px 70px 70px 80px 80px;gap:6px;'
+                    'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;font-size:9px;'
+                    'color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
+                    '<span>MARKET</span><span>RAW %</span><span>ADJ %</span><span>LIQUIDITY</span>'
+                    '<span>ACTIVITY</span><span>EDGE</span><span>SIGNAL</span></div>',
+                    unsafe_allow_html=True)
+
+                for mp in mispriced[:12]:
+                    liq_c  = "#00CC44" if mp["liq_score"] >= 0.7 else ("#FF8C00" if mp["liq_score"] >= 0.4 else "#FF4444")
+                    raw_c  = "#00CC44" if mp["raw_yes"] >= 50 else "#FF4444"
+                    adj_c  = "#00CC44" if mp["adj_yes"] >= 50 else "#FF4444"
+                    edge_c = "#FF6600" if mp["edge"] > 0.15 else "#888"
+                    poly_link = f"https://polymarket.com/event/{mp['url']}" if mp['url'] else "#"
+                    spread_info = f' [{mp["spread"]}]' if mp["spread"] else ""
+                    st.markdown(
+                        f'<div style="display:grid;grid-template-columns:1fr 70px 70px 70px 70px 80px 80px;gap:6px;'
+                        f'padding:6px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px;align-items:center">'
+                        f'<span><a href="{poly_link}" target="_blank" style="color:#CCC;text-decoration:none">{_esc(mp["title"])}</a></span>'
+                        f'<span style="color:{raw_c};font-weight:700">{mp["raw_yes"]}%</span>'
+                        f'<span style="color:{adj_c}">{mp["adj_yes"]}%</span>'
+                        f'<span style="color:{liq_c};font-size:10px;font-weight:700">{mp["liq_tier"]}{spread_info}</span>'
+                        f'<span style="color:#888;font-size:10px">{mp["activity_ratio"]*100:.0f}%</span>'
+                        f'<span style="color:{edge_c};font-weight:700">{mp["edge"]:.3f}</span>'
+                        f'<span style="color:{mp["signal_color"]};font-weight:700;font-size:10px">{mp["signal"]}</span>'
+                        f'</div>', unsafe_allow_html=True)
+
+                # Mispricing score bar chart — most actionable markets
+                top8_mis = mispriced[:8]
+                mis_labels = [m["title"][:40]+"…" if len(m["title"])>40 else m["title"] for m in top8_mis]
+                mis_scores = [m["mispricing_score"]*1000 for m in top8_mis]
+                mis_colors = [m["signal_color"] for m in top8_mis]
+                mis_sigs   = [m["signal"] for m in top8_mis]
+
+                fig_mis = dark_fig(260)
+                fig_mis.add_trace(go.Bar(
+                    x=mis_scores, y=mis_labels, orientation="h",
+                    marker=dict(color=mis_colors, line=dict(width=0)),
+                    text=[f"{s}  {sig}" for s, sig in zip([f'{v:.1f}' for v in mis_scores], mis_sigs)],
+                    textposition="outside",
+                    textfont=dict(size=9, color="#CCC"),
+                ))
+                fig_mis.update_layout(
+                    margin=dict(l=10, r=140, t=32, b=0), height=260,
+                    title=dict(text="MISPRICING SCORE (higher = more anomalous)", font=dict(size=11, color="#FF6600"), x=0),
+                    xaxis=dict(showgrid=False, color="#444"),
+                    yaxis=dict(autorange="reversed", tickfont=dict(size=9, color="#CCC")),
+                )
+                st.plotly_chart(fig_mis, width="stretch")
+
+        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+        # ═══════════════════════════════════════════════════════
+        # SECTION 2: DASHBOARD PANEL — Probability + Volume side-by-side
+        # ═══════════════════════════════════════════════════════
+        st.markdown('<div class="bb-ph">📊 TOP 10 ACTIVE EVENTS — PROBABILITY & VOLUME</div>', unsafe_allow_html=True)
 
         if top10:
-            def make_poly_label(e, max_len=35):
+            def make_poly_label(e, max_len=40):
                 q = e.get("title", e.get("question",""))
                 url = poly_url(e)
                 short = q[:max_len]+"…" if len(q)>max_len else q
@@ -1592,78 +1678,85 @@ with tabs[5]:
             labels_with_url = [make_poly_label(e) for e in top10]
             labels = [l for l,u in labels_with_url]
             urls   = [u for l,u in labels_with_url]
-
-            vols   = [_safe_float(e.get("volume",0))/1e6 for e in top10]
-            colors = ["#FF6600" if i==0 else "#AA3300" if i<3 else "#662200" for i in range(len(top10))]
-            fig_vol = dark_fig(320)
-            fig_vol.add_trace(go.Bar(
-                x=vols, y=labels, orientation="h",
-                marker=dict(color=colors, line=dict(width=0)),
-                text=[f"${v:,.1f}M" for v in vols], textposition="outside",
-                textfont=dict(size=10, color="#FF8C00"),
-                customdata=urls,
-            ))
-            fig_vol.update_layout(
-                margin=dict(l=10,r=80,t=32,b=0), height=320,
-                title=dict(text="TOTAL VOLUME ($M)", font=dict(size=11,color="#FF6600"), x=0),
-                xaxis=dict(showgrid=False, color="#444"),
-                yaxis=dict(autorange="reversed", tickfont=dict(size=9,color="#CCC"))
-            )
-            st.plotly_chart(fig_vol, width="stretch")
-
-            with st.expander("🔗 CLICK TO OPEN EVENTS", expanded=False):
-                for e in top10:
-                    q = e.get("title", e.get("question",""))[:70]
-                    url = poly_url(e)
-                    p = _event_lead_prob(e)
-                    c = "#00CC44" if p>=50 else "#FF4444"
-                    st.markdown(f'<div style="padding:3px 0;font-family:monospace;font-size:11px"><a href="{url}" target="_blank" style="color:#FF6600">↗ {_esc(q)}</a> <span style="color:{c};font-weight:700">{p:.0f}%</span></div>', unsafe_allow_html=True)
-
-            st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
             y_probs = [_event_lead_prob(e) for e in top10]
-            bar_colors = ["#00CC44" if p>=50 else "#FF4444" for p in y_probs]
-            fig_prob = dark_fig(320)
-            fig_prob.add_trace(go.Bar(
-                x=y_probs, y=labels, orientation="h",
-                marker=dict(color=bar_colors, line=dict(width=0)),
-                text=[f"{p:.0f}%" for p in y_probs], textposition="outside",
-                textfont=dict(size=10, color="#CCCCCC"),
-                customdata=urls,
-            ))
-            fig_prob.add_vline(x=50, line_dash="dash", line_color="#555", opacity=0.6)
-            fig_prob.update_layout(
-                margin=dict(l=10,r=60,t=32,b=0), height=320,
-                title=dict(text="LEADING OUTCOME PROBABILITY (%)", font=dict(size=11,color="#FF6600"), x=0),
-                xaxis=dict(range=[0,115], showgrid=False, color="#444"),
-                yaxis=dict(autorange="reversed", tickfont=dict(size=9,color="#CCC"))
-            )
-            st.plotly_chart(fig_prob, width="stretch")
+            vols    = [_safe_float(e.get("volume",0))/1e6 for e in top10]
+            vols24  = [_safe_float(e.get("volume24hr",0))/1e3 for e in top10]  # K
 
-            st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+            dash_l, dash_r = st.columns(2)
 
-        poly_col, guide_col = st.columns([3,1])
+            with dash_l:
+                st.markdown('<div style="color:#FF6600;font-size:9px;letter-spacing:1px;margin-bottom:4px">LEADING OUTCOME PROBABILITY</div>', unsafe_allow_html=True)
+                bar_colors = ["#00CC44" if p>=65 else "#FF8C00" if p>=50 else "#FF4444" for p in y_probs]
+                fig_prob = dark_fig(320)
+                fig_prob.add_trace(go.Bar(
+                    x=y_probs, y=labels, orientation="h",
+                    marker=dict(color=bar_colors, line=dict(width=0)),
+                    text=[f"{p:.0f}%" for p in y_probs], textposition="outside",
+                    textfont=dict(size=10, color="#CCCCCC"),
+                ))
+                fig_prob.add_vline(x=50, line_dash="dash", line_color="#333", opacity=0.8)
+                fig_prob.add_vline(x=70, line_dash="dot", line_color="#222", opacity=0.5)
+                fig_prob.update_layout(
+                    margin=dict(l=10, r=60, t=8, b=0), height=320,
+                    xaxis=dict(range=[0, 120], showgrid=False, color="#444"),
+                    yaxis=dict(autorange="reversed", tickfont=dict(size=9, color="#CCC")),
+                )
+                st.plotly_chart(fig_prob, width="stretch")
+
+            with dash_r:
+                st.markdown('<div style="color:#FF6600;font-size:9px;letter-spacing:1px;margin-bottom:4px">TOTAL VOLUME vs 24H ACTIVITY</div>', unsafe_allow_html=True)
+                fig_vol = dark_fig(320)
+                fig_vol.add_trace(go.Bar(
+                    name="Total Vol ($M)", x=vols, y=labels, orientation="h",
+                    marker=dict(color="#662200", line=dict(width=0)),
+                    text=[f"${v:.1f}M" for v in vols], textposition="inside",
+                    textfont=dict(size=8, color="#FF8C00"),
+                ))
+                fig_vol.add_trace(go.Bar(
+                    name="24H Vol ($K)", x=[v/100 for v in vols24], y=labels, orientation="h",
+                    marker=dict(color="#FF6600", opacity=0.8, line=dict(width=0)),
+                    text=[f"${v:.0f}K" for v in vols24], textposition="outside",
+                    textfont=dict(size=8, color="#FFAA44"),
+                ))
+                fig_vol.update_layout(
+                    barmode="overlay", margin=dict(l=10, r=90, t=8, b=0), height=320,
+                    xaxis=dict(showgrid=False, color="#444"),
+                    yaxis=dict(autorange="reversed", tickfont=dict(size=9, color="#CCC")),
+                    legend=dict(font=dict(size=8, color="#888"), bgcolor="rgba(0,0,0,0)", x=1.0, y=0),
+                )
+                st.plotly_chart(fig_vol, width="stretch")
+
+        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+        # ═══════════════════════════════════════════════════════
+        # SECTION 3: EVENT CARDS + HOW-TO GUIDE
+        # ═══════════════════════════════════════════════════════
+        poly_col, guide_col = st.columns([3, 1])
         with poly_col:
-            st.markdown(f'<div class="bb-ph">📋 TOP 10 ACTIVE EVENTS ({len(active_events)} active total)</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="bb-ph">📋 TOP ACTIVE EVENTS ({len(active_events)} total active)</div>', unsafe_allow_html=True)
             for e in top10:
                 st.markdown(render_poly_card(e), unsafe_allow_html=True)
 
         with guide_col:
-            st.markdown("""<div style="background:#080808;border:1px solid #1A1A1A;padding:12px;font-family:monospace;font-size:10px;color:#888;line-height:1.9">
-<span style="color:#FF6600;font-weight:700">HOW TO READ</span><br><br>
-<span style="color:#00CC44">ACTIVE</span> = Market open<br>
-<span style="color:#FFCC00">RESOLVED</span> = Settled ✓<br>
-<span style="color:#FF4444">CLOSED/EXP</span> = Inactive<br><br>
-<span style="color:#FF6600">CHARTS ABOVE</span><br>
-• Bar 1: 24h volume<br>
-• Bar 2: YES probability<br>
-• Bar 3: Activity ratio<br><br>
-<span style="color:#FF4444">🚨 UNUSUAL</span><br>
-≥38% of total vol in 24h<br><br>
-<span style="color:#AA44FF">⚡ SIDE LABEL</span><br>
-Which outcome unusual volume favors<br><br>
-<span style="color:#00CC44">GREEN</span> = YES/higher<br>
-<span style="color:#FF4444">RED</span> = NO/lower<br><br>
+            st.markdown("""<div style="background:#080808;border:1px solid #1A1A1A;padding:14px;font-family:monospace;font-size:10px;color:#888;line-height:2.0">
+<span style="color:#FF6600;font-weight:700">HOW TO TRADE</span><br><br>
+<span style="color:#FF4444">FADE YES</span><br>
+Low-liq + crowd piled in<br>
+→ Bet NO (buy cheap)<br><br>
+<span style="color:#00CC44">FADE NO</span><br>
+Low-liq + crowd fading<br>
+→ Bet YES (buy cheap)<br><br>
+<span style="color:#00CC44">RIDE YES</span><br>
+Deep market confirms high<br>
+probability → trend trade<br><br>
+<span style="color:#888">MONITOR</span><br>
+Mixed signals — wait<br>for volume confirmation<br><br>
+<span style="color:#FF6600">EDGE</span> = post-discount<br>deviation from 50/50<br>
+Higher = more asymmetric<br><br>
+<span style="color:#FF4444">ILLIQ</span> crowd unreliable<br>
+<span style="color:#FF8C00">THIN</span> use with caution<br>
+<span style="color:#888">MED</span> decent accuracy<br>
+<span style="color:#00CC44">DEEP</span> crowd is sharp<br><br>
 <span style="color:#444">⚠️ Crowd odds only.<br>Not financial advice.</span>
 </div>""", unsafe_allow_html=True)
 
