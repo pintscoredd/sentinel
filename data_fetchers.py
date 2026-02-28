@@ -1661,6 +1661,27 @@ def get_macro_overview(fred_key):
     except Exception:
         pass
 
+    # ── 8. GDP Growth (Real GDP YoY proxy via quarterly change annualized)
+    try:
+        df_gdp = fred_series("GDPC1", fred_key, 12)  # Real GDP, quarterly
+        if df_gdp is not None and len(df_gdp) >= 5:
+            latest_gdp  = df_gdp["value"].iloc[-1]
+            prev_gdp    = df_gdp["value"].iloc[-2]
+            year_ago_gdp= df_gdp["value"].iloc[-5]
+            gdp_yoy = round((latest_gdp / year_ago_gdp - 1) * 100, 2)
+            gdp_q   = round((latest_gdp / prev_gdp - 1) * 4 * 100, 2)  # annualized QoQ
+            if gdp_yoy >= 3.0:
+                gdp_score, gdp_label, gdp_color = 2, f"Strong ({gdp_yoy:.1f}% YoY, {gdp_q:+.1f}% ann.)", "#00CC44"
+            elif gdp_yoy >= 2.0:
+                gdp_score, gdp_label, gdp_color = 1, f"Moderate ({gdp_yoy:.1f}% YoY)", "#FF8C00"
+            elif gdp_yoy >= 0.5:
+                gdp_score, gdp_label, gdp_color = -1, f"Slowing ({gdp_yoy:.1f}% YoY)", "#FF4444"
+            else:
+                gdp_score, gdp_label, gdp_color = -2, f"Contraction ({gdp_yoy:.1f}% YoY)", "#FF0000"
+            signals["GDP Growth"] = {"score": gdp_score, "label": gdp_label, "color": gdp_color, "val": gdp_yoy}
+    except Exception:
+        pass
+
     # ── Aggregate Score
     total_score = sum(s["score"] for s in signals.values())
     max_score = len(signals) * 2
@@ -1691,86 +1712,192 @@ def get_macro_overview(fred_key):
 
 
 @st.cache_data(ttl=3600)
-def get_macro_calendar(fred_key):
-    """Fetch upcoming economic data releases from FRED releases API.
-    Falls back to a curated static calendar if API is unavailable."""
-    from datetime import date as _date
-    today = _date.today()
+def get_macro_calendar(fred_key=None):
+    """Fetch upcoming US economic calendar.
+    Source priority: 1) Finnhub (free, no key needed for basic)
+                     2) FRED releases API (if key available)
+                     3) Smart static schedule (always works)
+    Returns list of dicts: {date, name, importance, time, actual, forecast, previous}
+    """
+    from datetime import date as _date, timedelta as _td
+    import calendar as _cal
 
-    # Try FRED releases/dates endpoint
+    today = _date.today()
+    horizon = today + _td(days=45)
+    results = []
+
+    # ── Source 1: Finnhub economic calendar (free tier works without key for basic)
+    try:
+        params = {
+            "from": today.strftime("%Y-%m-%d"),
+            "to":   horizon.strftime("%Y-%m-%d"),
+        }
+        if fred_key:
+            pass  # FRED key not used for Finnhub
+        # Try picking up Finnhub key from secrets if available
+        try:
+            import streamlit as _st
+            fk = _st.secrets.get("FINNHUB_API_KEY") or _st.secrets.get("finnhub_api_key") or ""
+            if fk: params["token"] = str(fk).strip()
+        except Exception:
+            pass
+
+        r = requests.get("https://finnhub.io/api/v1/calendar/economic",
+                         params=params, timeout=12)
+        if r.status_code == 200:
+            events = r.json().get("economicCalendar", [])
+            HIGH_KW = ["cpi","fomc","fed","nonfarm","non-farm","payroll","gdp","pce","employment situation"]
+            MED_KW  = ["ppi","retail sales","ism","pmi","housing starts","durable goods","jolts",
+                       "adp","jobless","consumer confidence","industrial production","trade balance"]
+            for ev in events:
+                name = (ev.get("event") or "").strip()
+                if not name: continue
+                nl = name.lower()
+                impact = (ev.get("impact") or "").upper()
+                is_high = impact == "HIGH" or any(kw in nl for kw in HIGH_KW)
+                is_med  = any(kw in nl for kw in MED_KW)
+                if not (is_high or is_med or impact in ("HIGH","MEDIUM")): continue
+                try:
+                    ev_date = _date.fromisoformat((ev.get("time") or "")[:10])
+                except Exception:
+                    continue
+                if not (today <= ev_date <= horizon): continue
+                results.append({
+                    "date":       ev_date,
+                    "name":       name,
+                    "importance": "HIGH" if is_high else "MEDIUM",
+                    "time":       "",
+                    "actual":     str(ev.get("actual",""))   if ev.get("actual")   is not None else "",
+                    "forecast":   str(ev.get("estimate","")) if ev.get("estimate") is not None else "",
+                    "previous":   str(ev.get("prev",""))     if ev.get("prev")     is not None else "",
+                    "source":     "finnhub",
+                })
+            if results:
+                results.sort(key=lambda x: x["date"])
+                return results[:35]
+    except Exception:
+        pass
+
+    # ── Source 2: FRED releases endpoint (if key available)
     if fred_key:
         try:
             r = requests.get(
                 "https://api.stlouisfed.org/fred/releases/dates",
                 params={
-                    "api_key": fred_key,
-                    "file_type": "json",
+                    "api_key": fred_key, "file_type": "json",
                     "realtime_start": today.strftime("%Y-%m-%d"),
-                    "limit": 100,
-                    "sort_order": "asc",
+                    "realtime_end":   horizon.strftime("%Y-%m-%d"),
+                    "limit": 150, "sort_order": "asc",
                     "include_release_dates_with_no_data": "false",
                 },
                 timeout=12,
             )
             if r.status_code == 200:
-                data = r.json()
-                releases = data.get("release_dates", [])
-                # Map major FRED release IDs to human-readable names
-                FRED_RELEASE_NAMES = {
-                    "10": "Consumer Price Index (CPI)",
-                    "21": "Employment Situation (Jobs Report)",
-                    "17": "Industrial Production & Capacity",
-                    "15": "Producer Price Index (PPI)",
-                    "14": "Retail Sales",
-                    "46": "Personal Income & Spending (PCE)",
-                    "20": "GDP (Advance/Preliminary/Final)",
-                    "19": "Housing Starts & Building Permits",
-                    "11": "Consumer Confidence",
-                    "9":  "FOMC Meeting / Fed Funds Decision",
-                    "22": "State Unemployment Insurance Claims",
-                    "175": "ISM Manufacturing PMI",
-                    "184": "ISM Services PMI",
-                    "16": "New Residential Sales",
-                    "18": "Existing Home Sales",
-                    "13": "Durable Goods Orders",
-                    "113": "Non-Farm Productivity & Labor Costs",
-                    "55": "Balance of Trade",
-                    "69": "ADP Employment Report",
-                    "23": "Job Openings (JOLTS)",
+                FRED_NAMES = {
+                    "10":("Consumer Price Index (CPI)","HIGH"),
+                    "21":("Employment Situation (Jobs Report)","HIGH"),
+                    "46":("Personal Income & PCE","HIGH"),
+                    "20":("GDP (Advance/Preliminary/Final)","HIGH"),
+                    "9": ("FOMC Meeting / Fed Decision","HIGH"),
+                    "15":("Producer Price Index (PPI)","MEDIUM"),
+                    "14":("Retail Sales","MEDIUM"),
+                    "17":("Industrial Production","MEDIUM"),
+                    "19":("Housing Starts & Building Permits","MEDIUM"),
+                    "11":("Consumer Confidence","MEDIUM"),
+                    "22":("Initial Jobless Claims","MEDIUM"),
+                    "175":("ISM Manufacturing PMI","MEDIUM"),
+                    "184":("ISM Services PMI","MEDIUM"),
+                    "13":("Durable Goods Orders","MEDIUM"),
+                    "69":("ADP Employment Report","MEDIUM"),
+                    "23":("JOLTS Job Openings","MEDIUM"),
+                    "55":("Trade Balance","MEDIUM"),
                 }
-                MAJOR_RELEASE_IDS = set(FRED_RELEASE_NAMES.keys())
-                calendar = []
-                for rel in releases:
-                    rid = str(rel.get("release_id", ""))
-                    if rid not in MAJOR_RELEASE_IDS:
-                        continue
-                    for d in rel.get("release_dates", []):
+                for rel in r.json().get("release_dates", []):
+                    rid = str(rel.get("release_id",""))
+                    if rid not in FRED_NAMES: continue
+                    name, imp = FRED_NAMES[rid]
+                    for d in rel.get("release_dates",[]):
                         try:
                             rel_date = _date.fromisoformat(d)
-                            if rel_date >= today:
-                                calendar.append({
-                                    "date": rel_date,
-                                    "name": FRED_RELEASE_NAMES[rid],
-                                    "release_id": rid,
-                                    "importance": "HIGH" if rid in {"10","21","9","46","20"} else "MEDIUM",
-                                })
+                            if today <= rel_date <= horizon:
+                                results.append({"date":rel_date,"name":name,"importance":imp,
+                                                "time":"","actual":"","forecast":"","previous":"","source":"fred"})
                         except Exception:
                             continue
-                calendar.sort(key=lambda x: x["date"])
-                if calendar:
-                    return calendar[:30]
+                if results:
+                    results.sort(key=lambda x: x["date"])
+                    return results[:35]
         except Exception:
             pass
 
-    # ── Fallback: static approximate calendar for next 30 days
-    from datetime import timedelta as _td
-    import calendar as _cal
-    def next_occurrence(month_week, weekday, from_date):
-        """Get the Nth weekday of this/next month."""
+    # ── Source 3: Smart static fallback — algorithmically computed approximate dates
+    def _nth_weekday(year, month, n, weekday):
+        count = 0
+        for day in range(1, _cal.monthrange(year, month)[1] + 1):
+            if _date(year, month, day).weekday() == weekday:
+                count += 1
+                if count == n: return _date(year, month, day)
         return None
-    # Return empty list — FRED key required for live calendar
-    return []
 
+    def _last_weekday(year, month, weekday):
+        last = None
+        for day in range(1, _cal.monthrange(year, month)[1] + 1):
+            if _date(year, month, day).weekday() == weekday:
+                last = _date(year, month, day)
+        return last
+
+    static_events = []
+    for delta_m in range(0, 3):
+        m = ((today.month - 1 + delta_m) % 12) + 1
+        y = today.year + ((today.month - 1 + delta_m) // 12)
+        d = _nth_weekday(y, m, 1, 4)
+        if d: static_events.append(("Employment Situation (Jobs Report)", d, "HIGH"))
+        d = _nth_weekday(y, m, 2, 2)
+        if d: static_events.append(("Consumer Price Index (CPI)", d + _td(days=1), "HIGH"))
+        d = _nth_weekday(y, m, 2, 3)
+        if d: static_events.append(("Producer Price Index (PPI)", d, "MEDIUM"))
+        d = _nth_weekday(y, m, 2, 4)
+        if d: static_events.append(("Retail Sales", d + _td(days=1), "MEDIUM"))
+        d = _nth_weekday(y, m, 1, 3)
+        if d: static_events.append(("Initial Jobless Claims", d, "MEDIUM"))
+        d = _nth_weekday(y, m, 3, 3)
+        if d: static_events.append(("Initial Jobless Claims", d, "MEDIUM"))
+        d = _last_weekday(y, m, 4)
+        if d: static_events.append(("Personal Income & PCE", d, "HIGH"))
+        d = _date(y, m, 1)
+        while d.weekday() >= 5: d += _td(days=1)
+        static_events.append(("ISM Manufacturing PMI", d, "MEDIUM"))
+        d = _date(y, m, 3)
+        while d.weekday() >= 5: d += _td(days=1)
+        static_events.append(("ISM Services PMI", d, "MEDIUM"))
+        d = _last_weekday(y, m, 1)
+        if d: static_events.append(("Consumer Confidence (CB)", d, "MEDIUM"))
+        d = _nth_weekday(y, m, 4, 2)
+        if d: static_events.append(("Durable Goods Orders", d, "MEDIUM"))
+        d = _last_weekday(y, m, 3)
+        if d: static_events.append(("GDP (Advance Estimate)", d, "HIGH"))
+
+    FOMC_APPROX = [
+        _date(2025,3,19), _date(2025,5,7), _date(2025,6,18),
+        _date(2025,7,30), _date(2025,9,17), _date(2025,10,29),
+        _date(2025,12,10), _date(2026,1,28), _date(2026,3,18),
+        _date(2026,4,29), _date(2026,6,17), _date(2026,7,29),
+        _date(2026,9,16), _date(2026,10,28), _date(2026,12,16),
+    ]
+    for fd in FOMC_APPROX:
+        if today <= fd <= horizon:
+            static_events.append(("FOMC Meeting (Fed Rate Decision)", fd, "HIGH"))
+
+    seen = set()
+    for name, date, imp in static_events:
+        key = (date, name)
+        if key in seen or not (today <= date <= horizon): continue
+        seen.add(key)
+        results.append({"date":date,"name":name,"importance":imp,
+                        "time":"","actual":"","forecast":"","previous":"","source":"est."})
+
+    results.sort(key=lambda x: x["date"])
+    return results[:35]
 
 # ════════════════════════════════════════════════════════════════════
 # STOCK EXCHANGE LOOKUP (for TradingView symbol mapping)
