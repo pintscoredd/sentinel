@@ -30,6 +30,8 @@ from data_fetchers import (
     detect_unusual_poly, market_snapshot_str, _parse_poly_field,
     score_options_chain,
     get_earnings_calendar, is_market_open,
+    get_macro_overview, get_macro_calendar, get_ticker_exchange,
+    get_full_financials, get_stock_news,
     is_0dte_market_open, get_stock_snapshot, get_spx_metrics,
     fetch_0dte_chain, compute_gex_profile, compute_max_pain, compute_pcr,
     find_gamma_flip, fetch_vix_data, find_target_strike,
@@ -660,7 +662,11 @@ with tabs[1]:
                       "META":"NASDAQ:META","GLD":"AMEX:GLD","TLT":"NASDAQ:TLT","IWM":"AMEX:IWM",
                       "BTC-USD":"COINBASE:BTCUSD","ETH-USD":"COINBASE:ETHUSD",
                       "GC=F":"COMEX:GC1!","CL=F":"NYMEX:CL1!","^TNX":"TVC:TNX","^VIX":"TVC:VIX","DXY":"TVC:DXY"}
-            tv_sym = TV_MAP.get(tkr, f"NASDAQ:{tkr}")
+            if tkr in TV_MAP:
+                tv_sym = TV_MAP[tkr]
+            else:
+                with st.spinner("Detecting exchange…"):
+                    tv_sym = get_ticker_exchange(tkr)
             st.markdown('<div class="bb-ph" style="margin-top:8px">CHART — TRADINGVIEW (RSI + SMA)</div>', unsafe_allow_html=True)
             components.html(tv_chart(tv_sym, 480), height=485, scrolling=False)
 
@@ -669,7 +675,7 @@ with tabs[1]:
             selected_exp = None
             if expiries:
                 def _fmt_exp(d):
-                    try: return datetime.strptime(str(d), "%Y-%m-%d").strftime("%B %-d %Y")
+                    try: return datetime.strptime(str(d), "%Y-%m-%d").strftime("%B %-d, %Y")
                     except: return str(d)
                 selected_exp = st.selectbox("EXPIRY DATE", expiries, index=0, key=f"exp_{tkr}", format_func=_fmt_exp)
             with st.spinner("Loading options…"):
@@ -677,7 +683,7 @@ with tabs[1]:
             if calls is not None:
                 try:
                     exp_dt = datetime.strptime(str(exp_date), "%Y-%m-%d")
-                    exp_fmt = exp_dt.strftime("%B %-d %Y")
+                    exp_fmt = exp_dt.strftime("%B %-d, %Y")
                 except:
                     exp_fmt = str(exp_date)
 
@@ -1125,7 +1131,113 @@ padding:16px;font-family:monospace;font-size:12px;color:#FF8C00">
 <a href="https://fred.stlouisfed.org/docs/api/api_key.html" target="_blank" style="color:#FF6600">
 Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
     else:
-        mc1, mc2 = st.columns([2,2])
+        # ════════════════════════════════════════
+        # MACRO OVERVIEW — AI-style environment scorecard
+        # ════════════════════════════════════════
+        st.markdown('<div class="bb-ph">🧠 US MACRO ENVIRONMENT OVERVIEW</div>', unsafe_allow_html=True)
+        with st.spinner("Computing macro environment…"):
+            macro_ov = get_macro_overview(st.session_state.fred_key)
+
+        if macro_ov:
+            _env_label = macro_ov["env_label"]
+            _env_color = macro_ov["env_color"]
+            _env_desc  = macro_ov["env_desc"]
+            _signals   = macro_ov["signals"]
+            _pct       = macro_ov["pct"]
+            _total     = macro_ov["total_score"]
+            _max       = macro_ov["max_score"]
+
+            # Big environment banner
+            st.markdown(
+                f'<div style="background:#0A0A0A;border:1px solid {_env_color};border-left:5px solid {_env_color};'
+                f'padding:14px 18px;font-family:monospace;margin-bottom:8px">'
+                f'<div style="display:flex;justify-content:space-between;align-items:center">'
+                f'<div>'
+                f'<div style="color:{_env_color};font-size:18px;font-weight:900;letter-spacing:2px">{_env_label}</div>'
+                f'<div style="color:#AAA;font-size:11px;margin-top:4px;max-width:580px;line-height:1.6">{_env_desc}</div>'
+                f'</div>'
+                f'<div style="text-align:right;min-width:90px">'
+                f'<div style="color:{_env_color};font-size:30px;font-weight:900">{_total:+d}</div>'
+                f'<div style="color:#555;font-size:10px">of ±{_max} pts</div>'
+                f'</div>'
+                f'</div></div>', unsafe_allow_html=True)
+
+            # Signal grid
+            _sig_cols = st.columns(len(_signals) if len(_signals) <= 4 else 4)
+            for i, (sig_name, sig) in enumerate(_signals.items()):
+                col_idx = i % 4
+                with _sig_cols[col_idx]:
+                    _sc = sig["color"]
+                    _arrow = "▲" if sig["score"] > 0 else ("▼" if sig["score"] < 0 else "─")
+                    st.markdown(
+                        f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid {_sc};'
+                        f'padding:10px 12px;font-family:monospace;margin-bottom:6px">'
+                        f'<div style="color:#666;font-size:9px;letter-spacing:1px;margin-bottom:3px">{sig_name.upper()}</div>'
+                        f'<div style="color:{_sc};font-size:12px;font-weight:700">{_arrow} {sig["label"]}</div>'
+                        f'</div>', unsafe_allow_html=True)
+
+            # Second row of signals if > 4
+            if len(_signals) > 4:
+                _sig_list = list(_signals.items())
+                _sig_cols2 = st.columns(min(len(_sig_list) - 4, 4))
+                for i, (sig_name, sig) in enumerate(_sig_list[4:8]):
+                    with _sig_cols2[i]:
+                        _sc = sig["color"]
+                        _arrow = "▲" if sig["score"] > 0 else ("▼" if sig["score"] < 0 else "─")
+                        st.markdown(
+                            f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid {_sc};'
+                            f'padding:10px 12px;font-family:monospace;margin-bottom:6px">'
+                            f'<div style="color:#666;font-size:9px;letter-spacing:1px;margin-bottom:3px">{sig_name.upper()}</div>'
+                            f'<div style="color:{_sc};font-size:12px;font-weight:700">{_arrow} {sig["label"]}</div>'
+                            f'</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Macro overview loading…</p>', unsafe_allow_html=True)
+
+        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+        # ════════════════════════════════════════
+        # MACRO CALENDAR — Upcoming economic events
+        # ════════════════════════════════════════
+        st.markdown('<div class="bb-ph">📅 MACRO ECONOMIC CALENDAR — UPCOMING RELEASES</div>', unsafe_allow_html=True)
+        with st.spinner("Loading macro calendar…"):
+            macro_cal = get_macro_calendar(st.session_state.fred_key)
+
+        if macro_cal:
+            from datetime import date as _today_date
+            _today = _today_date.today()
+            _cal_hdr = (
+                '<div style="display:grid;grid-template-columns:100px 1fr 90px;gap:8px;'
+                'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
+                'font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
+                '<span>DATE</span><span>EVENT</span><span>IMPORTANCE</span></div>'
+            )
+            st.markdown(_cal_hdr, unsafe_allow_html=True)
+            for evt in macro_cal[:20]:
+                _ed = evt["date"]
+                _days_away = (_ed - _today).days
+                _date_str = _ed.strftime("%b %d, %Y")
+                _badge = "TODAY" if _days_away == 0 else (f"IN {_days_away}D" if _days_away > 0 else "PAST")
+                _imp = evt.get("importance", "MEDIUM")
+                _imp_c = "#FF4444" if _imp == "HIGH" else "#FF8C00"
+                _row_bg = "background:rgba(255,102,0,0.05);" if _days_away <= 2 else ""
+                st.markdown(
+                    f'<div style="display:grid;grid-template-columns:100px 1fr 90px;gap:8px;'
+                    f'padding:6px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:12px;{_row_bg}">'
+                    f'<span style="color:#888">{_date_str}</span>'
+                    f'<span style="color:#CCC">{evt["name"]} '
+                    f'<span style="color:#555;font-size:10px">({_badge})</span></span>'
+                    f'<span style="color:{_imp_c};font-weight:700;font-size:10px">{_imp}</span>'
+                    f'</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(
+                '<div style="background:#080808;border-left:3px solid #FF6600;padding:10px 14px;'
+                'font-family:monospace;font-size:11px;color:#888">'
+                'Economic calendar requires FRED API key. Releases shown include: CPI, Jobs Report, '
+                'FOMC decisions, PCE, GDP, Retail Sales, PPI, PMIs, and more.</div>',
+                unsafe_allow_html=True)
+
+        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+        mc1, mc2 = st.columns([2, 2])
         with mc1:
             st.markdown('<div class="bb-ph">📉 YIELD CURVE (LIVE FROM FRED)</div>', unsafe_allow_html=True)
             with st.spinner("Loading yield curve…"):
@@ -1680,22 +1792,74 @@ with tabs[7]:
         earn_tkr = st.text_input("Ticker for chart", placeholder="NVDA, AAPL…", key="ec")
         if earn_tkr:
             et = earn_tkr.upper().strip()
-            tv_sym_earn = f"NASDAQ:{et}"
+            with st.spinner("Detecting exchange…"):
+                tv_sym_earn = get_ticker_exchange(et)
             components.html(tv_chart(tv_sym_earn,320), height=325, scrolling=False)
             try:
-                income = yf.Ticker(et).quarterly_financials
-                if income is not None and not income.empty:
-                    st.markdown('<div class="bb-ph" style="margin-top:10px">QUARTERLY FINANCIALS</div>', unsafe_allow_html=True)
-                    rev = income.loc["Total Revenue"]/1e9 if "Total Revenue" in income.index else None
-                    ni  = income.loc["Net Income"]/1e6   if "Net Income"    in income.index else None
-                    for col in list(income.columns[:4]):
-                        cstr = str(col)[:10]
-                        rv  = f"${rev[col]:.1f}B" if rev is not None and col in rev.index else "—"
-                        net_v = float(ni[col]) if ni is not None and col in ni.index else None
-                        nc  = "#00CC44" if net_v and net_v>0 else "#FF4444"
-                        net_s = f"${net_v:.0f}M" if net_v else "—"
-                        st.markdown(f'<div style="display:flex;justify-content:space-between;padding:5px 8px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px"><span style="color:#888">{cstr}</span><span style="color:#CCC">Rev: {rv}</span><span style="color:{nc}">NI: {net_s}</span></div>', unsafe_allow_html=True)
-            except: pass
+                with st.spinner("Loading financials…"):
+                    fin_data = get_full_financials(et)
+                if fin_data:
+                    st.markdown('<div class="bb-ph" style="margin-top:10px">📊 QUARTERLY FINANCIALS</div>', unsafe_allow_html=True)
+
+                    # Header row
+                    quarters_sorted = sorted(fin_data.keys(), reverse=True)
+                    hdr_str = "".join(f'<span style="color:#FF6600;font-weight:700">{q}</span>' for q in quarters_sorted)
+                    st.markdown(
+                        f'<div style="display:grid;grid-template-columns:130px repeat({len(quarters_sorted)},1fr);'
+                        f'gap:6px;padding:5px 8px;border-bottom:1px solid #FF6600;font-family:monospace;font-size:10px;color:#FF6600;letter-spacing:1px">'
+                        f'<span>METRIC</span>{hdr_str}</div>', unsafe_allow_html=True)
+
+                    def _fmt_val(v, unit="M", decimals=1):
+                        if v is None: return '<span style="color:#444">—</span>'
+                        if unit == "B": v_disp = v / 1e9; suffix = "B"
+                        elif unit == "M": v_disp = v / 1e6; suffix = "M"
+                        elif unit == "%": return f'<span style="color:#CCC">{v:.1f}%</span>'
+                        else: return f'<span style="color:#CCC">{v:.2f}</span>'
+                        color = "#00CC44" if v >= 0 else "#FF4444"
+                        return f'<span style="color:{color};font-weight:600">{v_disp:,.{decimals}f}{suffix}</span>'
+
+                    METRICS = [
+                        ("Revenue",      "revenue",       "B"),
+                        ("Gross Profit", "gross_profit",  "B"),
+                        ("Op. Income",   "op_income",     "B"),
+                        ("Net Income",   "net_income",    "B"),
+                        ("EBITDA",       "ebitda",        "B"),
+                        ("Free CF",      "free_cashflow", "B"),
+                        ("Op. CF",       "op_cashflow",   "B"),
+                        ("Gross Margin", "gross_margin",  "%"),
+                        ("Op. Margin",   "op_margin",     "%"),
+                        ("Net Margin",   "net_margin",    "%"),
+                        ("Total Debt",   "total_debt",    "B"),
+                        ("Cash",         "cash",          "B"),
+                        ("EPS (Dil.)",   "eps",           "raw"),
+                    ]
+
+                    for label, key, unit in METRICS:
+                        cells = "".join(
+                            f'<span style="text-align:right">{_fmt_val(fin_data.get(q, {}).get(key), unit)}</span>'
+                            for q in quarters_sorted
+                        )
+                        row_bg = "background:#050505;" if METRICS.index((label, key, unit)) % 2 == 0 else ""
+                        st.markdown(
+                            f'<div style="display:grid;grid-template-columns:130px repeat({len(quarters_sorted)},1fr);'
+                            f'gap:6px;padding:5px 8px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px;{row_bg}">'
+                            f'<span style="color:#888">{label}</span>{cells}</div>', unsafe_allow_html=True)
+            except Exception:
+                pass
+
+            # ── Stock-specific news ──
+            st.markdown('<div class="bb-ph" style="margin-top:10px">📰 NEWS — {}</div>'.format(et), unsafe_allow_html=True)
+            with st.spinner("Loading stock news…"):
+                stock_news = get_stock_news(
+                    et,
+                    finnhub_key=st.session_state.get("finnhub_key"),
+                    newsapi_key=st.session_state.get("newsapi_key"),
+                )
+            if stock_news:
+                for art in stock_news:
+                    st.markdown(render_news_card(art["title"], art["url"], art["source"], art["date"], "bb-news"), unsafe_allow_html=True)
+            else:
+                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No recent news found. Add Finnhub or NewsAPI key for richer coverage.</p>', unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════
 # TAB 8 — SENTINEL AI
