@@ -553,8 +553,10 @@ def finnhub_officers(ticker, key):
 # EARNINGS
 # ════════════════════════════════════════════════════════════════════
 
-@st.cache_data(ttl=1800)
-def get_earnings_calendar():
+@st.cache_data(ttl=86400)
+def get_earnings_calendar(today_str=None):
+    """Fetch upcoming earnings. today_str acts as a cache-bust key — call with
+    datetime.now().strftime('%Y-%m-%d') so the cache resets every new day."""
     MAJOR = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "JPM", "GS", "BAC",
              "NFLX", "AMD", "INTC", "CRM", "ORCL", "V", "MA", "WMT", "XOM", "CVX", "UNH",
              "JNJ", "PFE", "ABBV", "LLY", "BRK-B", "HD", "DIS", "SHOP", "PLTR", "SNOW"]
