@@ -1703,88 +1703,123 @@ with tabs[5]:
         st.markdown('<div class="bb-ph">📊 TOP 10 ACTIVE EVENTS — PROBABILITY & VOLUME</div>', unsafe_allow_html=True)
 
         if top10:
-            def make_poly_label(e, max_len=38):
-                q = e.get("title", e.get("question",""))
-                short = q[:max_len]+"…" if len(q)>max_len else q
-                return short
+            def _event_best_outcome(evt):
+                """Return (leading_outcome_name, probability_0_to_100) for the best sub-market."""
+                markets = evt.get("markets", [])
+                best_name, best_p = "YES", 50.0
+                for mk in markets:
+                    pp = _parse_poly_field(mk.get("outcomePrices", []))
+                    outcomes = _parse_poly_field(mk.get("outcomes", []))
+                    if pp:
+                        p = _safe_float(pp[0]) * 100
+                        if p > best_p:
+                            best_p = p
+                            # Use groupItemTitle (the multi-outcome participant name) if available
+                            candidate = mk.get("groupItemTitle") or (outcomes[0] if outcomes else None) or mk.get("question","")
+                            best_name = str(candidate)[:35] if candidate else "YES"
+                # Fallback to event-level outcomes
+                if best_p == 50.0:
+                    pp = _parse_poly_field(evt.get("outcomePrices", []))
+                    outcomes = _parse_poly_field(evt.get("outcomes", []))
+                    if pp and outcomes:
+                        p0 = _safe_float(pp[0]) * 100
+                        best_p = max(0.0, min(100.0, p0))
+                        best_name = str(outcomes[0])[:35] if outcomes else "YES"
+                return best_name, round(best_p, 1)
 
-            labels  = [make_poly_label(e) for e in top10]
-            y_probs = [_event_lead_prob(e) for e in top10]
+            event_urls   = [poly_url(e) for e in top10]
+            event_titles = [e.get("title", e.get("question",""))[:38] for e in top10]
+            outcomes_data = [_event_best_outcome(e) for e in top10]
+            outcome_names = [o[0] for o in outcomes_data]
+            y_probs       = [o[1] for o in outcomes_data]
             vols    = [_safe_float(e.get("volume",0))/1e6 for e in top10]
-            vols24  = [_safe_float(e.get("volume24hr",0))/1e3 for e in top10]  # $K
+            vols24  = [_safe_float(e.get("volume24hr",0))/1e6 for e in top10]  # in $M directly
 
-            # ── Chart 1: Probability — full width
-            prob_colors = ["#00CC44" if p>=65 else "#FF8C00" if p>=50 else "#FF4444" for p in y_probs]
-            prob_hover  = [f"{e.get('title','')} | YES: {p:.1f}%" for e,p in zip(top10, y_probs)]
-            fig_prob = dark_fig(340)
+            # ── Chart 1: Probability — full width, showing event title + leading outcome
+            # Y-axis label = "Event title  →  Leading outcome"
+            prob_labels = [f"{t}  →  {o}" for t, o in zip(event_titles, outcome_names)]
+            prob_colors = ["#00CC44" if p >= 65 else "#FF8C00" if p >= 50 else "#FF4444" for p in y_probs]
+            prob_hover  = [f"<b>{e.get('title','')}</b><br>Leading: {o} @ {p:.1f}%<br><a href='{u}'>Open on Polymarket ↗</a>"
+                           for e, o, p, u in zip(top10, outcome_names, y_probs, event_urls)]
+
+            fig_prob = dark_fig(360)
             fig_prob.add_trace(go.Bar(
-                x=y_probs, y=labels, orientation="h",
-                marker=dict(color=prob_colors, line=dict(width=0), opacity=0.9),
+                x=y_probs, y=prob_labels, orientation="h",
+                marker=dict(color=prob_colors, line=dict(width=0), opacity=0.85),
                 hovertext=prob_hover, hoverinfo="text",
             ))
-            # Annotations: % label on right, colored per bar
-            for i, (p, c) in enumerate(zip(y_probs, prob_colors)):
+            for i, (p, c, o) in enumerate(zip(y_probs, prob_colors, outcome_names)):
                 fig_prob.add_annotation(
-                    x=p + 1.5, y=i, text=f"<b>{p:.0f}%</b>",
+                    x=p + 1.5, y=i,
+                    text=f"<b>{p:.0f}%</b>",
                     showarrow=False, xanchor="left", yanchor="middle",
                     font=dict(size=10, color=c, family="IBM Plex Mono"),
                 )
-            # Reference lines
-            fig_prob.add_vline(x=50, line_dash="dash", line_color="#333", line_width=1)
-            fig_prob.add_vline(x=70, line_dash="dot",  line_color="#222", line_width=1)
-            fig_prob.add_annotation(x=50, y=-0.8, text="50%", showarrow=False, font=dict(size=8, color="#444"))
-            fig_prob.add_annotation(x=70, y=-0.8, text="70%", showarrow=False, font=dict(size=8, color="#333"))
+            fig_prob.add_vline(x=50, line_dash="dash", line_color="#2A2A2A", line_width=1)
+            fig_prob.add_vline(x=70, line_dash="dot",  line_color="#1A1A1A", line_width=1)
             fig_prob.update_layout(
-                margin=dict(l=10, r=80, t=36, b=10), height=340,
-                title=dict(text="LEADING OUTCOME PROBABILITY  🟢≥65%  🟠50–65%  🔴<50%",
+                margin=dict(l=10, r=80, t=36, b=10), height=360,
+                title=dict(text="LEADING OUTCOME PROBABILITY  (event → outcome name)",
                            font=dict(size=10, color="#FF6600"), x=0),
                 xaxis=dict(range=[0, 115], showgrid=False, color="#333", showticklabels=False),
-                yaxis=dict(autorange="reversed", tickfont=dict(size=10, color="#CCC")),
+                yaxis=dict(autorange="reversed", tickfont=dict(size=9, color="#AAA")),
             )
             st.plotly_chart(fig_prob, width="stretch")
 
-            st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
+            # ── Clickable event link list under chart
+            st.markdown('<div style="font-family:monospace;font-size:9px;color:#444;margin-bottom:4px">CLICK TO OPEN ON POLYMARKET ↗</div>', unsafe_allow_html=True)
+            link_html = "".join(
+                f'<a href="{u}" target="_blank" style="display:inline-block;margin:2px 4px 2px 0;'
+                f'padding:3px 8px;background:#0D0D0D;border:1px solid #1A1A1A;color:#FF6600;'
+                f'font-family:monospace;font-size:10px;text-decoration:none;white-space:nowrap">'
+                f'{t[:30]}{"…" if len(t)>30 else ""} ↗</a>'
+                for t, u in zip(event_titles, event_urls)
+            )
+            st.markdown(f'<div style="line-height:2">{link_html}</div>', unsafe_allow_html=True)
 
-            # ── Chart 2: Volume — grouped bars (not overlay), no text labels, hover only
-            # Scale both series to same axis: Total Vol in $M, 24H in $M too (convert from K)
-            vols24_m = [v / 1000 for v in vols24]  # $K → $M
-            vol_hover_total = [f"{e.get('title','')} | Total: ${v:.2f}M" for e,v in zip(top10, vols)]
-            vol_hover_24h   = [f"{e.get('title','')} | 24H: ${v:.0f}K" for e,v in zip(top10, vols24)]
+            st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
 
-            fig_vol = dark_fig(340)
+            # ── Chart 2: Volume — both in $M, clean overlay
+            def _fmt_m(v):
+                if v >= 1.0:   return f"${v:.2f}M"
+                if v >= 0.001: return f"${v*1000:.0f}K"
+                return f"${v*1e6:.0f}"
+
+            vol_hover_t = [f"<b>{e.get('title','')}</b><br>Total Vol: {_fmt_m(v)}" for e, v in zip(top10, vols)]
+            vol_hover_h = [f"<b>{e.get('title','')}</b><br>24H Vol: {_fmt_m(v)}"   for e, v in zip(top10, vols24)]
+
+            fig_vol = dark_fig(360)
             fig_vol.add_trace(go.Bar(
-                name="Total Volume", x=vols, y=labels, orientation="h",
+                name="Total Volume", x=vols, y=event_titles, orientation="h",
                 marker=dict(color="#3D1500", line=dict(color="#662200", width=1)),
-                hovertext=vol_hover_total, hoverinfo="text",
+                hovertext=vol_hover_t, hoverinfo="text",
             ))
             fig_vol.add_trace(go.Bar(
-                name="24H Volume", x=vols24_m, y=labels, orientation="h",
-                marker=dict(color="#FF6600", opacity=0.85, line=dict(width=0)),
-                hovertext=vol_hover_24h, hoverinfo="text",
+                name="24H Volume", x=vols24, y=event_titles, orientation="h",
+                marker=dict(color="#FF6600", opacity=0.9, line=dict(width=0)),
+                hovertext=vol_hover_h, hoverinfo="text",
             ))
-            # Clean annotations: Total on bar, 24H as offset — only if bar is wide enough
+            # Annotations — only on bars wide enough to label
+            max_vol = max(vols) if vols else 1
             for i, (tv, hv) in enumerate(zip(vols, vols24)):
-                if tv > 0.05:
+                if tv / max_vol > 0.08:
                     fig_vol.add_annotation(
-                        x=tv / 2, y=i, text=f"${tv:.1f}M",
+                        x=tv / 2, y=i, text=_fmt_m(tv),
                         showarrow=False, xanchor="center", yanchor="middle",
                         font=dict(size=8, color="#FF8C00", family="IBM Plex Mono"),
                     )
-                # 24h label to the right of 24H bar
-                hv_m = hv / 1000
-                if hv_m > 0.005:
+                if hv > 0.001 and hv / max_vol > 0.02:
                     fig_vol.add_annotation(
-                        x=hv_m, y=i, text=f"  ${hv:.0f}K",
+                        x=hv, y=i, text=f"  {_fmt_m(hv)}",
                         showarrow=False, xanchor="left", yanchor="middle",
                         font=dict(size=8, color="#FFAA44", family="IBM Plex Mono"),
                     )
             fig_vol.update_layout(
-                barmode="overlay", margin=dict(l=10, r=90, t=36, b=10), height=340,
-                title=dict(text="VOLUME ($M)  ▓ Total  ▓ 24H Activity  (hover for details)",
+                barmode="overlay", margin=dict(l=10, r=100, t=36, b=10), height=360,
+                title=dict(text="VOLUME  ▓ Total ($M)  ▓ 24H Activity ($M)  — hover for details",
                            font=dict(size=10, color="#FF6600"), x=0),
-                xaxis=dict(showgrid=False, color="#333", showticklabels=True,
-                           tickfont=dict(size=8, color="#444"),
-                           tickprefix="$", ticksuffix="M"),
+                xaxis=dict(showgrid=False, color="#333", tickprefix="$", ticksuffix="M",
+                           tickfont=dict(size=8, color="#444")),
                 yaxis=dict(autorange="reversed", tickfont=dict(size=10, color="#CCC")),
                 legend=dict(font=dict(size=9, color="#888"), bgcolor="rgba(0,0,0,0)",
                             orientation="h", x=0, y=1.06),
