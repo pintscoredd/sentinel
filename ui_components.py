@@ -369,18 +369,39 @@ def render_insider_cards(data, ticker="", finnhub_key=""):
 # ════════════════════════════════════════════════════════════════════
 
 _POLY_OUTCOME_SUFFIX = re.compile(
-    r'-(?:yes|no|above|below|over|under|before|after|\d+[a-z]*)$',
+    r'[-/](?:yes|no|above|below|over|under|before|after|true|false|\d+[a-z%]*)$',
     re.IGNORECASE
 )
 
+def _clean_poly_slug(slug):
+    """Strip outcome suffixes from a Polymarket slug to get the parent event URL.
+    e.g. 'will-trump-nominate-scott-bessent-as-fed-chair-yes' → 'will-trump-nominate-scott-bessent-as-fed-chair'
+         'who-will-win-2024-election/donald-trump' → 'who-will-win-2024-election'
+    """
+    if not slug:
+        return slug
+    slug = slug.strip().strip('/')
+    # Remove path component if present (market sub-paths)
+    if '/' in slug:
+        slug = slug.split('/')[0]
+    # Iteratively strip known outcome suffixes
+    for _ in range(3):
+        cleaned = _POLY_OUTCOME_SUFFIX.sub('', slug)
+        if cleaned == slug:
+            break
+        slug = cleaned
+    return slug
+
 def poly_url(evt):
-    """Build correct Polymarket event URL from an event object."""
+    """Build correct Polymarket PARENT event URL — never a sub-market outcome URL."""
+    # Prefer event-level slug directly from the events endpoint
     slug = evt.get("slug", "") or ""
     if slug:
-        return f"https://polymarket.com/event/{slug.strip().strip('/')}"
+        return f"https://polymarket.com/event/{_clean_poly_slug(slug)}"
+    # Fall back to building from title
     title = evt.get("title", "") or evt.get("question", "") or ""
     if title:
-        auto_slug = re.sub(r'[^a-z0-9]+', '-', title.lower())[:60].strip('-')
+        auto_slug = re.sub(r'[^a-z0-9]+', '-', title.lower())[:70].strip('-')
         if auto_slug:
             return f"https://polymarket.com/event/{auto_slug}"
     return "https://polymarket.com"
@@ -485,7 +506,12 @@ def render_poly_card(evt, show_unusual=False):
         unusual_html = (f'<div style="margin-top:5px;padding:3px 6px;background:rgba(255,102,0,0.08);border-left:2px solid #FF6600">'
                         f'⚡ Unusual volume ({ratio:.0f}% of total in 24h)</div>')
 
-    vol_str = f"24H: ${v24:,.0f} &nbsp;|&nbsp; TOTAL: ${vtot:,.0f}"
+    def _fmt_vol(v):
+        if v >= 1_000_000: return f"${v/1_000_000:.2f}M"
+        if v >= 1_000:     return f"${v/1_000:.1f}K"
+        return f"${v:.0f}"
+
+    vol_str = f"24H: {_fmt_vol(v24)} &nbsp;|&nbsp; TOTAL: {_fmt_vol(vtot)}"
     n_markets = len(evt.get("markets", []))
     count_str = f" &nbsp;·&nbsp; {n_markets} markets" if n_markets > 1 else ""
 
