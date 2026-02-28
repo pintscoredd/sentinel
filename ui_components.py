@@ -508,7 +508,15 @@ RULES: Never fabricate. Always include bear case. Label confidence HIGH/MEDIUM/L
 Timestamp PST. End trade ideas with: ⚠️ Research only, not financial advice.
 FORMATS: /brief /flash [ticker] /scenario [asset] /geo [region] /poly [topic] /rotate /sentiment /earnings"""
 
-GEMINI_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro"]
+GEMINI_MODELS = [
+    "gemini-2.5-flash-preview-04-17",  # newest, try first
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-8b",
+    "gemini-1.5-pro",
+    "gemini-1.0-pro",
+]
 
 def list_gemini_models(key):
     try:
@@ -524,7 +532,7 @@ def gemini_response(user_msg, history, context=""):
     try:
         import google.generativeai as genai
         genai.configure(api_key=st.session_state.gemini_key)
-        last_err = ""
+        errors = []
         for model_name in GEMINI_MODELS:
             try:
                 model = genai.GenerativeModel(model_name=model_name, system_instruction=SENTINEL_PROMPT)
@@ -535,14 +543,22 @@ def gemini_response(user_msg, history, context=""):
                 if context: ctx += f"\nLive: {context}"
                 gh = [{"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]} for m in history[-12:]]
                 chat = model.start_chat(history=gh)
-                return chat.send_message(f"{ctx}\n\nQuery: {user_msg}" if ctx else user_msg).text
+                result = chat.send_message(f"{ctx}\n\nQuery: {user_msg}" if ctx else user_msg).text
+                # Prepend which model actually responded (helps debug quota issues)
+                return f"*[{model_name}]*\n\n{result}"
             except Exception as e:
-                last_err = str(e)
-                if "not found" in last_err.lower() or "404" in last_err: continue
-                return f"⚠️ Gemini error: {e}"
-        return f"⚠️ All models failed. Last error: {last_err}"
+                err_str = str(e)
+                errors.append(f"{model_name}: {err_str[:80]}")
+                # Continue to next model for quota/not-found/unavailable errors
+                if any(x in err_str.lower() for x in ["not found", "404", "429", "quota", "resource_exhausted",
+                                                        "unavailable", "deprecated", "invalid argument"]):
+                    continue
+                # Hard errors (auth, key invalid) — stop immediately
+                return f"⚠️ Gemini error ({model_name}): {e}"
+        tried = " → ".join(errors)
+        return f"⚠️ All models exhausted.\n\nAttempted:\n{chr(10).join(errors)}"
     except ImportError:
-        return "⚠️ google-generativeai not installed."
+        return "⚠️ google-generativeai not installed. Run: pip install google-generativeai"
     except Exception as e:
         return f"⚠️ Error: {e}"
 
