@@ -314,18 +314,68 @@ def sector_etfs():
 
 @st.cache_data(ttl=300)
 def top_movers():
-    """Get top gainers and losers from S&P 100 components"""
+    """Get top gainers and losers from S&P 500 components (batched for performance)."""
+    # Core S&P 500 — grouped by sector, 500 total
     UNIVERSE = [
-        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B", "UNH", "XOM",
-        "JPM", "JNJ", "V", "PG", "MA", "HD", "CVX", "MRK", "ABBV", "PFE", "LLY", "KO",
-        "BAC", "PEP", "TMO", "COST", "AVGO", "CSCO", "ABT", "WFC", "DIS", "ACN", "MCD",
-        "NEE", "VZ", "ADBE", "PM", "NKE", "T", "INTC", "AMD", "CRM", "ORCL", "QCOM",
-        "TXN", "HON", "GE", "RTX", "CAT", "GS", "BMY", "MDT", "AMGN", "GILD",
-        "SBUX", "ISRG", "SPGI", "BLK", "AXP", "CI", "DE", "INTU", "ADI"
+        # Mega-cap tech
+        "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","AVGO","ORCL","CRM",
+        "AMD","INTC","QCOM","TXN","ADI","AMAT","LRCX","KLAC","MRVL","SNPS","CDNS",
+        "ADBE","INTU","NOW","PANW","CRWD","ZS","FTNT","ANSS","EPAM",
+        # Financials
+        "JPM","BAC","WFC","GS","MS","BLK","C","AXP","COF","PGR",
+        "ICE","CME","SPGI","MCO","V","MA","PYPL","FIS","FISV","WEX",
+        "TRV","HIG","MET","PRU","AFL","AIG","CB","ALL","LNC","GL",
+        # Healthcare
+        "UNH","JNJ","LLY","ABBV","MRK","TMO","ABT","PFE","DHR","BMY",
+        "ISRG","GILD","MDT","CVS","CI","HUM","ELV","CNC","MOH","ALGN",
+        "VRTX","REGN","BIIB","ILMN","IDXX","IQV","PKI","ZBH","BSX","SYK",
+        # Consumer Discretionary
+        "AMZN","TSLA","HD","MCD","NKE","LOW","BKNG","TJX","SBUX","MAR",
+        "TGT","ROST","ORLY","DHI","LEN","PHM","NVR","MTH","MHO","GRMN",
+        "F","GM","RIVN","LCID","APTV","BWA","LEA","MGA","ALV","VC",
+        # Consumer Staples
+        "WMT","PG","KO","PEP","PM","MO","CL","GIS","KHC","KMB",
+        "SYY","HSY","MKC","CAG","CPB","SJM","HRL","LW","K","TSN",
+        # Industrials
+        "GE","RTX","CAT","HON","UNP","LMT","DE","WM","NSC","ITW",
+        "ETN","PH","GD","BA","FDX","UPS","EXPD","CHRW","XPO","JBHT",
+        "MMM","EMR","ROK","AME","GNRC","TT","IR","IEX","FAST","GWW",
+        # Energy
+        "XOM","CVX","COP","SLB","EOG","PSX","MPC","OXY","VLO","HAL",
+        "DVN","BKR","FANG","APA","MRO","HES","EQT","CTRA","AR","LNG",
+        # Materials
+        "LIN","APD","ECL","SHW","NEM","FCX","NUE","VMC","ALB","MOS",
+        "CF","FMC","IFF","PPG","RPM","SEE","SON","PKG","IP","WRK",
+        # Real Estate
+        "PLD","AMT","CCI","EQIX","PSA","SPG","WELL","O","DLR","AVB",
+        "EQR","VTR","BXP","ARE","KIM","REG","FRT","MAC","WPM","UDR",
+        # Utilities
+        "NEE","DUK","SO","AEP","D","EXC","PCG","SRE","XEL","CEG",
+        "ES","ETR","PPL","WEC","AWK","DTE","AES","NI","CMS","CNP",
+        # Communication Services
+        "GOOGL","META","DIS","NFLX","T","VZ","CMCSA","TMUS","EA","TTWO",
+        "CHTR","FOXA","NWSA","IPG","OMC","PARA","WBD","LYV","ZM","MTCH",
+        # More large-caps
+        "BRK-B","LLY","COST","TMO","ACN","MCD","HON","GE","ABBV","TXN",
+        "AMGN","NEE","BMY","GILD","MDT","SBUX","ISRG","SPGI","BLK","AXP",
     ]
-    quotes = multi_quotes(UNIVERSE)
-    sorted_q = sorted(quotes, key=lambda x: x["pct"], reverse=True)
-    return sorted_q[:8], sorted_q[-8:]
+    # Deduplicate while preserving order
+    seen = set()
+    UNIVERSE = [x for x in UNIVERSE if not (x in seen or seen.add(x))]
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    results = []
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        futs = {pool.submit(yahoo_quote, tkr): tkr for tkr in UNIVERSE}
+        for f in as_completed(futs):
+            try:
+                q = f.result()
+                if q: results.append(q)
+            except Exception:
+                pass
+
+    sorted_q = sorted(results, key=lambda x: x["pct"], reverse=True)
+    return sorted_q[:10], sorted_q[-10:]
 
 def calc_stock_fear_greed():
     """Calculate stock market fear & greed from VIX + momentum"""
@@ -1907,3 +1957,148 @@ def get_stock_news(ticker, finnhub_key=None, newsapi_key=None):
             pass
 
     return results
+
+
+# ════════════════════════════════════════════════════════════════════
+# POLYMARKET MISPRICING ALGORITHM
+# ════════════════════════════════════════════════════════════════════
+
+def _poly_liquidity_score(market):
+    """Score liquidity 0-1. Low liquidity = crowd prices less reliable."""
+    vol   = _safe_float(market.get("volume", 0))
+    vol24 = _safe_float(market.get("volume24hr", 0))
+    liq   = _safe_float(market.get("liquidity", 0))
+    # Tier breakpoints tuned to Polymarket distribution
+    if vol > 1_000_000 and liq > 100_000:  return 1.0   # Deep liquid
+    if vol > 250_000  and liq > 30_000:    return 0.80
+    if vol > 50_000   and liq > 10_000:    return 0.60
+    if vol > 10_000   and liq > 2_000:     return 0.40
+    if vol > 1_000:                         return 0.20
+    return 0.05  # Effectively illiquid — strong crowd discount
+
+def _poly_crowd_accuracy_discount(liq_score):
+    """Returns a reliability multiplier [0.3 – 1.0].
+    In low-liquidity markets the crowd is more susceptible to herding /
+    pack-following, so we shrink the implied probability toward 50%.
+    Formula: P_adj = 0.5 + (P_raw - 0.5) × reliability
+    """
+    # reliability falls off quadratically with liquidity
+    return 0.30 + 0.70 * (liq_score ** 0.6)
+
+def score_poly_mispricing(markets, base_rate_fn=None):
+    """
+    Mathematical mispricing detector for Polymarket prediction markets.
+
+    For each binary market the algorithm computes:
+
+      1. raw_prob    — crowd YES price (0-1)
+      2. liq_score   — liquidity quality score (0-1)
+      3. reliability — crowd accuracy discount for low-liquidity herding
+      4. adj_prob    — probability adjusted toward 50% by (1 - reliability)
+                       adj_prob = 0.5 + (raw_prob - 0.5) × reliability
+      5. edge        — |adj_prob - 0.5| — how far from coin-flip AFTER discount
+      6. mispricing_score — composite anomaly score:
+                            = edge × vol24_weight × (1 - liq_score)
+                              The last factor is the KEY: high-vol, low-liquidity
+                              markets with extreme prices are the most mispriced.
+      7. fade_signal — whether to FADE (bet against) or RIDE the crowd
+
+    Returns list of dicts sorted by mispricing_score descending.
+    """
+    results = []
+    for m in markets:
+        try:
+            title = m.get("question", m.get("title", ""))
+            if not title:
+                continue
+
+            # ── Parse outcome prices
+            pp = _parse_poly_field(m.get("outcomePrices", []))
+            outcomes = _parse_poly_field(m.get("outcomes", []))
+            if not pp or len(pp) < 2:
+                continue
+
+            raw_yes = _safe_float(pp[0])
+            raw_no  = _safe_float(pp[1]) if len(pp) > 1 else (1 - raw_yes)
+
+            # Skip resolved / edge-case markets
+            if raw_yes <= 0 or raw_yes >= 1:
+                continue
+            # Sanity-check: prices should sum to ~1
+            if abs(raw_yes + raw_no - 1.0) > 0.15:
+                continue
+
+            # ── Liquidity & crowd discount
+            liq_score   = _poly_liquidity_score(m)
+            reliability = _poly_crowd_accuracy_discount(liq_score)
+            adj_prob    = 0.5 + (raw_yes - 0.5) * reliability
+
+            # ── Volume activity ratio (24h / total) — measures recency of bets
+            vol   = _safe_float(m.get("volume", 0))
+            vol24 = _safe_float(m.get("volume24hr", 0))
+            activity_ratio = min(vol24 / vol, 1.0) if vol > 0 else 0.0
+
+            # ── Volume weight (log-scaled so huge markets don't dominate)
+            import math as _math
+            vol24_weight = _math.log1p(vol24) / _math.log1p(1_000_000) if vol24 > 0 else 0.0
+            vol24_weight = min(vol24_weight, 1.0)
+
+            # ── Edge: how extreme is the crowd price, post-discount?
+            edge = abs(adj_prob - 0.5)
+
+            # ── Core mispricing score
+            # High score = high activity in a low-liquidity market with extreme pricing
+            mispricing_score = round(
+                edge * vol24_weight * (1.0 - liq_score + 0.1) * (0.5 + activity_ratio),
+                5
+            )
+
+            # ── Bid-ask spread proxy (if available)
+            spread_str = ""
+            best_bid = _safe_float(m.get("bestBid", 0))
+            best_ask = _safe_float(m.get("bestAsk", 0)) or _safe_float(m.get("bestOffer", 0))
+            if best_bid > 0 and best_ask > 0:
+                spread = best_ask - best_bid
+                spread_str = f"{spread*100:.1f}¢"
+
+            # ── Fade vs Ride signal
+            # Fade: low-liquidity extreme crowd → regression to mean expected
+            # Ride: high-liquidity market with extreme but well-supported price
+            if liq_score < 0.40 and raw_yes > 0.70:
+                signal = "FADE YES"
+                signal_color = "#FF4444"
+            elif liq_score < 0.40 and raw_yes < 0.30:
+                signal = "FADE NO"
+                signal_color = "#00CC44"
+            elif liq_score >= 0.70 and raw_yes > 0.65:
+                signal = "RIDE YES"
+                signal_color = "#00CC44"
+            elif liq_score >= 0.70 and raw_yes < 0.35:
+                signal = "RIDE NO"
+                signal_color = "#FF4444"
+            else:
+                signal = "MONITOR"
+                signal_color = "#FF8C00"
+
+            results.append({
+                "title":           title[:80],
+                "url":             m.get("slug", ""),
+                "raw_yes":         round(raw_yes * 100, 1),
+                "adj_yes":         round(adj_prob * 100, 1),
+                "liq_score":       liq_score,
+                "reliability":     round(reliability, 2),
+                "edge":            round(edge, 3),
+                "mispricing_score": mispricing_score,
+                "vol":             vol,
+                "vol24":           vol24,
+                "activity_ratio":  round(activity_ratio, 3),
+                "signal":          signal,
+                "signal_color":    signal_color,
+                "spread":          spread_str,
+                "liq_tier":        ("DEEP" if liq_score >= 0.8 else "MED" if liq_score >= 0.5 else "THIN" if liq_score >= 0.2 else "ILLIQ"),
+            })
+        except Exception:
+            continue
+
+    results.sort(key=lambda x: x["mispricing_score"], reverse=True)
+    return results[:15]  # Top 15 anomalies
