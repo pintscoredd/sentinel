@@ -202,6 +202,7 @@ section.main > div.block-container {
   font-family: var(--mono);
 }
 .bb-ph {
+  display: flex; align-items: center; gap: 6px;
   color: var(--org); font-size: 9px; font-weight: 700; letter-spacing: 2px;
   text-transform: uppercase; border-bottom: 1px solid var(--ghost);
   padding-bottom: 5px; margin-bottom: 8px; font-family: var(--mono);
@@ -1762,7 +1763,8 @@ with tabs[7]:
     with ec1:
         st.markdown('<div class="bb-ph">UPCOMING EARNINGS CALENDAR</div>', unsafe_allow_html=True)
         with st.spinner("Fetching earnings calendar (this may take 20-30s)…"):
-            earn_df = get_earnings_calendar()
+            _today_key = datetime.now().strftime("%Y-%m-%d")  # cache busts at midnight
+            earn_df = get_earnings_calendar(_today_key)
         if earn_df.empty:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No upcoming earnings found. Yahoo Finance may be rate-limiting. Try again shortly.</p>', unsafe_allow_html=True)
         else:
