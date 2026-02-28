@@ -1770,10 +1770,20 @@ with tabs[7]:
         else:
             today = datetime.now().date()
             for _, row in earn_df.iterrows():
-                ed = row["EarningsDate"]; days = (ed-today).days if ed>today else 0
-                badge = "TODAY" if days==0 else (f"IN {days}D" if days>0 else "RECENT")
-                bc = "#FF6600" if days==0 else ("#00AAFF" if days<7 else "#555")
-                bc_bg = "rgba(255,102,0,0.08)" if days==0 else ("rgba(0,170,255,0.06)" if days<7 else "transparent")
+                ed = row["EarningsDate"]
+                days = (ed - today).days  # can be negative (past), 0 (today), or positive (future)
+                if days == 0:
+                    badge, bc, bc_bg = "TODAY", "#FF6600", "rgba(255,102,0,0.08)"
+                elif days > 0 and days <= 1:
+                    badge, bc, bc_bg = "TOMORROW", "#00AAFF", "rgba(0,170,255,0.06)"
+                elif days > 0 and days < 7:
+                    badge, bc, bc_bg = f"IN {days}D", "#00AAFF", "rgba(0,170,255,0.04)"
+                elif days > 0:
+                    badge, bc, bc_bg = f"IN {days}D", "#555", "transparent"
+                elif days >= -3:
+                    badge, bc, bc_bg = "RECENT", "#888", "transparent"
+                else:
+                    continue  # skip anything older than 3 days
                 eps_str = f"${row['EPS Est']:.2f}" if row.get("EPS Est") is not None else "—"
                 ed_fmt = ed.strftime("%b %d") if hasattr(ed, "strftime") else str(ed)
                 company = str(row.get('Company',''))
