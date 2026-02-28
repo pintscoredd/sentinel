@@ -1711,91 +1711,74 @@ def get_macro_overview(fred_key):
     }
 
 
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=3600)
 def get_macro_calendar(fred_key=None):
-    """Fetch US economic calendar for the next 14 days.
-    Source priority:
-      1. Forex Factory JSON feeds (nfs.faireconomy.media) — always free, no key
-      2. FRED releases API (if FRED key available)
-      3. Smart static algorithmic schedule (always works as last resort)
-    Returns list of dicts: {date, name, importance, time, actual, forecast, previous, source}
+    """Fetch upcoming US economic calendar.
+    Source priority: 1) Finnhub (free, no key needed for basic)
+                     2) FRED releases API (if key available)
+                     3) Smart static schedule (always works)
+    Returns list of dicts: {date, name, importance, time, actual, forecast, previous}
     """
-    from datetime import date as _date, timedelta as _td, datetime as _dt
+    from datetime import date as _date, timedelta as _td
     import calendar as _cal
 
-    today   = _date.today()
-    horizon = today + _td(days=14)  # 14-day window only
+    today = _date.today()
+    horizon = today + _td(days=45)
     results = []
 
-    # ── Source 1: Forex Factory official JSON feeds (no key required)
-    FF_URLS = [
-        "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
-        "https://nfs.faireconomy.media/ff_calendar_nextweek.json",
-        "https://nfs.faireconomy.media/ff_calendar_nextweek2.json",
-    ]
-    HIGH_KW  = ["non-farm", "nonfarm", "cpi", "fomc", "fed", "gdp", "pce", "employment change",
-                "interest rate", "payroll"]
+    # ── Source 1: Finnhub economic calendar (free tier works without key for basic)
     try:
-        seen = set()
-        for url in FF_URLS:
-            try:
-                r = requests.get(url, timeout=12,
-                                 headers={"User-Agent": "Mozilla/5.0 SentinelTerminal/1.0"})
-                if r.status_code != 200:
+        params = {
+            "from": today.strftime("%Y-%m-%d"),
+            "to":   horizon.strftime("%Y-%m-%d"),
+        }
+        if fred_key:
+            pass  # FRED key not used for Finnhub
+        # Try picking up Finnhub key from secrets if available
+        try:
+            import streamlit as _st
+            fk = _st.secrets.get("FINNHUB_API_KEY") or _st.secrets.get("finnhub_api_key") or ""
+            if fk: params["token"] = str(fk).strip()
+        except Exception:
+            pass
+
+        r = requests.get("https://finnhub.io/api/v1/calendar/economic",
+                         params=params, timeout=12)
+        if r.status_code == 200:
+            events = r.json().get("economicCalendar", [])
+            HIGH_KW = ["cpi","fomc","fed","nonfarm","non-farm","payroll","gdp","pce","employment situation"]
+            MED_KW  = ["ppi","retail sales","ism","pmi","housing starts","durable goods","jolts",
+                       "adp","jobless","consumer confidence","industrial production","trade balance"]
+            for ev in events:
+                name = (ev.get("event") or "").strip()
+                if not name: continue
+                nl = name.lower()
+                impact = (ev.get("impact") or "").upper()
+                is_high = impact == "HIGH" or any(kw in nl for kw in HIGH_KW)
+                is_med  = any(kw in nl for kw in MED_KW)
+                if not (is_high or is_med or impact in ("HIGH","MEDIUM")): continue
+                try:
+                    ev_date = _date.fromisoformat((ev.get("time") or "")[:10])
+                except Exception:
                     continue
-                events = r.json() if isinstance(r.json(), list) else []
-                for ev in events:
-                    # Only USD events
-                    if (ev.get("country") or "").upper() != "USD":
-                        continue
-                    impact = (ev.get("impact") or "").strip()
-                    if impact not in ("High", "Medium"):
-                        continue
-                    raw_date = ev.get("date") or ""
-                    if not raw_date:
-                        continue
-                    # FF dates: "2025-04-04T12:30:00-0400" or "2025-04-04T00:00:00-0400"
-                    try:
-                        ev_dt   = _dt.fromisoformat(raw_date.replace("Z", "+00:00"))
-                        ev_date = ev_dt.date()
-                    except Exception:
-                        try:
-                            ev_date = _date.fromisoformat(raw_date[:10])
-                        except Exception:
-                            continue
-                    if not (today <= ev_date <= horizon):
-                        continue
-                    name = (ev.get("title") or "").strip()
-                    if not name:
-                        continue
-                    dedup_key = (ev_date, name)
-                    if dedup_key in seen:
-                        continue
-                    seen.add(dedup_key)
-                    # Time string in local (FF is US Eastern)
-                    time_str = raw_date[11:16] if len(raw_date) >= 16 else ""
-                    # Determine importance: High impact or contains key terms
-                    nl = name.lower()
-                    is_high = (impact == "High") or any(kw in nl for kw in HIGH_KW)
-                    results.append({
-                        "date":       ev_date,
-                        "name":       name,
-                        "importance": "HIGH" if is_high else "MEDIUM",
-                        "time":       time_str,
-                        "actual":     str(ev.get("actual",   "")) if ev.get("actual")   else "",
-                        "forecast":   str(ev.get("forecast", "")) if ev.get("forecast") else "",
-                        "previous":   str(ev.get("previous", "")) if ev.get("previous") else "",
-                        "source":     "forexfactory",
-                    })
-            except Exception:
-                continue
-        if results:
-            results.sort(key=lambda x: (x["date"], x["time"]))
-            return results[:40]
+                if not (today <= ev_date <= horizon): continue
+                results.append({
+                    "date":       ev_date,
+                    "name":       name,
+                    "importance": "HIGH" if is_high else "MEDIUM",
+                    "time":       "",
+                    "actual":     str(ev.get("actual",""))   if ev.get("actual")   is not None else "",
+                    "forecast":   str(ev.get("estimate","")) if ev.get("estimate") is not None else "",
+                    "previous":   str(ev.get("prev",""))     if ev.get("prev")     is not None else "",
+                    "source":     "finnhub",
+                })
+            if results:
+                results.sort(key=lambda x: x["date"])
+                return results[:35]
     except Exception:
         pass
 
-    # ── Source 2: FRED releases API (if key available)
+    # ── Source 2: FRED releases endpoint (if key available)
     if fred_key:
         try:
             r = requests.get(
@@ -1804,7 +1787,7 @@ def get_macro_calendar(fred_key=None):
                     "api_key": fred_key, "file_type": "json",
                     "realtime_start": today.strftime("%Y-%m-%d"),
                     "realtime_end":   horizon.strftime("%Y-%m-%d"),
-                    "limit": 100, "sort_order": "asc",
+                    "limit": 150, "sort_order": "asc",
                     "include_release_dates_with_no_data": "false",
                 },
                 timeout=12,
@@ -1818,14 +1801,17 @@ def get_macro_calendar(fred_key=None):
                     "9": ("FOMC Meeting / Fed Decision","HIGH"),
                     "15":("Producer Price Index (PPI)","MEDIUM"),
                     "14":("Retail Sales","MEDIUM"),
+                    "17":("Industrial Production","MEDIUM"),
+                    "19":("Housing Starts & Building Permits","MEDIUM"),
+                    "11":("Consumer Confidence","MEDIUM"),
+                    "22":("Initial Jobless Claims","MEDIUM"),
                     "175":("ISM Manufacturing PMI","MEDIUM"),
                     "184":("ISM Services PMI","MEDIUM"),
-                    "22":("Initial Jobless Claims","MEDIUM"),
+                    "13":("Durable Goods Orders","MEDIUM"),
                     "69":("ADP Employment Report","MEDIUM"),
                     "23":("JOLTS Job Openings","MEDIUM"),
-                    "13":("Durable Goods Orders","MEDIUM"),
+                    "55":("Trade Balance","MEDIUM"),
                 }
-                seen_f = set()
                 for rel in r.json().get("release_dates", []):
                     rid = str(rel.get("release_id",""))
                     if rid not in FRED_NAMES: continue
@@ -1833,19 +1819,18 @@ def get_macro_calendar(fred_key=None):
                     for d in rel.get("release_dates",[]):
                         try:
                             rel_date = _date.fromisoformat(d)
-                            if today <= rel_date <= horizon and (rel_date, name) not in seen_f:
-                                seen_f.add((rel_date, name))
+                            if today <= rel_date <= horizon:
                                 results.append({"date":rel_date,"name":name,"importance":imp,
                                                 "time":"","actual":"","forecast":"","previous":"","source":"fred"})
                         except Exception:
                             continue
                 if results:
                     results.sort(key=lambda x: x["date"])
-                    return results[:40]
+                    return results[:35]
         except Exception:
             pass
 
-    # ── Source 3: Static algorithmic schedule fallback
+    # ── Source 3: Smart static fallback — algorithmically computed approximate dates
     def _nth_weekday(year, month, n, weekday):
         count = 0
         for day in range(1, _cal.monthrange(year, month)[1] + 1):
@@ -1853,6 +1838,7 @@ def get_macro_calendar(fred_key=None):
                 count += 1
                 if count == n: return _date(year, month, day)
         return None
+
     def _last_weekday(year, month, weekday):
         last = None
         for day in range(1, _cal.monthrange(year, month)[1] + 1):
@@ -1861,7 +1847,7 @@ def get_macro_calendar(fred_key=None):
         return last
 
     static_events = []
-    for delta_m in range(0, 2):  # only 2 months needed for 14-day window
+    for delta_m in range(0, 3):
         m = ((today.month - 1 + delta_m) % 12) + 1
         y = today.year + ((today.month - 1 + delta_m) // 12)
         d = _nth_weekday(y, m, 1, 4)
@@ -1878,33 +1864,41 @@ def get_macro_calendar(fred_key=None):
         if d: static_events.append(("Initial Jobless Claims", d, "MEDIUM"))
         d = _last_weekday(y, m, 4)
         if d: static_events.append(("Personal Income & PCE", d, "HIGH"))
-        d = _last_weekday(y, m, 3)
-        if d: static_events.append(("GDP (Advance Estimate)", d, "HIGH"))
         d = _date(y, m, 1)
         while d.weekday() >= 5: d += _td(days=1)
         static_events.append(("ISM Manufacturing PMI", d, "MEDIUM"))
+        d = _date(y, m, 3)
+        while d.weekday() >= 5: d += _td(days=1)
+        static_events.append(("ISM Services PMI", d, "MEDIUM"))
+        d = _last_weekday(y, m, 1)
+        if d: static_events.append(("Consumer Confidence (CB)", d, "MEDIUM"))
         d = _nth_weekday(y, m, 4, 2)
         if d: static_events.append(("Durable Goods Orders", d, "MEDIUM"))
+        d = _last_weekday(y, m, 3)
+        if d: static_events.append(("GDP (Advance Estimate)", d, "HIGH"))
 
     FOMC_APPROX = [
-        _date(2025,3,19),_date(2025,5,7),_date(2025,6,18),_date(2025,7,30),
-        _date(2025,9,17),_date(2025,10,29),_date(2025,12,10),_date(2026,1,28),
-        _date(2026,3,18),_date(2026,4,29),_date(2026,6,17),_date(2026,7,29),
+        _date(2025,3,19), _date(2025,5,7), _date(2025,6,18),
+        _date(2025,7,30), _date(2025,9,17), _date(2025,10,29),
+        _date(2025,12,10), _date(2026,1,28), _date(2026,3,18),
+        _date(2026,4,29), _date(2026,6,17), _date(2026,7,29),
+        _date(2026,9,16), _date(2026,10,28), _date(2026,12,16),
     ]
     for fd in FOMC_APPROX:
         if today <= fd <= horizon:
             static_events.append(("FOMC Meeting (Fed Rate Decision)", fd, "HIGH"))
 
-    seen_s = set()
+    seen = set()
     for name, date, imp in static_events:
         key = (date, name)
-        if key not in seen_s and today <= date <= horizon:
-            seen_s.add(key)
-            results.append({"date":date,"name":name,"importance":imp,
-                            "time":"","actual":"","forecast":"","previous":"","source":"est."})
+        if key in seen or not (today <= date <= horizon): continue
+        seen.add(key)
+        results.append({"date":date,"name":name,"importance":imp,
+                        "time":"","actual":"","forecast":"","previous":"","source":"est."})
 
     results.sort(key=lambda x: x["date"])
-    return results[:40]
+    return results[:35]
+
 # ════════════════════════════════════════════════════════════════════
 # STOCK EXCHANGE LOOKUP (for TradingView symbol mapping)
 # ════════════════════════════════════════════════════════════════════
