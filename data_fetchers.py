@@ -1464,3 +1464,444 @@ def get_liquidations():
         except:
             result[coin] = {"long_liq": 0, "short_liq": 0, "total": 0}
     return result
+
+
+# ════════════════════════════════════════════════════════════════════
+# MACRO OVERVIEW & CALENDAR
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=3600)
+def get_macro_overview(fred_key):
+    """Compute a scored US macro environment overview from FRED data.
+    Returns a dict with individual signal scores, an overall score, and a narrative."""
+    if not fred_key:
+        return None
+
+    signals = {}
+
+    # ── 1. Inflation (CPI YoY)
+    try:
+        df_cpi = fred_series("CPIAUCSL", fred_key, 24)
+        if df_cpi is not None and len(df_cpi) >= 13:
+            latest = df_cpi["value"].iloc[-1]
+            year_ago = df_cpi["value"].iloc[-13]
+            cpi_yoy = round((latest / year_ago - 1) * 100, 2)
+            if cpi_yoy < 2.5:
+                cpi_score, cpi_label, cpi_color = 2, f"Cooling ({cpi_yoy:.1f}%)", "#00CC44"
+            elif cpi_yoy < 3.5:
+                cpi_score, cpi_label, cpi_color = 1, f"Elevated ({cpi_yoy:.1f}%)", "#FF8C00"
+            elif cpi_yoy < 5.0:
+                cpi_score, cpi_label, cpi_color = -1, f"High ({cpi_yoy:.1f}%)", "#FF4444"
+            else:
+                cpi_score, cpi_label, cpi_color = -2, f"Very High ({cpi_yoy:.1f}%)", "#FF0000"
+            signals["CPI Inflation"] = {"score": cpi_score, "label": cpi_label, "color": cpi_color, "val": cpi_yoy}
+    except Exception:
+        pass
+
+    # ── 2. Core PCE YoY (Fed's preferred measure)
+    try:
+        df_pce = fred_series("PCEPILFE", fred_key, 24)
+        if df_pce is not None and len(df_pce) >= 13:
+            latest = df_pce["value"].iloc[-1]
+            year_ago = df_pce["value"].iloc[-13]
+            pce_yoy = round((latest / year_ago - 1) * 100, 2)
+            if pce_yoy < 2.5:
+                pce_score, pce_label, pce_color = 2, f"Near Target ({pce_yoy:.1f}%)", "#00CC44"
+            elif pce_yoy < 3.0:
+                pce_score, pce_label, pce_color = 1, f"Slightly Elevated ({pce_yoy:.1f}%)", "#FF8C00"
+            else:
+                pce_score, pce_label, pce_color = -1, f"Above Target ({pce_yoy:.1f}%)", "#FF4444"
+            signals["Core PCE"] = {"score": pce_score, "label": pce_label, "color": pce_color, "val": pce_yoy}
+    except Exception:
+        pass
+
+    # ── 3. Unemployment Rate
+    try:
+        df_unemp = fred_series("UNRATE", fred_key, 6)
+        if df_unemp is not None and not df_unemp.empty:
+            urate = df_unemp["value"].iloc[-1]
+            prev = df_unemp["value"].iloc[-2] if len(df_unemp) > 1 else urate
+            trend = "↑" if urate > prev else "↓"
+            if urate < 4.0:
+                u_score, u_label, u_color = 2, f"Full Employment ({urate:.1f}% {trend})", "#00CC44"
+            elif urate < 4.5:
+                u_score, u_label, u_color = 1, f"Near Full Emp. ({urate:.1f}% {trend})", "#FF8C00"
+            elif urate < 5.5:
+                u_score, u_label, u_color = -1, f"Rising ({urate:.1f}% {trend})", "#FF4444"
+            else:
+                u_score, u_label, u_color = -2, f"High Unemployment ({urate:.1f}% {trend})", "#FF0000"
+            signals["Unemployment"] = {"score": u_score, "label": u_label, "color": u_color, "val": urate}
+    except Exception:
+        pass
+
+    # ── 4. Yield Curve (10Y - 2Y)
+    try:
+        df_2y  = fred_series("DGS2",  fred_key, 3)
+        df_10y = fred_series("DGS10", fred_key, 3)
+        if df_2y is not None and df_10y is not None and not df_2y.empty and not df_10y.empty:
+            spread = round(df_10y["value"].iloc[-1] - df_2y["value"].iloc[-1], 2)
+            if spread > 0.5:
+                yc_score, yc_label, yc_color = 2, f"Steep (+{spread:.2f}% — Growth signal)", "#00CC44"
+            elif spread > 0:
+                yc_score, yc_label, yc_color = 1, f"Flat (+{spread:.2f}%) — Flattening", "#FF8C00"
+            elif spread > -0.5:
+                yc_score, yc_label, yc_color = -1, f"Inverted ({spread:.2f}%) — Caution", "#FF4444"
+            else:
+                yc_score, yc_label, yc_color = -2, f"Deep Inversion ({spread:.2f}%) — Recession Risk", "#FF0000"
+            signals["Yield Curve (10-2Y)"] = {"score": yc_score, "label": yc_label, "color": yc_color, "val": spread}
+    except Exception:
+        pass
+
+    # ── 5. Fed Funds Rate
+    try:
+        df_ff = fred_series("FEDFUNDS", fred_key, 6)
+        if df_ff is not None and not df_ff.empty:
+            ffr = df_ff["value"].iloc[-1]
+            prev_ffr = df_ff["value"].iloc[-2] if len(df_ff) > 1 else ffr
+            ff_trend = "cutting" if ffr < prev_ffr else ("hiking" if ffr > prev_ffr else "hold")
+            if ff_trend == "cutting" and ffr < 4.0:
+                ff_score, ff_label, ff_color = 2, f"Easing ({ffr:.2f}% — {ff_trend.upper()})", "#00CC44"
+            elif ff_trend == "cutting":
+                ff_score, ff_label, ff_color = 1, f"Beginning Cuts ({ffr:.2f}%)", "#FF8C00"
+            elif ff_trend == "hiking":
+                ff_score, ff_label, ff_color = -1, f"Tightening ({ffr:.2f}% — {ff_trend.upper()})", "#FF4444"
+            elif ffr > 5.0:
+                ff_score, ff_label, ff_color = -1, f"Restrictive ({ffr:.2f}% — HOLD)", "#FF4444"
+            else:
+                ff_score, ff_label, ff_color = 1, f"Neutral ({ffr:.2f}% — HOLD)", "#FF8C00"
+            signals["Fed Funds Rate"] = {"score": ff_score, "label": ff_label, "color": ff_color, "val": ffr}
+    except Exception:
+        pass
+
+    # ── 6. HY Credit Spread
+    try:
+        df_hy = fred_series("BAMLH0A0HYM2", fred_key, 6)
+        if df_hy is not None and not df_hy.empty:
+            hy = df_hy["value"].iloc[-1]
+            prev_hy = df_hy["value"].iloc[-2] if len(df_hy) > 1 else hy
+            hy_trend = "↑" if hy > prev_hy else "↓"
+            if hy < 3.5:
+                hy_score, hy_label, hy_color = 2, f"Tight ({hy:.2f}% {hy_trend} — Risk-On)", "#00CC44"
+            elif hy < 4.5:
+                hy_score, hy_label, hy_color = 1, f"Normal ({hy:.2f}% {hy_trend})", "#FF8C00"
+            elif hy < 6.0:
+                hy_score, hy_label, hy_color = -1, f"Wide ({hy:.2f}% {hy_trend} — Stress)", "#FF4444"
+            else:
+                hy_score, hy_label, hy_color = -2, f"Very Wide ({hy:.2f}% {hy_trend} — Crisis)", "#FF0000"
+            signals["HY Credit Spread"] = {"score": hy_score, "label": hy_label, "color": hy_color, "val": hy}
+    except Exception:
+        pass
+
+    # ── 7. M2 Money Supply trend
+    try:
+        df_m2 = fred_series("M2SL", fred_key, 18)
+        if df_m2 is not None and len(df_m2) >= 13:
+            latest_m2 = df_m2["value"].iloc[-1]
+            year_ago_m2 = df_m2["value"].iloc[-13]
+            m2_yoy = round((latest_m2 / year_ago_m2 - 1) * 100, 2)
+            if m2_yoy > 5:
+                m2_score, m2_label, m2_color = -1, f"Expanding Rapidly ({m2_yoy:+.1f}% YoY — Inflationary)", "#FF4444"
+            elif m2_yoy > 0:
+                m2_score, m2_label, m2_color = 1, f"Modest Growth ({m2_yoy:+.1f}% YoY)", "#FF8C00"
+            else:
+                m2_score, m2_label, m2_color = 2, f"Contracting ({m2_yoy:+.1f}% YoY — Tightening)", "#00CC44"
+            signals["M2 Money Supply"] = {"score": m2_score, "label": m2_label, "color": m2_color, "val": m2_yoy}
+    except Exception:
+        pass
+
+    # ── Aggregate Score
+    total_score = sum(s["score"] for s in signals.values())
+    max_score = len(signals) * 2
+    pct = (total_score / max_score * 100) if max_score else 0
+
+    if pct >= 60:
+        env_label, env_color = "EXPANSIONARY 🟢", "#00CC44"
+        env_desc = "Macro conditions are broadly supportive. Inflation cooling, labor market healthy, credit spreads tight. Risk-on bias."
+    elif pct >= 20:
+        env_label, env_color = "MIXED / NEUTRAL 🟡", "#FF8C00"
+        env_desc = "Macro signals are mixed. Some positive factors offset by headwinds. Selective positioning warranted."
+    elif pct >= -20:
+        env_label, env_color = "CAUTIONARY ⚠️", "#FFCC00"
+        env_desc = "More headwinds than tailwinds. Elevated inflation or tightening financial conditions weigh on outlook."
+    else:
+        env_label, env_color = "CONTRACTIONARY 🔴", "#FF4444"
+        env_desc = "Multiple macro red flags. Inverted yield curve, high inflation, or rising credit stress signal elevated recession risk."
+
+    return {
+        "signals": signals,
+        "total_score": total_score,
+        "max_score": max_score,
+        "pct": pct,
+        "env_label": env_label,
+        "env_color": env_color,
+        "env_desc": env_desc,
+    }
+
+
+@st.cache_data(ttl=3600)
+def get_macro_calendar(fred_key):
+    """Fetch upcoming economic data releases from FRED releases API.
+    Falls back to a curated static calendar if API is unavailable."""
+    from datetime import date as _date
+    today = _date.today()
+
+    # Try FRED releases/dates endpoint
+    if fred_key:
+        try:
+            r = requests.get(
+                "https://api.stlouisfed.org/fred/releases/dates",
+                params={
+                    "api_key": fred_key,
+                    "file_type": "json",
+                    "realtime_start": today.strftime("%Y-%m-%d"),
+                    "limit": 100,
+                    "sort_order": "asc",
+                    "include_release_dates_with_no_data": "false",
+                },
+                timeout=12,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                releases = data.get("release_dates", [])
+                # Map major FRED release IDs to human-readable names
+                FRED_RELEASE_NAMES = {
+                    "10": "Consumer Price Index (CPI)",
+                    "21": "Employment Situation (Jobs Report)",
+                    "17": "Industrial Production & Capacity",
+                    "15": "Producer Price Index (PPI)",
+                    "14": "Retail Sales",
+                    "46": "Personal Income & Spending (PCE)",
+                    "20": "GDP (Advance/Preliminary/Final)",
+                    "19": "Housing Starts & Building Permits",
+                    "11": "Consumer Confidence",
+                    "9":  "FOMC Meeting / Fed Funds Decision",
+                    "22": "State Unemployment Insurance Claims",
+                    "175": "ISM Manufacturing PMI",
+                    "184": "ISM Services PMI",
+                    "16": "New Residential Sales",
+                    "18": "Existing Home Sales",
+                    "13": "Durable Goods Orders",
+                    "113": "Non-Farm Productivity & Labor Costs",
+                    "55": "Balance of Trade",
+                    "69": "ADP Employment Report",
+                    "23": "Job Openings (JOLTS)",
+                }
+                MAJOR_RELEASE_IDS = set(FRED_RELEASE_NAMES.keys())
+                calendar = []
+                for rel in releases:
+                    rid = str(rel.get("release_id", ""))
+                    if rid not in MAJOR_RELEASE_IDS:
+                        continue
+                    for d in rel.get("release_dates", []):
+                        try:
+                            rel_date = _date.fromisoformat(d)
+                            if rel_date >= today:
+                                calendar.append({
+                                    "date": rel_date,
+                                    "name": FRED_RELEASE_NAMES[rid],
+                                    "release_id": rid,
+                                    "importance": "HIGH" if rid in {"10","21","9","46","20"} else "MEDIUM",
+                                })
+                        except Exception:
+                            continue
+                calendar.sort(key=lambda x: x["date"])
+                if calendar:
+                    return calendar[:30]
+        except Exception:
+            pass
+
+    # ── Fallback: static approximate calendar for next 30 days
+    from datetime import timedelta as _td
+    import calendar as _cal
+    def next_occurrence(month_week, weekday, from_date):
+        """Get the Nth weekday of this/next month."""
+        return None
+    # Return empty list — FRED key required for live calendar
+    return []
+
+
+# ════════════════════════════════════════════════════════════════════
+# STOCK EXCHANGE LOOKUP (for TradingView symbol mapping)
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=3600)
+def get_ticker_exchange(ticker):
+    """Determine the correct exchange for a ticker using yfinance info.
+    Returns a TradingView-compatible symbol prefix."""
+    EXCHANGE_MAP = {
+        "NMS": "NASDAQ",  # NASDAQ Global Select
+        "NGM": "NASDAQ",  # NASDAQ Global Market
+        "NCM": "NASDAQ",  # NASDAQ Capital Market
+        "NYQ": "NYSE",
+        "ASE": "AMEX",
+        "AMEX": "AMEX",
+        "PCX": "AMEX",    # NYSE Arca
+        "PNK": "OTC",
+        "OTC": "OTC",
+        "BTT": "NYSE",
+        "NYSEArca": "AMEX",
+        "NasdaqCM": "NASDAQ",
+        "NasdaqGS": "NASDAQ",
+        "NasdaqGM": "NASDAQ",
+        "NYSE": "NYSE",
+    }
+    try:
+        info = yf.Ticker(ticker).info
+        exch = info.get("exchange", "") or info.get("fullExchangeName", "")
+        tv_prefix = EXCHANGE_MAP.get(exch, None)
+        if tv_prefix:
+            return f"{tv_prefix}:{ticker}"
+    except Exception:
+        pass
+    # Try each major exchange prefix
+    for prefix in ["NASDAQ", "NYSE", "AMEX"]:
+        return f"{prefix}:{ticker}"
+    return f"NASDAQ:{ticker}"
+
+
+# ════════════════════════════════════════════════════════════════════
+# FULL FINANCIALS FOR EARNINGS TAB
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=1800)
+def get_full_financials(ticker):
+    """Fetch comprehensive quarterly financials: Income, Balance Sheet, Cash Flow.
+    Returns a dict with standardized metrics per quarter."""
+    if yf is None:
+        return {}
+    try:
+        t = yf.Ticker(ticker)
+        income = t.quarterly_financials
+        cashflow = t.quarterly_cashflow
+        balance = t.quarterly_balance_sheet
+        info = t.info or {}
+
+        if income is None or income.empty:
+            return {}
+
+        quarters = list(income.columns[:4])
+        results = {}
+
+        for q in quarters:
+            q_str = str(q)[:10]
+            row = {}
+
+            # Income Statement
+            def _get(df, *keys):
+                for k in keys:
+                    if df is not None and not df.empty and k in df.index and q in df.columns:
+                        v = df.loc[k, q]
+                        if v is not None and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
+                            return float(v)
+                return None
+
+            row["revenue"]    = _get(income, "Total Revenue")
+            row["gross_profit"]= _get(income, "Gross Profit")
+            row["op_income"]  = _get(income, "Operating Income", "EBIT")
+            row["net_income"] = _get(income, "Net Income")
+            row["ebitda"]     = _get(income, "EBITDA", "Normalized EBITDA")
+            row["eps"]        = _get(income, "Diluted EPS", "Basic EPS")
+            row["int_expense"]= _get(income, "Interest Expense")
+
+            # Cash Flow
+            row["free_cashflow"] = _get(cashflow, "Free Cash Flow")
+            row["op_cashflow"]   = _get(cashflow, "Operating Cash Flow")
+            row["capex"]         = _get(cashflow, "Capital Expenditure")
+
+            # Balance Sheet
+            row["total_debt"]    = _get(balance, "Total Debt", "Long Term Debt And Capital Lease Obligation")
+            row["cash"]          = _get(balance, "Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments")
+
+            # Derived margins
+            if row["revenue"] and row["revenue"] > 0:
+                if row["gross_profit"] is not None:
+                    row["gross_margin"] = row["gross_profit"] / row["revenue"] * 100
+                if row["op_income"] is not None:
+                    row["op_margin"] = row["op_income"] / row["revenue"] * 100
+                if row["net_income"] is not None:
+                    row["net_margin"] = row["net_income"] / row["revenue"] * 100
+
+            results[q_str] = row
+
+        return results
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=600)
+def get_stock_news(ticker, finnhub_key=None, newsapi_key=None):
+    """Fetch news for a specific stock ticker from multiple sources.
+    Uses Finnhub company news first, then GDELT, then NewsAPI."""
+    results = []
+
+    # ── 1. Finnhub company-specific news
+    if finnhub_key:
+        try:
+            from datetime import date as _date
+            today = _date.today()
+            from_dt = (today - __import__("datetime").timedelta(days=7)).strftime("%Y-%m-%d")
+            to_dt = today.strftime("%Y-%m-%d")
+            r = requests.get(
+                "https://finnhub.io/api/v1/company-news",
+                params={"symbol": ticker, "from": from_dt, "to": to_dt, "token": finnhub_key},
+                timeout=10,
+            )
+            articles = r.json() if r.status_code == 200 else []
+            for art in articles[:8]:
+                headline = art.get("headline", "")
+                if not headline or not _is_english(headline):
+                    continue
+                ts = art.get("datetime", 0)
+                d = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else ""
+                results.append({
+                    "title": headline[:110],
+                    "url": art.get("url", "#"),
+                    "source": art.get("source", "Finnhub"),
+                    "date": d,
+                })
+            if results:
+                return results
+        except Exception:
+            pass
+
+    # ── 2. GDELT with ticker + company name
+    try:
+        info = yf.Ticker(ticker).info if yf else {}
+        co_name = info.get("shortName", ticker).split()[0] if info else ticker
+        query = f"{ticker} {co_name} stock"
+        arts = gdelt_news(query, max_rec=8)
+        for art in arts:
+            title = art.get("title", "")
+            if not title:
+                continue
+            sd = art.get("seendate", "")
+            d = f"{sd[:4]}-{sd[4:6]}-{sd[6:8]}" if sd and len(sd) >= 8 else ""
+            results.append({
+                "title": title[:110],
+                "url": art.get("url", "#"),
+                "source": art.get("domain", "GDELT"),
+                "date": d,
+            })
+        if results:
+            return results
+    except Exception:
+        pass
+
+    # ── 3. NewsAPI
+    if newsapi_key:
+        try:
+            arts = newsapi_headlines(newsapi_key, query=f"{ticker} stock earnings")
+            for art in arts[:8]:
+                title = art.get("title", "")
+                if not title or "[Removed]" in title:
+                    continue
+                results.append({
+                    "title": title[:110],
+                    "url": art.get("url", "#"),
+                    "source": art.get("source", {}).get("name", "NewsAPI"),
+                    "date": art.get("publishedAt", "")[:10],
+                })
+        except Exception:
+            pass
+
+    return results
