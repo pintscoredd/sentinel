@@ -351,20 +351,14 @@
     sg.setAttribute('color',new THREE.Float32BufferAttribute(sc,3));
     scene.add(new THREE.Points(sg,new THREE.PointsMaterial({size:.11,vertexColors:true})));
 
-    // ── HOTSPOT DATA
-    const HOTSPOTS=[
-      {lat:31.5,lon:34.8,label:'GAZA/ISRAEL',sev:'critical',type:'conflict',title:'Gaza — Active Conflict Zone',body:'Ongoing operations in Gaza. Regional escalation risk via Hezbollah and IRGC proxies. US carrier strike group in Eastern Mediterranean.',mkt:'WTI (CL=F), Gold (GLD), XLE, ITA, LMT',tags:['OIL RISK','IRGC','ESCALATION']},
-      {lat:14,lon:43,label:'RED SEA',sev:'critical',type:'shipping',title:'Red Sea — Houthi Shipping Campaign',body:'Houthi ballistic/drone attacks on commercial vessels ongoing. Cape of Good Hope rerouting adds 12–14 days. Suez Canal transits down ~40%.',mkt:'Container ETFs, FDX, UPS, European CPI, XLE',tags:['SHIPPING','HOUTHI','INFLATION']},
-      {lat:26.5,lon:56,label:'HORMUZ',sev:'elevated',type:'energy',title:'Strait of Hormuz — IRGC Naval Ops',body:"20% of global oil transits Hormuz daily. IRGC elevated naval presence. Lloyd's war risk premiums +300%.",mkt:"WTI (CL=F), Brent, XLE, Airline margins",tags:["20% GLOBAL OIL","IRAN","IRGC"]},
-      {lat:25,lon:121,label:'TAIWAN',sev:'elevated',type:'trade',title:'Taiwan Strait — PLA Military Posture',body:'PLA conducting regular exercises near median line. TSMC produces 90%+ of advanced chips <5nm.',mkt:'SMH, NVDA, AAPL supply chain, SOXX, TSM',tags:['TSMC','SEMICONDUCTORS','PLA']},
-      {lat:49,lon:31,label:'UKRAINE',sev:'critical',type:'conflict',title:'Ukraine — Active War Theater',body:'Frontline active across 1,000km line. Russia targeting power/energy infrastructure. NATO Patriot deployments expanding.',mkt:'NG=F (natgas), ZW=F (wheat), European banks, Defense ETFs',tags:['NATGAS','GRAIN','NATO']},
-      {lat:14,lon:2,label:'SAHEL',sev:'elevated',type:'minerals',title:'Sahel — Coups & Critical Minerals',body:'Coup governments in Mali, Niger, Burkina Faso. Wagner/Africa Corps active. Chinese mining rights expanding.',mkt:'GDX, SIL, LIT, gold futures',tags:['GOLD','LITHIUM','WAGNER']},
-      {lat:-5,lon:23.5,label:'DRC/COBALT',sev:'elevated',type:'minerals',title:'DRC — Cobalt Supply Chain',body:'DRC produces ~70% of world cobalt. M23 rebels active near Goma.',mkt:'Cobalt, TSLA supply chain, ALB, SQM, LIT',tags:['70% COBALT','EV','M23']},
-      {lat:12,lon:115,label:'S CHINA SEA',sev:'elevated',type:'shipping',title:'South China Sea — Territorial Disputes',body:'$3T+ annual trade transits here. Philippines-China confrontations at Second Thomas Shoal escalating.',mkt:'Container shipping, Asian FX, semiconductors',tags:['$3T TRADE','NAVAL','PHILIPPINES']},
-      {lat:56,lon:37.6,label:'RUSSIA',sev:'elevated',type:'energy',title:'Russia — Energy Export Rerouting',body:'Russian oil rerouted to China/India at 15–20% discount. Shadow fleet growing to ~500 vessels.',mkt:'European natgas, LNG stocks, UNG, XLE',tags:['LNG','SANCTIONS','SHADOW FLEET']},
-      {lat:35.6,lon:139.7,label:'BOJ/YEN',sev:'watch',type:'trade',title:'Japan — BOJ Policy & Yen Carry Trade',body:'BOJ normalizing ultra-loose policy. Yen carry trade unwind risk — estimated $4T+ in positions.',mkt:'USD/JPY, Nikkei, DXY, global bonds, TLT',tags:['YEN CARRY','BOJ','REFLATION']},
-      {lat:-20,lon:28,label:'ZIMBABWE',sev:'watch',type:'minerals',title:'Zimbabwe — Lithium Export Controls',body:'Zimbabwe banned raw lithium ore exports. Chinese firms dominate local processing.',mkt:'LIT, ALB (Albemarle), SQM, LTHM',tags:['LITHIUM','EV','EXPORT BAN']},
-      {lat:33,lon:44,label:'IRAQ/IRAN',sev:'elevated',type:'energy',title:'Iraq — Iranian Proxy Network',body:'Iranian-backed militias targeted 160+ US facilities since Oct 2023. Iraqi oil output near record 4.3Mbpd.',mkt:'WTI, Brent, XLE, OIH',tags:['IRAN PROXIES','OPEC+','OIL']},
+    // ── HOTSPOT DATA (dynamic from Streamlit or fallback)
+    let HOTSPOTS=[];
+    const FALLBACK_HOTSPOTS=[
+      {lat:31.5,lon:34.8,label:'GAZA/ISRAEL',sev:'critical',type:'conflict',title:'Gaza — Active Conflict Zone',body:'Ongoing operations in Gaza.',mkt:'WTI, GLD, XLE, ITA',tags:['OIL RISK','ESCALATION']},
+      {lat:14,lon:43,label:'RED SEA',sev:'critical',type:'shipping',title:'Red Sea — Houthi Shipping Campaign',body:'Houthi attacks on commercial vessels.',mkt:'Container ETFs, FDX, UPS',tags:['SHIPPING','HOUTHI']},
+      {lat:49,lon:31,label:'UKRAINE',sev:'critical',type:'conflict',title:'Ukraine — Active War Theater',body:'Frontline active across 1,000km.',mkt:'NG=F, ZW=F, Defense ETFs',tags:['NATGAS','GRAIN','NATO']},
+      {lat:25,lon:121,label:'TAIWAN',sev:'elevated',type:'trade',title:'Taiwan Strait — PLA Military Posture',body:'TSMC produces 90%+ advanced chips.',mkt:'SMH, NVDA, AAPL, TSM',tags:['TSMC','SEMICONDUCTORS']},
+      {lat:26.5,lon:56,label:'HORMUZ',sev:'elevated',type:'energy',title:'Strait of Hormuz',body:'20% of global oil transits daily.',mkt:'WTI, Brent, XLE',tags:['OIL','IRAN']},
     ];
 
     const COLORS={critical:'#FF4444',elevated:'#FF8C00',watch:'#FFCC00'};
@@ -384,20 +378,27 @@
     const glowGeo=new THREE.SphereGeometry(0.042,8,8);
     const ringGeo=new THREE.RingGeometry(0.030,0.040,24);
 
-    // Satellite/Flight geometries
+    // Satellite/Flight geometries (SHARED — reused, never created inside loops)
     const satGeo=new THREE.SphereGeometry(0.014,6,6);
     const satRingGeo=new THREE.RingGeometry(0.019,0.026,16);
     const fltGeo=new THREE.ConeGeometry(0.010,0.022,4);
 
+    // Vessel geometry (SHARED)
+    const vesselGeo=new THREE.SphereGeometry(0.012,6,6);
+    const vesselRingGeo=new THREE.RingGeometry(0.016,0.022,12);
+
     let rayTargets=[];
     let satMeshes=[];
     let flightMeshes=[];
+    let vesselMeshes=[];
+    let infraLines=[];
 
     function rebuildRayTargets(){
       rayTargets=[
         ...markers.flatMap(m=>[m.mesh,m.glow]),
         ...satMeshes.map(m=>m.mesh),
-        ...flightMeshes.map(m=>m.mesh)
+        ...flightMeshes.map(m=>m.mesh),
+        ...vesselMeshes.map(m=>m.mesh)
       ];
     }
 
@@ -424,6 +425,135 @@
       rebuildRayTargets();
     }
     renderMarkers();
+
+    // ============================================================
+    //  VESSEL TRACKING MODULE
+    // ============================================================
+    let vesselData=[];
+
+    function renderVesselMarkers(){
+      vesselMeshes.forEach(({mesh,ring})=>{
+        scene.remove(mesh); mesh.material.dispose();
+        if(ring){scene.remove(ring); ring.material.dispose();}
+      });
+      vesselMeshes.length=0;
+      if(vesselData.length===0){rebuildRayTargets();return;}
+      vesselData.forEach(v=>{
+        if(!isFinite(v.lat)||!isFinite(v.lon)) return;
+        const pos=latLonToVec3(v.lat,v.lon,1.012);
+        if(!isFinite(pos.x)) return;
+        const mesh=new THREE.Mesh(vesselGeo,new THREE.MeshBasicMaterial({color:new THREE.Color(0x4488FF)}));
+        mesh.position.copy(pos);
+        mesh.userData={type:'vessel',vessel:v,basePos:pos.clone()};
+        const ring=new THREE.Mesh(vesselRingGeo,new THREE.MeshBasicMaterial({color:new THREE.Color(0x4488FF),transparent:true,opacity:0.35,side:THREE.DoubleSide}));
+        ring.position.copy(pos);
+        ring.userData={phase:Math.random()*Math.PI*2,basePos:pos.clone()};
+        scene.add(mesh); scene.add(ring);
+        vesselMeshes.push({mesh,ring,vessel:v,basePos:pos.clone()});
+      });
+      rebuildRayTargets();
+    }
+
+    // ============================================================
+    //  INFRASTRUCTURE LINES MODULE (shipping lanes)
+    // ============================================================
+    const infraLineMat=new THREE.LineBasicMaterial({color:0x335577,transparent:true,opacity:0.45,linewidth:1});
+
+    function renderInfraLines(geojson){
+      infraLines.forEach(l=>{scene.remove(l); l.geometry.dispose();});
+      infraLines.length=0;
+      if(!geojson) return;
+      const features=geojson.features||geojson.geometries||[];
+      features.forEach(f=>{
+        const coords=(f.geometry||f).coordinates||[];
+        if(!coords||coords.length<2) return;
+        // Handle both LineString and MultiLineString
+        const lines=(f.geometry||f).type==='MultiLineString'?coords:[coords];
+        lines.forEach(line=>{
+          if(line.length<2) return;
+          const pts=[];
+          line.forEach(([lon,lat])=>{
+            if(!isFinite(lat)||!isFinite(lon)) return;
+            const v=latLonToVec3(lat,lon,1.006);
+            pts.push(v.x,v.y,v.z);
+          });
+          if(pts.length<6) return;
+          const geo=new THREE.BufferGeometry();
+          geo.setAttribute('position',new THREE.Float32BufferAttribute(pts,3));
+          const line3=new THREE.Line(geo,infraLineMat);
+          scene.add(line3);
+          infraLines.push(line3);
+        });
+      });
+    }
+
+    // ============================================================
+    //  SENTINEL DATA INGESTION (from Streamlit)
+    // ============================================================
+    function ingestSentinelData(){
+      const DATA=window.__SENTINEL_DATA__;
+      if(!DATA) return;
+
+      // 1. Events (GDELT conflicts) → HOTSPOTS
+      if(DATA.events && DATA.events.length>0){
+        HOTSPOTS=DATA.events.map(e=>({
+          lat:parseFloat(e.lat)||0, lon:parseFloat(e.lon)||0,
+          label:(e.name||'EVENT').substring(0,30),
+          sev:'critical', type:'conflict',
+          title:e.name||'Conflict Event',
+          body:e.url?'Source: '+e.url:'GDELT Conflict Event',
+          mkt:'', tags:['GDELT','LIVE'],
+          url:e.url||''
+        }));
+        // Also keep fallback hotspots as persistent geopolitical markers
+        HOTSPOTS.push(...FALLBACK_HOTSPOTS);
+      } else {
+        HOTSPOTS=FALLBACK_HOTSPOTS.slice();
+      }
+      renderMarkers();
+
+      // 2. Vessels (AIS)
+      if(DATA.vessels && DATA.vessels.length>0){
+        vesselData=DATA.vessels;
+        renderVesselMarkers();
+      }
+
+      // 3. Infrastructure (shipping lanes GeoJSON)
+      if(DATA.infra){
+        renderInfraLines(DATA.infra);
+      }
+
+      // 4. Pre-computed satellite positions from Python/skyfield
+      if(DATA.sats && DATA.sats.length>0 && showSats){
+        // Merge with existing satData if satellite.js loaded, otherwise use as-is
+        DATA.sats.forEach(s=>{
+          if(!s.lat || !s.lon) return;
+          const existing=satData.find(x=>x.name===s.name);
+          if(existing){
+            existing.lat=parseFloat(s.lat); existing.lon=parseFloat(s.lon);
+            existing.altKm=parseFloat(s.alt_km||s.altKm||400);
+            const r=1.015+Math.min(Math.max(existing.altKm,200),25000)*0.000055;
+            existing.basePos=latLonToVec3(existing.lat,existing.lon,r);
+          }
+        });
+        if(showSats) renderSatMarkers();
+      }
+
+      // 5. Pre-computed military flights from Python
+      if(DATA.planes && DATA.planes.length>0 && showFlights){
+        flightData=DATA.planes.map(p=>({
+          callsign:(p.flight||p.callsign||p.hex||'MIL').toString().trim(),
+          lat:parseFloat(p.lat), lon:parseFloat(p.lon),
+          alt:Math.round(parseFloat(p.alt_baro||p.alt||0)),
+          speed:Math.round(parseFloat(p.gs||p.speed||0)),
+          heading:parseFloat(p.track||p.heading||0),
+          hex:(p.hex||'').toString(), country:'MIL', type:p.type||'MIL', reg:p.reg||''
+        })).filter(f=>isFinite(f.lat)&&isFinite(f.lon));
+        renderFlightMarkers();
+      }
+    }
+    // Ingest on load
+    ingestSentinelData();
 
     // ============================================================
     //  SATELLITE TRACKING MODULE
@@ -953,6 +1083,9 @@
           tt.className='sat'; tt.textContent='◉ '+ud.sat.name+(ud.sat.altKm?' — '+Math.round(ud.sat.altKm)+'KM':'');
         } else if(ud.type==='flight'){
           tt.className='flt'; tt.textContent='✈ '+(ud.flight.callsign||ud.flight.hex)+' — '+ud.flight.alt+'FT';
+        } else if(ud.type==='vessel'){
+          tt.className=''; tt.style.borderColor='#4488FF';
+          tt.textContent='🚢 '+(ud.vessel.name||'VESSEL')+' — '+ud.vessel.speed.toFixed(0)+'KTS';
         }
         canvas.style.cursor='pointer';
       } else {tt.style.display='none';canvas.style.cursor='default';}
@@ -970,6 +1103,7 @@
         if(ud.type==='hotspot') showHotspotCard(ud.hotspot,p.x,p.y);
         else if(ud.type==='satellite') showSatCard(ud.sat,p.x,p.y);
         else if(ud.type==='flight') showFlightCard(ud.flight,p.x,p.y);
+        else if(ud.type==='vessel') showVesselCard(ud.vessel,p.x,p.y);
       } else {closeCard();}
     });
 
@@ -1034,14 +1168,36 @@
       const ic=document.getElementById('ic');
       document.getElementById('ic-sev').textContent='MILITARY AIRCRAFT — '+flight.country;
       document.getElementById('ic-ttl').textContent=(flight.callsign||flight.hex)||'UNKNOWN';
-      document.getElementById('ic-body').textContent=
+      // Body with photo
+      let bodyText=
         `ALTITUDE: ${flight.alt.toLocaleString()} FT\nSPEED: ${flight.speed} KTS\nHEADING: ${Math.round(flight.heading)}°\nICAO24: ${flight.hex||'—'}\nTYPE: ${flight.type||'MILITARY'}\nREG: ${flight.reg||'—'}`;
-      document.getElementById('ic-mkt').textContent='';
+      document.getElementById('ic-body').textContent=bodyText;
+      // Add aircraft photo from planespotters.net
+      let photoHtml='';
+      if(flight.hex){
+        photoHtml=`<div style="margin-top:6px"><img src="https://api.planespotters.net/pub/photos/hex/${flight.hex}" style="width:100%;max-width:260px;border-radius:3px;border:1px solid #222" onerror="this.style.display='none'"/></div>`;
+      }
+      document.getElementById('ic-mkt').innerHTML=photoHtml;
       document.getElementById('ic-tags').innerHTML=`<span class="ictag">MIL</span><span class="ictag">${flight.country}</span><span class="ictag">${flight.type||'UNKN'}</span>`;
-      document.getElementById('ic-date').textContent='POSITION: LIVE ADS-B/OPENSKY';
+      document.getElementById('ic-date').textContent='POSITION: LIVE ADS-B';
       const btn=document.getElementById('ic-track-btn');
       btn.textContent='✈ TRACK FLIGHT PATH'; btn.className='flt'; btn.style.display='block';
       ic.className='show flight';
+      positionCard(px,py);
+    }
+
+    function showVesselCard(vessel,px,py){
+      currentCardObj=null;
+      const ic=document.getElementById('ic');
+      document.getElementById('ic-sev').textContent='MARITIME VESSEL — '+vessel.type.toUpperCase();
+      document.getElementById('ic-ttl').textContent=vessel.name||'UNKNOWN VESSEL';
+      document.getElementById('ic-body').textContent=
+        `MMSI: ${vessel.mmsi||'—'}\nSPEED: ${vessel.speed.toFixed(1)} KTS\nHEADING: ${Math.round(vessel.heading)}°\nTYPE: ${vessel.type||'—'}\nPOS: ${vessel.lat.toFixed(3)}°, ${vessel.lon.toFixed(3)}°`;
+      document.getElementById('ic-mkt').textContent='';
+      document.getElementById('ic-tags').innerHTML=`<span class="ictag">AIS</span><span class="ictag">${vessel.type.toUpperCase()}</span><span class="ictag">MMSI ${vessel.mmsi||'?'}</span>`;
+      document.getElementById('ic-date').textContent='POSITION: AIS LIVE';
+      document.getElementById('ic-track-btn').style.display='none';
+      ic.className='show elevated';
       positionCard(px,py);
     }
 
@@ -1173,12 +1329,10 @@
         _rp.copy(basePos).applyQuaternion(_quat);
         mesh.position.copy(_rp);
         const len=_rp.length();
-        if(len < 0.001) return; // skip if degenerate
-        const up=_rp.clone().divideScalar(len); // safe normalize
-        // setFromUnitVectors can NaN when vectors are anti-parallel — guard it
+        if(len < 0.001) return;
+        const up=_rp.clone().divideScalar(len);
         const dot=up.dot(new THREE.Vector3(0,1,0));
         if(Math.abs(dot) > 0.9999){
-          // Near-parallel or anti-parallel: use a stable fallback axis
           mesh.quaternion.setFromAxisAngle(new THREE.Vector3(1,0,0), dot > 0 ? 0 : Math.PI);
         } else {
           mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),up);
@@ -1186,6 +1340,28 @@
         const rot2=new THREE.Quaternion();
         rot2.setFromAxisAngle(up,flight.heading*Math.PI/180);
         mesh.quaternion.premultiply(rot2);
+      });
+
+      // Vessel markers
+      vesselMeshes.forEach(({mesh,ring,vessel,basePos})=>{
+        _rp.copy(basePos).applyQuaternion(_quat);
+        mesh.position.copy(_rp);
+        if(ring){
+          ring.position.copy(_rp);
+          ring.quaternion.copy(camera.quaternion);
+          ring.userData.phase=(ring.userData.phase||0)+dt*1.8;
+          ring.material.opacity=0.15+0.22*Math.abs(Math.sin(ring.userData.phase));
+        }
+        _camDir.copy(camera.position).sub(_rp).normalize();
+        _norm.copy(_rp).normalize();
+        const vis=_camDir.dot(_norm)>0.04;
+        mesh.visible=vis;
+        if(ring) ring.visible=vis;
+      });
+
+      // Infrastructure lines rotation
+      infraLines.forEach(line=>{
+        line.quaternion.copy(_quat);
       });
 
       // Track line rotation (every 2 frames for performance)
