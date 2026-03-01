@@ -446,8 +446,20 @@ def build_brief_context():
     )
 
     def _fetch_geo():
+        """Fetch geo headlines with a tight 8s requests timeout via a local override."""
+        import requests as _req
         try:
-            arts = gdelt_news(GEO_QUERY, max_rec=20)
+            # Use requests directly with a hard 8s timeout rather than gdelt_news (18s default)
+            r = _req.get(
+                "https://api.gdeltproject.org/api/v2/doc/doc",
+                params={"query": GEO_QUERY + " sourcelang:english", "mode": "artlist",
+                        "maxrecords": 20, "format": "json", "timespan": "72h"},
+                timeout=8,
+            )
+            if r.status_code != 200:
+                return []
+            arts = r.json().get("articles", [])
+            arts = [a for a in arts if _is_english(a.get("title", ""))]
             lines = []
             seen = set()
             for a in arts:
@@ -464,11 +476,18 @@ def build_brief_context():
             return []
 
     # Run market snapshot + geo fetch in parallel — total wait = max(snap, geo), not sum
+    # TimeoutError is caught explicitly so a slow GDELT never crashes the app
     with ThreadPoolExecutor(max_workers=2) as pool:
         snap_fut = pool.submit(market_snapshot_str)
         geo_fut  = pool.submit(_fetch_geo)
-        base          = snap_fut.result(timeout=12)
-        geo_headlines = geo_fut.result(timeout=15)
+        try:
+            base = snap_fut.result(timeout=12)
+        except Exception:
+            base = ""
+        try:
+            geo_headlines = geo_fut.result(timeout=10)
+        except Exception:          # TimeoutError, network error, anything
+            geo_headlines = []
 
     if geo_headlines:
         headlines_block = (
