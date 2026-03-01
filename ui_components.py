@@ -418,7 +418,7 @@ def poly_status(m):
             end = datetime.fromisoformat(end_date_iso.replace("Z", "+00:00"))
             if end < datetime.now(pytz.utc):
                 return "EXPIRED (pending resolve)", "poly-status-closed"
-        except:
+        except Exception:
             pass
     return "ACTIVE", "poly-status-active"
 
@@ -434,7 +434,7 @@ def unusual_side(m):
         if yes_p > 60: return yes_name, "poly-unusual-yes"
         elif yes_p < 40: return no_name, "poly-unusual-no"
         else: return "BOTH SIDES", "poly-unusual-yes"
-    except:
+    except Exception:
         return None, None
 
 def _extract_participants(evt, limit=5):
