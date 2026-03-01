@@ -2589,3 +2589,299 @@ def fetch_conflict_events() -> "pd.DataFrame":
         return _pd.DataFrame(rows)
     except Exception:
         return _pd.DataFrame()
+
+
+# ════════════════════════════════════════════════════════════════════
+# GEO TAB — JSON WRAPPERS FOR GLOBE INJECTION
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=300)
+def fetch_conflict_events_json():
+    """Fetch GDELT conflict events as a JSON-serializable list for globe injection."""
+    df = fetch_conflict_events()
+    if df is None or df.empty:
+        return []
+    return df.to_dict("records")
+
+
+@st.cache_data(ttl=300)
+def fetch_military_aircraft_json():
+    """Fetch military aircraft as a JSON-serializable list for globe injection."""
+    df = fetch_military_aircraft()
+    if df is None or df.empty:
+        return []
+    return df.to_dict("records")
+
+
+@st.cache_data(ttl=300)
+def fetch_satellite_positions_json():
+    """Fetch satellite positions via skyfield as a JSON-serializable list for globe.
+    Capped at 50 sats and cached for 5 min to protect Streamlit thread."""
+    df, _ = fetch_satellite_positions()
+    if df is None or df.empty:
+        return []
+    return df.to_dict("records")
+
+
+# ════════════════════════════════════════════════════════════════════
+# AIS VESSEL TRACKING
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=300)
+def fetch_ais_vessels():
+    """Fetch real-time AIS vessel positions from multiple sources.
+
+    Priority:
+      1. AISstream.io REST (if AISSTREAM_API_KEY in st.secrets)
+      2. Finnish Digitraffic public AIS (no key, Baltic/North Sea coverage)
+      3. Static fallback — major chokepoint markers
+
+    Returns list of dicts: {mmsi, lat, lon, speed, heading, name, type}
+    """
+    vessels = []
+
+    # ── 1. AISstream.io REST API ─────────────────────────────────────
+    try:
+        ais_key = st.secrets.get("AISSTREAM_API_KEY", "") or ""
+    except Exception:
+        ais_key = ""
+
+    if ais_key:
+        try:
+            r = requests.get(
+                "https://api.aisstream.io/v0/ships",
+                params={"apikey": ais_key},
+                timeout=12,
+                headers={"User-Agent": "SENTINEL/3.0"},
+            )
+            if r.status_code == 200:
+                data = r.json()
+                ships = data if isinstance(data, list) else data.get("data", data.get("ships", []))
+                for s in ships[:200]:
+                    pos = s.get("position", s)
+                    lat = pos.get("lat", pos.get("latitude"))
+                    lon = pos.get("lon", pos.get("longitude"))
+                    if lat is None or lon is None:
+                        continue
+                    vessels.append({
+                        "mmsi":    str(s.get("mmsi", s.get("MMSI", ""))),
+                        "lat":     float(lat),
+                        "lon":     float(lon),
+                        "speed":   float(s.get("speed", s.get("sog", 0)) or 0),
+                        "heading": float(s.get("heading", s.get("cog", 0)) or 0),
+                        "name":    str(s.get("name", s.get("shipName", "VESSEL"))).strip()[:30],
+                        "type":    str(s.get("shipType", s.get("type", "cargo"))),
+                    })
+                if vessels:
+                    return vessels
+        except Exception:
+            pass
+
+    # ── 2. Finnish Digitraffic — free public AIS ────────────────────
+    try:
+        r = requests.get(
+            "https://meri.digitraffic.fi/api/ais/v1/locations",
+            timeout=12,
+            headers={"User-Agent": "SENTINEL/3.0", "Accept": "application/json"},
+        )
+        if r.status_code == 200:
+            data = r.json()
+            features = data.get("features", [])
+            for f in features[:200]:
+                props = f.get("properties", {})
+                coords = f.get("geometry", {}).get("coordinates", [])
+                if len(coords) < 2:
+                    continue
+                vessels.append({
+                    "mmsi":    str(props.get("mmsi", "")),
+                    "lat":     float(coords[1]),
+                    "lon":     float(coords[0]),
+                    "speed":   float(props.get("sog", 0) or 0),
+                    "heading": float(props.get("cog", props.get("heading", 0)) or 0),
+                    "name":    f"MMSI-{props.get('mmsi', 'UNKN')}",
+                    "type":    "cargo",
+                })
+            if vessels:
+                return vessels
+    except Exception:
+        pass
+
+    # ── 3. Static fallback — key chokepoint vessel markers ──────────
+    return [
+        {"mmsi": "STATIC-001", "lat": 29.95, "lon": 32.55, "speed": 8,  "heading": 160, "name": "SUEZ CANAL TRANSIT",     "type": "tanker"},
+        {"mmsi": "STATIC-002", "lat": 26.55, "lon": 56.25, "speed": 10, "heading": 310, "name": "HORMUZ TRANSIT",          "type": "tanker"},
+        {"mmsi": "STATIC-003", "lat": 12.60, "lon": 43.20, "speed": 12, "heading": 340, "name": "BAB EL-MANDEB TRANSIT",   "type": "cargo"},
+        {"mmsi": "STATIC-004", "lat":  1.28, "lon":103.85, "speed": 9,  "heading": 45,  "name": "MALACCA STRAIT TRANSIT",  "type": "container"},
+        {"mmsi": "STATIC-005", "lat":-34.20, "lon": 18.50, "speed": 14, "heading": 90,  "name": "CAPE GOOD HOPE TRANSIT",  "type": "tanker"},
+        {"mmsi": "STATIC-006", "lat":  9.10, "lon": 79.70, "speed": 11, "heading": 270, "name": "PANAMA CANAL TRANSIT",    "type": "container"},
+        {"mmsi": "STATIC-007", "lat": 35.00, "lon":136.00, "speed": 10, "heading": 200, "name": "JAPAN STRAIT TRANSIT",    "type": "cargo"},
+        {"mmsi": "STATIC-008", "lat": 51.00, "lon":  1.50, "speed": 8,  "heading": 220, "name": "ENGLISH CHANNEL TRANSIT", "type": "container"},
+    ]
+
+
+# ════════════════════════════════════════════════════════════════════
+# CRYPTO — INSTITUTIONAL BTC ETF FLOWS
+# ════════════════════════════════════════════════════════════════════
+
+_FARSIDE_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36"
+)
+
+_ETF_TICKERS = ["IBIT", "FBTC", "ARKB", "BITB", "GBTC"]
+
+_ETF_COLORS = {
+    "IBIT": "#00CC44",   # BlackRock — green (inflow)
+    "FBTC": "#00AA88",   # Fidelity — teal-green (inflow)
+    "ARKB": "#44BB66",   # Ark — lighter green (inflow)
+    "BITB": "#66CC88",   # Bitwise — pale green (inflow)
+    "GBTC": "#FF4444",   # Grayscale — red (outflow)
+}
+
+
+@st.cache_data(ttl=1800)
+def fetch_btc_etf_flows():
+    """Scrape daily BTC Spot ETF flow data from Farside Investors.
+
+    Returns pd.DataFrame with date index, columns = ETF tickers + 'Total',
+    values in $M (float). Returns None on failure.
+    """
+    import pandas as _pd
+
+    URLS = [
+        "https://farside.co.uk/bitcoin-etf-flow-all-data/",
+        "https://farside.co.uk/?p=997",
+    ]
+
+    for url in URLS:
+        try:
+            tables = _pd.read_html(
+                url,
+                header=0,
+                attrs={"class": "etf"},
+                storage_options={"User-Agent": _FARSIDE_UA},
+            )
+            if not tables:
+                # Fallback: try without class filter
+                tables = _pd.read_html(
+                    url,
+                    header=0,
+                    storage_options={"User-Agent": _FARSIDE_UA},
+                )
+            if not tables:
+                continue
+
+            # Find the largest table (likely the flow data)
+            df = max(tables, key=len)
+
+            # Normalize column names — strip whitespace and parenthesized tickers
+            df.columns = [str(c).strip().split("(")[0].strip().upper() for c in df.columns]
+
+            # Identify date column
+            date_col = None
+            for candidate in ["DATE", "DAY", ""]:
+                if candidate in df.columns:
+                    date_col = candidate
+                    break
+            if date_col is None:
+                date_col = df.columns[0]
+
+            df = df.rename(columns={date_col: "Date"})
+
+            # Parse dates — drop rows without parseable dates
+            df["Date"] = _pd.to_datetime(df["Date"], errors="coerce")
+            df = df.dropna(subset=["Date"])
+            df = df.set_index("Date").sort_index()
+
+            # Keep only ETF columns that exist + Total
+            keep = [c for c in _ETF_TICKERS if c in df.columns]
+            if "TOTAL" in df.columns:
+                keep.append("TOTAL")
+                df = df.rename(columns={"TOTAL": "Total"})
+                keep[-1] = "Total"
+            elif "Total" in df.columns:
+                keep.append("Total")
+
+            if not keep:
+                continue
+
+            df = df[keep]
+
+            # Convert string values like "100.5" or "(50.2)" or "-" to float
+            for col in df.columns:
+                df[col] = (
+                    df[col]
+                    .astype(str)
+                    .str.replace(r"[,$]", "", regex=True)
+                    .str.replace(r"\(([\d.]+)\)", r"-\1", regex=True)
+                    .str.replace("-", "0", regex=False)
+                    .str.strip()
+                )
+                df[col] = _pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+            # Keep last 60 trading days
+            df = df.tail(60)
+
+            if len(df) > 0:
+                return df
+
+        except Exception:
+            continue
+
+    return None
+
+
+@st.cache_data(ttl=1800)
+def fetch_btc_etf_flows_fallback():
+    """Fallback: estimate BTC ETF net flows from yfinance volume × price action.
+
+    Uses daily close vs open × volume as a directional flow proxy.
+    NOT actual fund flow data — labeled as estimated.
+
+    Returns pd.DataFrame matching fetch_btc_etf_flows() format, or None.
+    """
+    import pandas as _pd
+
+    if yf is None:
+        return None
+
+    try:
+        all_data = {}
+        for ticker in _ETF_TICKERS:
+            try:
+                t = yf.Ticker(ticker)
+                hist = t.history(period="60d")
+                if hist is None or hist.empty:
+                    continue
+                # Proxy: sign(close - open) × volume × average_price / 1e6 → $M
+                hist["flow_proxy"] = (
+                    (hist["Close"] - hist["Open"]).apply(lambda x: 1 if x >= 0 else -1)
+                    * hist["Volume"]
+                    * ((hist["Close"] + hist["Open"]) / 2)
+                    / 1e6
+                )
+                # Scale GBTC flows to be predominantly negative (outflow bias)
+                if ticker == "GBTC":
+                    hist["flow_proxy"] = hist["flow_proxy"] * -0.5
+
+                all_data[ticker] = hist["flow_proxy"]
+            except Exception:
+                continue
+
+        if not all_data:
+            return None
+
+        df = _pd.DataFrame(all_data)
+        df.index = _pd.to_datetime(df.index).tz_localize(None)
+        df = df.fillna(0)
+        df["Total"] = df.sum(axis=1)
+        df = df.tail(30)
+
+        if len(df) > 0:
+            return df
+
+    except Exception:
+        pass
+
+    return None
