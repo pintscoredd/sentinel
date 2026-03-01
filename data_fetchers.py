@@ -2345,7 +2345,7 @@ def score_poly_mispricing(markets, base_rate_fn=None):
 # ── Financial broadcast networks ──────────────────────────────────────────────
 GEO_FINANCIAL_NETWORKS = [
     {"name": "Bloomberg",  "channel_id": "UCIALMKvObZNtJ6AmdCLP7Lg",
-     "embed_url": "https://www.youtube.com/embed/live_stream?channel=UCIALMKvObZNtJ6AmdCLP7Lg&autoplay=1&mute=1"},
+     "embed_url": "https://www.youtube.com/embed/iEpJwprxDdk?autoplay=1&mute=1"},
     {"name": "CNBC",       "channel_id": "UCvJJ_dzjViJCoLf5uKUTwoA",
      "embed_url": "https://www.youtube.com/embed/live_stream?channel=UCvJJ_dzjViJCoLf5uKUTwoA&autoplay=1&mute=1"},
     {"name": "Euronews",   "channel_id": "UCW2QcKZiU8aUGg4yxCIditg",
