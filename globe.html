@@ -1126,6 +1126,7 @@
     let frameCount=0;
 
     function animate(t){
+      if (!isAnimating) return;   // paused — IntersectionObserver will restart us
       requestAnimationFrame(animate);
       try{
       const dt=Math.min((t-lastT)/1000,0.05); lastT=t; frameCount++;
@@ -1195,7 +1196,18 @@
       renderer.render(scene,camera);
       }catch(err){ /* prevent single bad frame from killing rAF loop */ }
     }
-    animate(0);
+    // Pause/resume the rAF loop based on canvas visibility.
+    // When the user navigates to another Streamlit tab, CSS sets display:none,
+    // IntersectionObserver fires, we stop calling rAF — GPU/battery savings.
+    let isAnimating = false;
+    const _visObserver = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) {
+        if (!isAnimating) { isAnimating = true; animate(performance.now()); }
+      } else {
+        isAnimating = false;
+      }
+    }, { threshold: 0 });
+    _visObserver.observe(canvas);
 
     // Resize — ResizeObserver catches iframe reflows that window.resize misses
     const _ro = new ResizeObserver(() => {
