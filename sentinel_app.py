@@ -39,6 +39,7 @@ from data_fetchers import (
     fetch_cboe_gex, compute_cboe_gex_profile, compute_cboe_total_gex, compute_cboe_pcr,
     get_whale_trades, get_exchange_netflow, get_funding_rates,
     get_open_interest, get_liquidations,
+    build_brief_context,
 )
 from ui_components import (
     CHART_LAYOUT, dark_fig, tv_chart, tv_mini, tv_tape,
@@ -2137,8 +2138,11 @@ Try: <span style="color:#FF6600">/brief</span> &nbsp;
             with col:
                 if st.button(lbl,use_container_width=True,key=f"qb_{lbl}"):
                     st.session_state.chat_history.append({"role":"user","content":cmd})
+                    # Use enriched context (with geo headlines + macro rates) for /brief and /geo
+                    _is_brief_geo = cmd.startswith("/brief") or cmd.startswith("/geo")
+                    _ctx = build_brief_context() if _is_brief_geo else market_snapshot_str()
                     with st.spinner("⚡ SENTINEL processing…"):
-                        resp = gemini_response(cmd,st.session_state.chat_history[:-1],market_snapshot_str())
+                        resp = gemini_response(cmd,st.session_state.chat_history[:-1],_ctx)
                     st.session_state.chat_history.append({"role":"assistant","content":resp})
                     st.rerun()
 
@@ -2147,8 +2151,12 @@ Try: <span style="color:#FF6600">/brief</span> &nbsp;
 
         if (send or user_input) and user_input:
             st.session_state.chat_history.append({"role":"user","content":user_input})
+            # Use enriched context (geo headlines + macro rates) for /brief and /geo commands
+            _ui_lower = user_input.strip().lower()
+            _is_brief_geo = _ui_lower.startswith("/brief") or _ui_lower.startswith("/geo")
+            _ctx = build_brief_context() if _is_brief_geo else market_snapshot_str()
             with st.spinner("⚡ SENTINEL processing…"):
-                resp = gemini_response(user_input,st.session_state.chat_history[:-1],market_snapshot_str())
+                resp = gemini_response(user_input,st.session_state.chat_history[:-1],_ctx)
             st.session_state.chat_history.append({"role":"assistant","content":resp})
             st.rerun()
 
