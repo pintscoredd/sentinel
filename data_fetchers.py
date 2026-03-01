@@ -2363,13 +2363,9 @@ GEO_FINANCIAL_NETWORKS = [
 # ── Global webcam feeds ────────────────────────────────────────────────────────
 GEO_WEBCAM_FEEDS = [
     # ── Middle East ──────────────────────────────────────────────────
-    {"id": "iran-tehran",    "city": "Tehran",       "country": "Iran",         "region": "Middle East", "fallbackVideoId": "-zGuR1qVKrU"},
-    {"id": "iran-telaviv",   "city": "Tel Aviv",     "country": "Israel",       "region": "Middle East", "fallbackVideoId": "-VLcYT5QBrY"},
-    {"id": "iran-jerusalem", "city": "Jerusalem",    "country": "Israel",       "region": "Middle East", "fallbackVideoId": "JHwwZRH2wz8"},
-    {"id": "iran-multicam",  "city": "Middle East",  "country": "Multi",        "region": "Middle East", "fallbackVideoId": "4E-iFtUM2kk"},
-    {"id": "jerusalem",      "city": "Jerusalem",    "country": "Israel",       "region": "Middle East", "fallbackVideoId": "UyduhBUpO7Q"},
     {"id": "tehran",         "city": "Tehran",       "country": "Iran",         "region": "Middle East", "fallbackVideoId": "-zGuR1qVKrU"},
     {"id": "tel-aviv",       "city": "Tel Aviv",     "country": "Israel",       "region": "Middle East", "fallbackVideoId": "-VLcYT5QBrY"},
+    {"id": "jerusalem",      "city": "Jerusalem",    "country": "Israel",       "region": "Middle East", "fallbackVideoId": "UyduhBUpO7Q"},
     {"id": "mecca",          "city": "Mecca",        "country": "Saudi Arabia", "region": "Middle East", "fallbackVideoId": "DEcpmPUbkDQ"},
     # ── Europe ──────────────────────────────────────────────────────
     {"id": "kyiv",           "city": "Kyiv",         "country": "Ukraine",      "region": "Europe", "fallbackVideoId": "-Q7FuPINDjA"},
