@@ -418,7 +418,7 @@ def poly_status(m):
             end = datetime.fromisoformat(end_date_iso.replace("Z", "+00:00"))
             if end < datetime.now(pytz.utc):
                 return "EXPIRED (pending resolve)", "poly-status-closed"
-        except Exception:
+        except:
             pass
     return "ACTIVE", "poly-status-active"
 
@@ -434,7 +434,7 @@ def unusual_side(m):
         if yes_p > 60: return yes_name, "poly-unusual-yes"
         elif yes_p < 40: return no_name, "poly-unusual-no"
         else: return "BOTH SIDES", "poly-unusual-yes"
-    except Exception:
+    except:
         return None, None
 
 def _extract_participants(evt, limit=5):
@@ -535,56 +535,77 @@ Timestamp PST. End trade ideas with: ⚠️ Research only, not financial advice.
 FORMATS: /brief /flash [ticker] /scenario [asset] /geo [region] /poly [topic] /rotate /sentiment /earnings"""
 
 GEMINI_MODELS = [
-    "gemini-2.5-flash-preview-04-17",  # newest, try first
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-8b",
-    "gemini-1.5-pro",
-    "gemini-1.0-pro",
+    "gemini-2.5-flash-preview-05-20",  # latest preview
+    "gemini-2.5-flash",                # stable 2.5
+    "gemini-2.0-flash",                # stable 2.0
+    "gemini-2.0-flash-lite",           # lightweight fallback
 ]
 
 def list_gemini_models(key):
+    """List available Gemini models using the new google-genai SDK."""
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=key)
-        return [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
+        from google import genai
+        client = genai.Client(api_key=key)
+        return [m.name for m in client.models.list()]
     except Exception as e:
         return [f"Error: {e}"]
 
 def gemini_response(user_msg, history, context=""):
+    """Send a message to Gemini using the new google-genai SDK (google-generativeai is deprecated)."""
     if not st.session_state.gemini_key:
         return "⚠️ Add your Gemini API key in .streamlit/secrets.toml."
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=st.session_state.gemini_key)
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=st.session_state.gemini_key)
+
+        # Build context prefix
+        ctx_parts = []
+        if st.session_state.macro_theses: ctx_parts.append(f"Macro: {st.session_state.macro_theses}")
+        if st.session_state.geo_watch:    ctx_parts.append(f"Geo: {st.session_state.geo_watch}")
+        if st.session_state.watchlist:    ctx_parts.append(f"Watchlist: {','.join(st.session_state.watchlist)}")
+        if context:                        ctx_parts.append(f"Live market data: {context}")
+        ctx_prefix = "\n".join(ctx_parts)
+        full_user_msg = f"{ctx_prefix}\n\nQuery: {user_msg}" if ctx_prefix else user_msg
+
+        # Convert chat history to new SDK Content objects
+        # New SDK roles: "user" / "model"
+        contents = []
+        for m in history[-12:]:
+            role = "user" if m["role"] == "user" else "model"
+            contents.append(types.Content(role=role, parts=[types.Part(text=m["content"])]))
+        # Append the current user turn
+        contents.append(types.Content(role="user", parts=[types.Part(text=full_user_msg)]))
+
         errors = []
         for model_name in GEMINI_MODELS:
             try:
-                model = genai.GenerativeModel(model_name=model_name, system_instruction=SENTINEL_PROMPT)
-                ctx = ""
-                if st.session_state.macro_theses: ctx += f"\nMacro: {st.session_state.macro_theses}"
-                if st.session_state.geo_watch:    ctx += f"\nGeo: {st.session_state.geo_watch}"
-                if st.session_state.watchlist:    ctx += f"\nWatchlist: {','.join(st.session_state.watchlist)}"
-                if context: ctx += f"\nLive: {context}"
-                gh = [{"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]} for m in history[-12:]]
-                chat = model.start_chat(history=gh)
-                result = chat.send_message(f"{ctx}\n\nQuery: {user_msg}" if ctx else user_msg).text
-                # Prepend which model actually responded (helps debug quota issues)
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SENTINEL_PROMPT,
+                        max_output_tokens=2048,
+                        temperature=0.4,
+                    ),
+                )
+                result = response.text
                 return f"*[{model_name}]*\n\n{result}"
             except Exception as e:
                 err_str = str(e)
                 errors.append(f"{model_name}: {err_str[:80]}")
-                # Continue to next model for quota/not-found/unavailable errors
-                if any(x in err_str.lower() for x in ["not found", "404", "429", "quota", "resource_exhausted",
-                                                        "unavailable", "deprecated", "invalid argument"]):
+                # Soft errors — try next model
+                if any(x in err_str.lower() for x in ["not found", "404", "429", "quota",
+                                                        "resource_exhausted", "unavailable",
+                                                        "deprecated", "invalid argument"]):
                     continue
-                # Hard errors (auth, key invalid) — stop immediately
+                # Hard errors (bad API key, etc.) — stop immediately
                 return f"⚠️ Gemini error ({model_name}): {e}"
-        tried = " → ".join(errors)
-        return f"⚠️ All models exhausted.\n\nAttempted:\n{chr(10).join(errors)}"
+
+        return f"⚠️ All models exhausted.\n\nAttempted:\n" + "\n".join(errors)
+
     except ImportError:
-        return "⚠️ google-generativeai not installed. Run: pip install google-generativeai"
+        return "⚠️ google-genai not installed. Run: pip install google-genai"
     except Exception as e:
         return f"⚠️ Error: {e}"
 
