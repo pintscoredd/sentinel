@@ -25,14 +25,14 @@ def _safe_float(v, default=0.0):
     try:
         f = float(v) if v is not None else default
         return default if (math.isnan(f) or math.isinf(f)) else f
-    except Exception:
+    except:
         return default
 
 def _safe_int(v):
     try:
         f = float(v) if v is not None else 0.0
         return 0 if (math.isnan(f) or math.isinf(f)) else int(f)
-    except Exception:
+    except:
         return 0
 
 def _esc(t):
@@ -96,7 +96,7 @@ def yahoo_quote(ticker):
         vol = int(h["Volume"].iloc[-1]) if "Volume" in h.columns else 0
         return {"ticker": ticker, "price": round(price, 2), "change": round(chg, 2),
                 "pct": round(pct, 2), "volume": vol}
-    except Exception:
+    except:
         return None
 
 @st.cache_data(ttl=120)
@@ -119,13 +119,14 @@ def get_futures():
             pct = chg / prev * 100
             rows.append({"ticker": ticker, "name": name, "price": round(price, 2),
                          "change": round(chg, 2), "pct": round(pct, 2)})
-        except Exception:
+        except:
             pass
     return rows
 
-@st.cache_data(ttl=300)
+@st.cache_resource(ttl=300)
 def get_heatmap_data():
-    """Fetch S&P sector heatmap data — single bulk yf.download request."""
+    """Fetch S&P sector heatmap data — concurrent batched fetching."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     SECTOR_STOCKS = {
         "Technology": ["AAPL", "MSFT", "NVDA", "AVGO", "META", "ORCL", "AMD", "INTC", "QCOM", "TXN", "ADBE", "CRM", "INTU", "IBM", "ACN"],
         "Healthcare": ["UNH", "JNJ", "LLY", "ABBV", "MRK", "TMO", "ABT", "PFE", "DHR", "BMY", "ISRG", "GILD", "MDT", "CVS", "CI"],
@@ -139,34 +140,17 @@ def get_heatmap_data():
         "Materials": ["LIN", "APD", "ECL", "SHW", "NEM", "FCX", "NUE", "VMC", "ALB", "MOS"],
         "Real Estate": ["PLD", "AMT", "CCI", "EQIX", "PSA", "SPG", "WELL", "O", "DLR", "AVB"],
     }
-    # Deduplicate tickers while preserving sector mapping
-    all_tickers = list({tkr for tickers in SECTOR_STOCKS.values() for tkr in tickers})
-    try:
-        # Single HTTP request for all tickers — dramatically faster and avoids 429s
-        raw = yf.download(all_tickers, period="5d", progress=False, auto_adjust=True)
-        close = raw["Close"]
-        # Ensure DataFrame even when a single ticker is returned
-        if isinstance(close, pd.Series):
-            close = close.to_frame(name=all_tickers[0])
-    except Exception:
-        return []
-
+    all_jobs = [(sector, tkr) for sector, tickers in SECTOR_STOCKS.items() for tkr in tickers]
     rows = []
-    for sector, tickers in SECTOR_STOCKS.items():
-        for tkr in tickers:
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        futures = {pool.submit(yahoo_quote, tkr): (sector, tkr) for sector, tkr in all_jobs}
+        for f in as_completed(futures):
+            sector, tkr = futures[f]
             try:
-                if tkr not in close.columns:
-                    continue
-                col = close[tkr].dropna()
-                if col.empty:
-                    continue
-                price = float(col.iloc[-1])
-                prev  = float(col.iloc[-2]) if len(col) > 1 else price
-                chg   = price - prev
-                pct   = chg / prev * 100 if prev else 0.0
-                rows.append({"ticker": tkr, "sector": sector,
-                             "pct": round(pct, 2), "price": round(price, 2),
-                             "change": round(chg, 2)})
+                q = f.result()
+                if q:
+                    rows.append({"ticker": tkr, "sector": sector, "pct": q["pct"],
+                                 "price": q["price"], "change": q["change"]})
             except Exception:
                 pass
     return rows
@@ -180,7 +164,7 @@ def vix_price():
     try:
         h = yf.Ticker("^VIX").history(period="5d")
         return round(h["Close"].iloc[-1], 2) if not h.empty else None
-    except Exception:
+    except:
         return None
 
 @st.cache_data(ttl=600)
@@ -188,7 +172,7 @@ def options_expiries(ticker):
     """Get all available options expiry dates"""
     try:
         return list(yf.Ticker(ticker).options)
-    except Exception:
+    except:
         return []
 
 @st.cache_data(ttl=600)
@@ -203,7 +187,7 @@ def options_chain(ticker, expiry=None):
         c = chain.calls[[x for x in cols if x in chain.calls.columns]].head(26)
         p = chain.puts[[x for x in cols if x in chain.puts.columns]].head(26)
         return c, p, exp
-    except Exception:
+    except:
         return None, None, None
 
 
@@ -379,37 +363,16 @@ def top_movers():
     seen = set()
     UNIVERSE = [x for x in UNIVERSE if not (x in seen or seen.add(x))]
 
-    try:
-        # Single bulk HTTP request — replaces ~200 individual calls
-        raw = yf.download(UNIVERSE, period="5d", progress=False, auto_adjust=True)
-        close  = raw["Close"]
-        volume = raw.get("Volume", pd.DataFrame())
-        if isinstance(close, pd.Series):
-            close = close.to_frame(name=UNIVERSE[0])
-    except Exception:
-        return [], []
-
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     results = []
-    for tkr in UNIVERSE:
-        try:
-            if tkr not in close.columns:
-                continue
-            col = close[tkr].dropna()
-            if col.empty:
-                continue
-            price = float(col.iloc[-1])
-            prev  = float(col.iloc[-2]) if len(col) > 1 else price
-            chg   = price - prev
-            pct   = chg / prev * 100 if prev else 0.0
-            vol   = 0
-            if not volume.empty and tkr in volume.columns:
-                v = volume[tkr].dropna()
-                if not v.empty:
-                    vol = int(v.iloc[-1])
-            results.append({"ticker": tkr, "price": round(price, 2),
-                           "change": round(chg, 2), "pct": round(pct, 2), "volume": vol})
-        except Exception:
-            pass
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        futs = {pool.submit(yahoo_quote, tkr): tkr for tkr in UNIVERSE}
+        for f in as_completed(futs):
+            try:
+                q = f.result()
+                if q: results.append(q)
+            except Exception:
+                pass
 
     sorted_q = sorted(results, key=lambda x: x["pct"], reverse=True)
     return sorted_q[:10], sorted_q[-10:]
@@ -436,16 +399,30 @@ def calc_stock_fear_greed():
         elif score >= 25: label = "Fear"
         else: label = "Extreme Fear"
         return score, label
-    except Exception:
+    except:
         return None, None
 
 def market_snapshot_str():
     try:
-        qs = multi_quotes(["SPY", "QQQ", "DX-Y.NYB", "GLD", "BTC-USD"])
-        parts = [f"{q['ticker']}: ${q['price']:,.2f} ({q['pct']:+.2f}%)" for q in qs]
+        from datetime import datetime
+        import pytz as _pytz
+        pst = _pytz.timezone("US/Pacific")
+        now_str = datetime.now(_pytz.utc).astimezone(pst).strftime("%A, %B %d, %Y %H:%M PST")
+
+        # SPX first so Gemini always sees the index price, not just the ETF proxy
+        spx_q = yahoo_quote("^GSPC")
+        spy_q = yahoo_quote("SPY")
+        qs = multi_quotes(["QQQ", "IWM", "DX-Y.NYB", "GLD", "TLT", "BTC-USD", "CL=F"])
+        parts = []
+        if spx_q:
+            parts.append(f"SPX: {spx_q['price']:,.2f} ({spx_q['pct']:+.2f}%)")
+        if spy_q:
+            parts.append(f"SPY: ${spy_q['price']:,.2f} ({spy_q['pct']:+.2f}%)")
+        parts += [f"{q['ticker']}: ${q['price']:,.2f} ({q['pct']:+.2f}%)" for q in qs]
         v = vix_price()
         if v: parts.append(f"VIX: {v}")
-        return " | ".join(parts)
+        snapshot = " | ".join(parts)
+        return f"CURRENT DATE/TIME: {now_str}\nLIVE MARKET DATA: {snapshot}"
     except Exception:
         return ""
 
@@ -464,7 +441,7 @@ def fred_series(series_id, key, limit=36):
         df["value"] = pd.to_numeric(df["value"], errors="coerce")
         df["date"] = pd.to_datetime(df["date"])
         return df.dropna(subset=["value"]).sort_values("date")
-    except Exception:
+    except:
         return None
 
 # ════════════════════════════════════════════════════════════════════
@@ -478,7 +455,7 @@ def polymarket_events(limit=60):
         r = requests.get("https://gamma-api.polymarket.com/events",
             params={"limit": limit, "order": "volume", "ascending": "false", "active": "true"}, timeout=10)
         return r.json()
-    except Exception:
+    except:
         return []
 
 @st.cache_data(ttl=300)
@@ -487,7 +464,7 @@ def polymarket_markets(limit=60):
         r = requests.get("https://gamma-api.polymarket.com/markets",
             params={"limit": limit, "order": "volume24hr", "ascending": "false", "active": "true"}, timeout=10)
         return r.json()
-    except Exception:
+    except:
         return []
 
 def detect_unusual_poly(markets):
@@ -497,7 +474,7 @@ def detect_unusual_poly(markets):
             v24 = _safe_float(m.get("volume24hr", 0))
             vtot = _safe_float(m.get("volume", 0))
             if vtot > 0 and v24 / vtot > 0.38 and v24 > 5000: out.append(m)
-        except Exception:
+        except:
             pass
     return out[:6]
 
@@ -506,7 +483,7 @@ def _parse_poly_field(field):
     if not field: return []
     if isinstance(field, str):
         try: return json.loads(field)
-        except Exception: return []
+        except: return []
     return field if isinstance(field, list) else []
 
 # ════════════════════════════════════════════════════════════════════
@@ -518,25 +495,28 @@ def fear_greed_crypto():
     try:
         d = requests.get("https://api.alternative.me/fng/?limit=1", timeout=8).json()
         return int(d["data"][0]["value"]), d["data"][0]["value_classification"]
-    except Exception:
+    except:
         return None, None
 
 @st.cache_data(ttl=600)
 def crypto_markets():
+    import time
     for attempt in range(3):
         try:
             r = requests.get("https://api.coingecko.com/api/v3/coins/markets",
                 params={"vs_currency": "usd", "order": "market_cap_desc", "per_page": 20,
                         "page": 1, "price_change_percentage": "24h"}, timeout=15)
             if r.status_code == 429:
-                # Return empty immediately — never block the Streamlit event loop with sleep
-                return []
+                time.sleep(2 * (attempt + 1))
+                continue
             if r.status_code == 200:
                 data = r.json()
                 if isinstance(data, list):
                     return data
             return []
         except Exception:
+            if attempt < 2:
+                time.sleep(1)
             continue
     return []
 
@@ -544,7 +524,7 @@ def crypto_markets():
 def crypto_global():
     try:
         return requests.get("https://api.coingecko.com/api/v3/global", timeout=8).json().get("data", {})
-    except Exception:
+    except:
         return {}
 
 # ════════════════════════════════════════════════════════════════════
@@ -583,7 +563,7 @@ def newsapi_headlines(key, query="stock market finance"):
             params={"q": query, "language": "en", "sortBy": "publishedAt",
                     "pageSize": 10, "apiKey": key}, timeout=10)
         return r.json().get("articles", [])
-    except Exception:
+    except:
         return []
 
 @st.cache_data(ttl=300)
@@ -592,7 +572,7 @@ def finnhub_news(key):
     try:
         return requests.get("https://finnhub.io/api/v1/news",
             params={"category": "general", "token": key}, timeout=10).json()[:12]
-    except Exception:
+    except:
         return []
 
 @st.cache_data(ttl=600)
@@ -602,7 +582,7 @@ def finnhub_insider(ticker, key):
         r = requests.get("https://finnhub.io/api/v1/stock/insider-transactions",
             params={"symbol": ticker, "token": key}, timeout=10)
         return r.json().get("data", [])[:15]
-    except Exception:
+    except:
         return []
 
 @st.cache_data(ttl=1800)
@@ -630,7 +610,7 @@ def finnhub_officers(ticker, key):
                 # Also try just "LAST FIRST_INITIAL"
                 role_map[(parts[-1] + " " + parts[0]).upper()] = title
         return role_map
-    except Exception:
+    except:
         return {}
 
 # ════════════════════════════════════════════════════════════════════
@@ -672,7 +652,7 @@ def get_earnings_calendar(today_str=None):
                     "EPS Est": round(float(eps), 2) if eps else None,
                     "Sector": info.get("sector", "—"),  # Full sector — no truncation
                 })
-        except Exception:
+        except:
             pass
     if not rows: return pd.DataFrame()
     return pd.DataFrame(rows).dropna(subset=["EarningsDate"]).sort_values("EarningsDate")
@@ -790,7 +770,7 @@ def _parse_type_from_symbol(sym):
         return "unknown"
 
 
-@st.cache_data(ttl=30)
+@st.cache_resource(ttl=30)
 def fetch_0dte_chain(underlying="SPY"):
     """Fetch nearest options chain with Greeks from Alpaca snapshots.
     Gets nearest active expiry first, then fetches snapshots.
@@ -1075,7 +1055,7 @@ def compute_cboe_pcr(option_df):
     return round(put_oi / call_oi, 2) if call_oi > 0 else None
 
 
-@st.cache_data(ttl=60)
+@st.cache_resource(ttl=60)
 def fetch_vix_data():
     """Fetch VIX and VIX9D from yfinance. Contango = VIX > VIX9D."""
     result = {"vix": None, "vix9d": None, "contango": None}
@@ -1396,7 +1376,7 @@ def get_whale_trades(symbol="BTCUSDT", min_usd=500_000):
                 try:
                     from datetime import datetime as _dt
                     time_str = _dt.fromisoformat(iso.replace("Z", "+00:00")).strftime("%H:%M:%S")
-                except Exception:
+                except:
                     time_str = str(iso)[:8]
             result.append({
                 "time": time_str,
@@ -1407,7 +1387,7 @@ def get_whale_trades(symbol="BTCUSDT", min_usd=500_000):
             })
         result.sort(key=lambda x: x["usd"], reverse=True)
         return result[:25]
-    except Exception:
+    except:
         return []
 
 
@@ -1435,7 +1415,7 @@ def get_exchange_netflow():
             })
         result.sort(key=lambda x: x["btc_vol_24h"], reverse=True)
         return result
-    except Exception:
+    except:
         return []
 
 
@@ -1472,7 +1452,7 @@ def get_funding_rates():
             })
         result.sort(key=lambda x: abs(x["rate_pct"]), reverse=True)
         return result
-    except Exception:
+    except:
         return []
 
 
@@ -1511,11 +1491,11 @@ def get_open_interest():
                     "oi_coins": round(oi_coins, 4),
                     "oi_usd": round(oi_coins * mark, 2),
                 })
-            except Exception:
+            except:
                 continue
         result.sort(key=lambda x: x["oi_usd"], reverse=True)
         return result
-    except Exception:
+    except:
         return []
 
 
@@ -1547,7 +1527,7 @@ def get_liquidations():
                 "short_liq": round(short_liq, 2),
                 "total": round(long_liq + short_liq, 2),
             }
-        except Exception:
+        except:
             result[coin] = {"long_liq": 0, "short_liq": 0, "total": 0}
     return result
 
