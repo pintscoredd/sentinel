@@ -21,8 +21,12 @@ from data_fetchers import (
     fred_series, finnhub_officers, _parse_poly_field,
     multi_quotes, vix_price, market_snapshot_str,
     GEO_FINANCIAL_NETWORKS, GEO_WEBCAM_FEEDS,
-    GEO_THEATERS, GEO_IMPACT_TICKERS,
+    GEO_THEATERS, GEO_IMPACT_TICKERS, GEO_SHIPPING_LANES,
     gdelt_news, newsapi_headlines,
+    fetch_conflict_events_json, fetch_military_aircraft_json,
+    fetch_satellite_positions_json, fetch_ais_vessels,
+    fetch_btc_etf_flows, fetch_btc_etf_flows_fallback,
+    _ETF_TICKERS, _ETF_COLORS,
 )
 
 try:
@@ -1057,6 +1061,112 @@ def _geo_webcam_region_html(region_cams):
     )
 
 
+# ════════════════════════════════════════════════════════════════════
+# CRYPTO ETF FLOWS CHART
+# ════════════════════════════════════════════════════════════════════
+
+def render_crypto_etf_chart(df, height=420, is_estimated=False):
+    """Render a dark-themed stacked bar chart of daily BTC Spot ETF net flows.
+
+    Args:
+        df: DataFrame with date index, columns = ETF tickers + 'Total'
+        height: chart height in px
+        is_estimated: if True, adds a label that data is estimated (yfinance fallback)
+
+    Returns:
+        plotly.graph_objects.Figure or None
+    """
+    if df is None or df.empty or go is None:
+        return None
+
+    fig = go.Figure()
+
+    # Stacked bars — one trace per ETF
+    etf_cols = [c for c in df.columns if c in _ETF_TICKERS]
+    for ticker in etf_cols:
+        color = _ETF_COLORS.get(ticker, "#FF8C00")
+        fig.add_trace(go.Bar(
+            x=df.index,
+            y=df[ticker],
+            name=ticker,
+            marker_color=color,
+            marker_line_width=0,
+            opacity=0.9,
+            hovertemplate=f"<b>{ticker}</b><br>%{{x|%b %d}}<br>${{y:,.1f}}M<extra></extra>",
+        ))
+
+    # Cumulative trendline
+    if "Total" in df.columns:
+        cumulative = df["Total"].cumsum()
+        fig.add_trace(go.Scatter(
+            x=df.index,
+            y=cumulative,
+            name="Cumulative Net Flow",
+            mode="lines",
+            line=dict(color="#FFFFFF", width=2, dash="solid"),
+            yaxis="y2",
+            hovertemplate="<b>Cumulative</b><br>%{x|%b %d}<br>$%{y:,.0f}M<extra></extra>",
+        ))
+
+    title_text = "INSTITUTIONAL BTC ETF FLOWS — DAILY NET ($M)"
+    if is_estimated:
+        title_text += "  ⚠ ESTIMATED (yfinance proxy)"
+
+    fig.update_layout(
+        barmode="relative",
+        paper_bgcolor="#000000",
+        plot_bgcolor="#050505",
+        font=dict(color="#FF8C00", family="IBM Plex Mono"),
+        height=height,
+        margin=dict(l=0, r=60, t=40, b=0),
+        title=dict(
+            text=title_text,
+            font=dict(size=11, color="#FF6600"),
+            x=0,
+        ),
+        xaxis=dict(
+            gridcolor="#111111",
+            color="#555555",
+            showgrid=False,
+            tickfont=dict(size=9, color="#888"),
+        ),
+        yaxis=dict(
+            title="Daily Net Flow ($M)",
+            titlefont=dict(size=9, color="#666"),
+            gridcolor="#111111",
+            color="#555555",
+            showgrid=True,
+            tickfont=dict(size=9, color="#888"),
+            zeroline=True,
+            zerolinecolor="#333333",
+            zerolinewidth=1,
+        ),
+        yaxis2=dict(
+            title="Cumulative ($M)",
+            titlefont=dict(size=9, color="#888"),
+            overlaying="y",
+            side="right",
+            showgrid=False,
+            color="#555555",
+            tickfont=dict(size=9, color="#888"),
+        ),
+        legend=dict(
+            font=dict(size=9, color="#888"),
+            bgcolor="rgba(0,0,0,0)",
+            orientation="h",
+            x=0, y=1.08,
+        ),
+        hovermode="x unified",
+        hoverlabel=dict(
+            bgcolor="#111111",
+            font=dict(size=11, color="#FF8C00", family="IBM Plex Mono"),
+            bordercolor="#333",
+        ),
+    )
+
+    return fig
+
+
 @st.fragment(run_every="10m")
 def render_geo_tab():
     """
@@ -1096,10 +1206,35 @@ def render_geo_tab():
         unsafe_allow_html=True,
     )
 
-    # Read globe.html from disk and embed inline
+    # ── Fetch dynamic geo data and inject into globe.html ──────────────
+    with st.spinner("Loading geo intelligence feeds…"):
+        _geo_events  = fetch_conflict_events_json()
+        _geo_planes  = fetch_military_aircraft_json()
+        _geo_sats    = fetch_satellite_positions_json()
+        _geo_vessels = fetch_ais_vessels()
+        _geo_infra   = GEO_SHIPPING_LANES
+
+    # Build JSON injection script
+    _sentinel_data = json.dumps({
+        "events":  _geo_events,
+        "planes":  _geo_planes,
+        "sats":    _geo_sats,
+        "vessels": _geo_vessels,
+        "infra":   _geo_infra,
+    }, default=str)
+    _inject_script = (
+        f'<script>window.__SENTINEL_DATA__ = {_sentinel_data};</script>\n'
+    )
+
+    # Read globe.html from disk and prepend injected data
     globe_path = _pathlib.Path(__file__).parent / "globe.html"
     try:
         globe_html = globe_path.read_text(encoding="utf-8")
+        # Inject data right after <head> so it's available before globe JS runs
+        if '<head>' in globe_html:
+            globe_html = globe_html.replace('<head>', '<head>\n' + _inject_script, 1)
+        else:
+            globe_html = _inject_script + globe_html
         _components.html(globe_html, height=700, scrolling=False)
     except FileNotFoundError:
         st.error("⚠️ globe.html not found — place it in the same directory as ui_components.py.")
