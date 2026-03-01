@@ -403,61 +403,80 @@ def calc_stock_fear_greed():
         return None, None
 
 def market_snapshot_str():
+    """Returns a compact snapshot string used by non-brief commands.
+    Also used as the base for build_brief_context().
+    Always starts with the real current date/time so Gemini never has to guess.
+    """
     try:
-        qs = multi_quotes(["SPY", "QQQ", "DX-Y.NYB", "GLD", "BTC-USD"])
-        parts = [f"{q['ticker']}: ${q['price']:,.2f} ({q['pct']:+.2f}%)" for q in qs]
-        v = vix_price()
+        from datetime import datetime as _dt
+        import pytz as _pytz
+        pst = _pytz.timezone("US/Pacific")
+        now_str = _dt.now(_pytz.utc).astimezone(pst).strftime("%A, %B %d, %Y %H:%M PST")
+
+        spx_q  = yahoo_quote("^GSPC")
+        spy_q  = yahoo_quote("SPY")
+        qs     = multi_quotes(["QQQ", "IWM", "DX-Y.NYB", "GLD", "TLT", "BTC-USD", "CL=F"])
+        v      = vix_price()
+
+        parts = []
+        if spx_q: parts.append(f"SPX: {spx_q['price']:,.2f} ({spx_q['pct']:+.2f}%)")
+        if spy_q: parts.append(f"SPY: ${spy_q['price']:,.2f} ({spy_q['pct']:+.2f}%)")
+        parts += [f"{q['ticker']}: ${q['price']:,.2f} ({q['pct']:+.2f}%)" for q in qs]
         if v: parts.append(f"VIX: {v}")
-        return " | ".join(parts)
-    except:
+
+        prices = " | ".join(parts)
+        return "CURRENT DATE/TIME: " + now_str + "\nLIVE MARKET DATA: " + prices
+    except Exception:
         return ""
 
 
 @st.cache_data(ttl=300)
 def build_brief_context():
     """
-    Assembles the full enriched context block for /brief and /geo commands.
-    Returns a string containing:
-      - Current date/time (PST)
-      - Live market snapshot (SPX-first)
-      - Live geopolitical headlines from GDELT (last 72h)
-    This is injected verbatim as the first block of the user message sent to Gemini,
-    ensuring the model always has real breaking news rather than relying on training data.
+    Assembles the enriched context for /brief and /geo.
+    Uses a SINGLE broad GDELT query (not 5 sequential ones) and runs it
+    concurrently alongside the market snapshot so total latency is ~3-5s max.
     """
-    base = market_snapshot_str()
+    from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
 
-    # Geo headline queries — cast wide to catch conflicts, sanctions, central banks, elections
-    GEO_QUERIES = [
-        "war conflict military strike attack",
-        "sanctions geopolitical tension crisis",
-        "central bank rate decision federal reserve ECB",
-        "oil energy supply disruption OPEC",
-        "trade tariff embargo economic war",
-    ]
+    # Single broad query covers conflicts, sanctions, CBs, energy, trade
+    GEO_QUERY = (
+        "war OR strike OR attack OR sanctions OR geopolitical OR crisis "
+        "OR central bank OR interest rate OR oil OR tariff OR embargo"
+    )
 
-    all_headlines = []
-    seen_titles = set()
-    for query in GEO_QUERIES:
+    def _fetch_geo():
         try:
-            arts = gdelt_news(query, max_rec=6)
+            arts = gdelt_news(GEO_QUERY, max_rec=20)
+            lines = []
+            seen = set()
             for a in arts:
                 title = a.get("title", "").strip()
-                if not title or title in seen_titles:
+                if not title or title in seen:
                     continue
-                seen_titles.add(title)
-                domain = a.get("domain", a.get("url", "")[:40])
-                seendate = a.get("seendate", "")
-                date_str = ""
-                if seendate and len(seendate) >= 8:
-                    date_str = f"{seendate[:4]}-{seendate[4:6]}-{seendate[6:8]}"
-                all_headlines.append(f"  • [{date_str}] {title} ({domain})")
+                seen.add(title)
+                domain = a.get("domain", "")
+                sd = a.get("seendate", "")
+                date_str = f"{sd[:4]}-{sd[4:6]}-{sd[6:8]}" if sd and len(sd) >= 8 else ""
+                lines.append(f"  • [{date_str}] {title} ({domain})")
+            return lines
         except Exception:
-            pass
+            return []
 
-    if all_headlines:
-        headlines_block = "LIVE GEOPOLITICAL & MACRO HEADLINES (last 72h, from GDELT):\n" + "\n".join(all_headlines[:20])
+    # Run market snapshot + geo fetch in parallel — total wait = max(snap, geo), not sum
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        snap_fut = pool.submit(market_snapshot_str)
+        geo_fut  = pool.submit(_fetch_geo)
+        base          = snap_fut.result(timeout=12)
+        geo_headlines = geo_fut.result(timeout=15)
+
+    if geo_headlines:
+        headlines_block = (
+            "LIVE GEOPOLITICAL & MACRO HEADLINES (last 72h, via GDELT):\n"
+            + "\n".join(geo_headlines[:20])
+        )
     else:
-        headlines_block = "LIVE GEOPOLITICAL HEADLINES: unavailable (GDELT timeout)"
+        headlines_block = "LIVE GEO HEADLINES: unavailable (GDELT timeout — use model knowledge)"
 
     return f"{base}\n\n{headlines_block}"
 
