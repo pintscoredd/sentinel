@@ -2344,37 +2344,50 @@ def score_poly_mispricing(markets, base_rate_fn=None):
 
 # ── Financial broadcast networks ──────────────────────────────────────────────
 GEO_FINANCIAL_NETWORKS = [
-    {"name": "Bloomberg",  "channel_id": "UCIALMKvObZNtJ6AmdCLP7Lg"},
-    {"name": "CNBC",       "channel_id": "UCvJJ_dzjViJCoLf5uKUTwoA"},
-    {"name": "Euronews",   "channel_id": "UCW2QcKZiU8aUGg4yxCIditg"},
-    {"name": "France 24",  "channel_id": "UCQfwfsi5VrQ8yKZ-UWmAoBw"},
-    {"name": "Al Jazeera", "channel_id": "UCNye-wNBqNL5ZzHSJj3l8Bg"},
+    {"name": "Bloomberg",  "channel_id": "UCIALMKvObZNtJ6AmdCLP7Lg",
+     "embed_url": "https://www.youtube.com/embed/live_stream?channel=UCIALMKvObZNtJ6AmdCLP7Lg&autoplay=1&mute=1"},
+    {"name": "CNBC",       "channel_id": "UCvJJ_dzjViJCoLf5uKUTwoA",
+     "embed_url": "https://www.youtube.com/embed/live_stream?channel=UCvJJ_dzjViJCoLf5uKUTwoA&autoplay=1&mute=1"},
+    {"name": "Euronews",   "channel_id": "UCW2QcKZiU8aUGg4yxCIditg",
+     "embed_url": "https://www.youtube.com/embed/live_stream?channel=UCW2QcKZiU8aUGg4yxCIditg&autoplay=1&mute=1"},
+    {"name": "France 24",  "channel_id": "UCQfwfsi5VrQ8yKZ-UWmAoBw",
+     "embed_url": "https://www.youtube.com/embed/live_stream?channel=UCQfwfsi5VrQ8yKZ-UWmAoBw&autoplay=1&mute=1"},
+    {"name": "Al Jazeera", "channel_id": "UCNye-wNBqNL5ZzHSJj3l8Bg",
+     "embed_url": "https://www.youtube.com/embed/live_stream?channel=UCNye-wNBqNL5ZzHSJj3l8Bg&autoplay=1&mute=1"},
+    {"name": "DW News",    "channel_id": "UCknLrEdhRCp1aegoMqRaCZg",
+     "embed_url": "https://www.youtube.com/embed/live_stream?channel=UCknLrEdhRCp1aegoMqRaCZg&autoplay=1&mute=1"},
+    {"name": "Sky News",   "channel_id": "UCoMdktPbSTixAyNGwb-UYkQ",
+     "embed_url": "https://www.youtube.com/embed/live_stream?channel=UCoMdktPbSTixAyNGwb-UYkQ&autoplay=1&mute=1"},
 ]
 
 # ── Global webcam feeds ────────────────────────────────────────────────────────
 GEO_WEBCAM_FEEDS = [
-    {"id": "iran-tehran",    "city": "Tehran",       "country": "Iran",         "fallbackVideoId": "-zGuR1qVKrU"},
-    {"id": "iran-telaviv",   "city": "Tel Aviv",     "country": "Israel",       "fallbackVideoId": "-VLcYT5QBrY"},
-    {"id": "iran-jerusalem", "city": "Jerusalem",    "country": "Israel",       "fallbackVideoId": "JHwwZRH2wz8"},
-    {"id": "iran-multicam",  "city": "Middle East",  "country": "Multi",        "fallbackVideoId": "4E-iFtUM2kk"},
-    {"id": "jerusalem",      "city": "Jerusalem",    "country": "Israel",       "fallbackVideoId": "UyduhBUpO7Q"},
-    {"id": "tehran",         "city": "Tehran",       "country": "Iran",         "fallbackVideoId": "-zGuR1qVKrU"},
-    {"id": "tel-aviv",       "city": "Tel Aviv",     "country": "Israel",       "fallbackVideoId": "-VLcYT5QBrY"},
-    {"id": "mecca",          "city": "Mecca",        "country": "Saudi Arabia", "fallbackVideoId": "DEcpmPUbkDQ"},
-    {"id": "kyiv",           "city": "Kyiv",         "country": "Ukraine",      "fallbackVideoId": "-Q7FuPINDjA"},
-    {"id": "odessa",         "city": "Odessa",       "country": "Ukraine",      "fallbackVideoId": "e2gC37ILQmk"},
-    {"id": "paris",          "city": "Paris",        "country": "France",       "fallbackVideoId": "OzYp4NRZlwQ"},
-    {"id": "st-petersburg",  "city": "St. Petersburg","country": "Russia",      "fallbackVideoId": "CjtIYbmVfck"},
-    {"id": "london",         "city": "London",       "country": "UK",           "fallbackVideoId": "Lxqcg1qt0XU"},
-    {"id": "washington",     "city": "Washington DC","country": "USA",          "fallbackVideoId": "1wV9lLe14aU"},
-    {"id": "new-york",       "city": "New York",     "country": "USA",          "fallbackVideoId": "4qyZLflp-sI"},
-    {"id": "los-angeles",    "city": "Los Angeles",  "country": "USA",          "fallbackVideoId": "EO_1LWqsCNE"},
-    {"id": "miami",          "city": "Miami",        "country": "USA",          "fallbackVideoId": "5YCajRjvWCg"},
-    {"id": "taipei",         "city": "Taipei",       "country": "Taiwan",       "fallbackVideoId": "z_fY1pj1VBw"},
-    {"id": "shanghai",       "city": "Shanghai",     "country": "China",        "fallbackVideoId": "76EwqI5XZIc"},
-    {"id": "tokyo",          "city": "Tokyo",        "country": "Japan",        "fallbackVideoId": "4pu9sF5Qssw"},
-    {"id": "seoul",          "city": "Seoul",        "country": "South Korea",  "fallbackVideoId": "-JhoMGoAfFc"},
-    {"id": "sydney",         "city": "Sydney",       "country": "Australia",    "fallbackVideoId": "7pcL-0Wo77U"},
+    # ── Middle East ──────────────────────────────────────────────────
+    {"id": "iran-tehran",    "city": "Tehran",       "country": "Iran",         "region": "Middle East", "fallbackVideoId": "-zGuR1qVKrU"},
+    {"id": "iran-telaviv",   "city": "Tel Aviv",     "country": "Israel",       "region": "Middle East", "fallbackVideoId": "-VLcYT5QBrY"},
+    {"id": "iran-jerusalem", "city": "Jerusalem",    "country": "Israel",       "region": "Middle East", "fallbackVideoId": "JHwwZRH2wz8"},
+    {"id": "iran-multicam",  "city": "Middle East",  "country": "Multi",        "region": "Middle East", "fallbackVideoId": "4E-iFtUM2kk"},
+    {"id": "jerusalem",      "city": "Jerusalem",    "country": "Israel",       "region": "Middle East", "fallbackVideoId": "UyduhBUpO7Q"},
+    {"id": "tehran",         "city": "Tehran",       "country": "Iran",         "region": "Middle East", "fallbackVideoId": "-zGuR1qVKrU"},
+    {"id": "tel-aviv",       "city": "Tel Aviv",     "country": "Israel",       "region": "Middle East", "fallbackVideoId": "-VLcYT5QBrY"},
+    {"id": "mecca",          "city": "Mecca",        "country": "Saudi Arabia", "region": "Middle East", "fallbackVideoId": "DEcpmPUbkDQ"},
+    # ── Europe ──────────────────────────────────────────────────────
+    {"id": "kyiv",           "city": "Kyiv",         "country": "Ukraine",      "region": "Europe", "fallbackVideoId": "-Q7FuPINDjA"},
+    {"id": "odessa",         "city": "Odessa",       "country": "Ukraine",      "region": "Europe", "fallbackVideoId": "e2gC37ILQmk"},
+    {"id": "paris",          "city": "Paris",        "country": "France",       "region": "Europe", "fallbackVideoId": "OzYp4NRZlwQ"},
+    {"id": "st-petersburg",  "city": "St. Petersburg","country": "Russia",      "region": "Europe", "fallbackVideoId": "CjtIYbmVfck"},
+    {"id": "london",         "city": "London",       "country": "UK",           "region": "Europe", "fallbackVideoId": "Lxqcg1qt0XU"},
+    # ── Americas ────────────────────────────────────────────────────
+    {"id": "washington",     "city": "Washington DC","country": "USA",          "region": "Americas", "fallbackVideoId": "1wV9lLe14aU"},
+    {"id": "new-york",       "city": "New York",     "country": "USA",          "region": "Americas", "fallbackVideoId": "4qyZLflp-sI"},
+    {"id": "los-angeles",    "city": "Los Angeles",  "country": "USA",          "region": "Americas", "fallbackVideoId": "EO_1LWqsCNE"},
+    {"id": "miami",          "city": "Miami",        "country": "USA",          "region": "Americas", "fallbackVideoId": "5YCajRjvWCg"},
+    # ── Asia-Pacific ────────────────────────────────────────────────
+    {"id": "taipei",         "city": "Taipei",       "country": "Taiwan",       "region": "Asia-Pacific", "fallbackVideoId": "z_fY1pj1VBw"},
+    {"id": "shanghai",       "city": "Shanghai",     "country": "China",        "region": "Asia-Pacific", "fallbackVideoId": "76EwqI5XZIc"},
+    {"id": "tokyo",          "city": "Tokyo",        "country": "Japan",        "region": "Asia-Pacific", "fallbackVideoId": "4pu9sF5Qssw"},
+    {"id": "seoul",          "city": "Seoul",        "country": "South Korea",  "region": "Asia-Pacific", "fallbackVideoId": "-JhoMGoAfFc"},
+    {"id": "sydney",         "city": "Sydney",       "country": "Australia",    "region": "Asia-Pacific", "fallbackVideoId": "7pcL-0Wo77U"},
 ]
 
 # ── Shipping-lane GeoJSON (static fallback — no external dependency) ──────────
