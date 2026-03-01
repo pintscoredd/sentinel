@@ -2372,7 +2372,7 @@ GEO_WEBCAM_FEEDS = [
     {"id": "odessa",         "city": "Odessa",       "country": "Ukraine",      "region": "Europe", "fallbackVideoId": "e2gC37ILQmk"},
     {"id": "paris",          "city": "Paris",        "country": "France",       "region": "Europe", "fallbackVideoId": "OzYp4NRZlwQ"},
     {"id": "st-petersburg",  "city": "St. Petersburg","country": "Russia",      "region": "Europe", "fallbackVideoId": "CjtIYbmVfck"},
-    {"id": "london",         "city": "London",       "country": "UK",           "region": "Europe", "fallbackVideoId": "Lxqcg1qt0XU"},
+    {"id": "london",         "city": "London",       "country": "UK",           "region": "Europe", "fallbackVideoId": "M3EYAY2MftI"},
     # ── Americas ────────────────────────────────────────────────────
     {"id": "washington",     "city": "Washington DC","country": "USA",          "region": "Americas", "fallbackVideoId": "1wV9lLe14aU"},
     {"id": "new-york",       "city": "New York",     "country": "USA",          "region": "Americas", "fallbackVideoId": "4qyZLflp-sI"},
