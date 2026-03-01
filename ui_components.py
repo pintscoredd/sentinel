@@ -560,14 +560,17 @@ SENTINEL BRIEFING — {EXACT DATE FROM INJECTION} {TIME PST}
   Oil   [price] [%chg]
 
 ▌ GEOPOLITICAL RADAR
-  For each event found in the injected LIVE GEOPOLITICAL HEADLINES, produce one entry:
-  [EVENT NAME] — [Current status in 1-2 sentences from the actual headline]
+  Use the injected LIVE GEOPOLITICAL HEADLINES as your primary source.
+  IMPORTANT: If the injected headlines appear incomplete or missing major known events
+  (e.g. Israel-Iran strikes, Ukraine escalation, Taiwan tensions, Red Sea Houthi attacks),
+  supplement with your most recent training knowledge and clearly label those entries
+  as [MODEL KNOWLEDGE] vs [LIVE HEADLINE].
+  
+  For each event (minimum 2, maximum 4):
+  [EVENT NAME] — [Current status in 1-2 sentences]
   → Affected markets: [list specific assets/sectors, e.g. OIL, XLE, defense ETFs, EM FX]
   → Most probable outcome: [state clearly, assign % if possible]
   → Tail risk: [low-probability high-impact scenario]
-  
-  If no headlines are injected, state: "No live geo headlines available — geo section based on model knowledge only."
-  Include minimum 2 events. Maximum 4.
 
 ▌ MACRO THEMES  (3 dominant forces driving today's flows)
   1. [Theme] — [2-sentence explanation with asset implications]
@@ -579,13 +582,16 @@ SENTINEL BRIEFING — {EXACT DATE FROM INJECTION} {TIME PST}
   Lagging  : [sector] — [reason in one line]
   Watch    : [sector] — [catalyst to monitor]
 
-▌ SPX TRADE IDEA  ← required every brief
-  Bias     : BULL / BEAR / NEUTRAL (state which and why in one sentence)
-  Setup    : [specific level or pattern, e.g. "holding above 5,720 VWAP support"]
-  Entry    : [price or trigger condition]
+▌ MACRO TRADE IDEA  ← required every brief
+  Use the injected MACRO & RATES DATA to anchor this. Pick the highest-conviction
+  macro theme from today's data (rates, DXY, gold, crude, credit spreads, EM, commodities).
+  Theme    : [e.g. "Dollar breakdown", "Gold breakout on rate cut expectations", "Oil spike on Middle East risk"]
+  Rationale: [2-sentence thesis grounded in injected rates/macro data]
+  Instrument: [ETF, futures, or pair trade — e.g. GLD, TLT, UUP short, XLE, EEM]
+  Entry    : [price or trigger condition from injected data]
   Target   : [price with reasoning]
   Stop     : [price with reasoning]
-  Catalyst : [what confirms the move]
+  Timeframe: [1 day / 1-2 weeks / 1 month]
   ⚠️ Research only, not financial advice.
 
 ▌ BEAR CASE
