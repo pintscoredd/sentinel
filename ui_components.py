@@ -20,7 +20,23 @@ from data_fetchers import (
     _safe_float, _safe_int, _esc, fmt_p, fmt_pct, pct_color,
     fred_series, finnhub_officers, _parse_poly_field,
     multi_quotes, vix_price, market_snapshot_str,
+    GEO_FINANCIAL_NETWORKS, GEO_WEBCAM_FEEDS, GEO_SHIPPING_LANES,
+    GEO_THEATERS, GEO_IMPACT_TICKERS,
+    fetch_military_aircraft, fetch_satellite_positions, fetch_conflict_events,
+    gdelt_news, newsapi_headlines,
 )
+
+try:
+    import pydeck as pdk
+    _PYDECK_OK = True
+except ImportError:
+    pdk = None
+    _PYDECK_OK = False
+
+try:
+    import numpy as _np
+except ImportError:
+    _np = None
 
 # ════════════════════════════════════════════════════════════════════
 # CHART HELPERS
@@ -977,3 +993,428 @@ padding:8px 10px;margin-top:4px">
 font-family:monospace">TRADE LOG</div>
 <div style="display:flex;flex-wrap:wrap;gap:2px">{html}</div>
 </div>"""
+
+
+# ════════════════════════════════════════════════════════════════════
+# GEO TAB — RENDER FUNCTION
+# ════════════════════════════════════════════════════════════════════
+
+# Icon URLs — stable Wikimedia PNGs, no auth required
+_JET_ICON = "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8a/Military_jet_silhouette.svg/120px-Military_jet_silhouette.svg.png"
+_SAT_ICON  = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d0/Satellite_dish_icon.svg/120px-Satellite_dish_icon.svg.png"
+
+
+def _geo_iframe(src, title="", height=160):
+    return (
+        f'<iframe src="{src}" title="{title}" width="100%" height="{height}" '
+        f'frameborder="0" allow="autoplay; encrypted-media" allowfullscreen '
+        f'style="border:1px solid #1A1A1A"></iframe>'
+    )
+
+
+def _geo_video_matrix_html():
+    """HTML block: 5 financial network live streams."""
+    items = ""
+    for net in GEO_FINANCIAL_NETWORKS:
+        src = (
+            f"https://www.youtube.com/embed/live_stream"
+            f"?channel={net['channel_id']}&autoplay=1&mute=1"
+        )
+        items += (
+            f'<div style="flex:1;min-width:200px">'
+            f'<div style="font-family:monospace;font-size:9px;color:#FF6600;'
+            f'letter-spacing:1px;text-transform:uppercase;padding:3px 0;'
+            f'border-bottom:1px solid #1A1A1A;margin-bottom:4px">{net["name"]}</div>'
+            f'{_geo_iframe(src, net["name"], 160)}'
+            f'</div>'
+        )
+    return (
+        '<div style="background:#030303;padding:10px;border:1px solid #1A1A1A;'
+        'border-top:2px solid #FF6600;margin-bottom:8px">'
+        '<div style="font-family:monospace;font-size:10px;color:#FF6600;'
+        'letter-spacing:2px;text-transform:uppercase;margin-bottom:8px">'
+        '📡 LIVE FINANCIAL NETWORKS</div>'
+        f'<div style="display:flex;flex-wrap:wrap;gap:8px">{items}</div>'
+        '</div>'
+    )
+
+
+def _geo_webcam_grid_html():
+    """HTML block: all webcam feeds in a responsive grid."""
+    items = ""
+    for cam in GEO_WEBCAM_FEEDS:
+        src   = f"https://www.youtube.com/embed/{cam['fallbackVideoId']}?autoplay=1&mute=1"
+        label = f"{cam['city']}, {cam['country']}"
+        items += (
+            f'<div style="flex:1;min-width:200px;max-width:280px">'
+            f'<div style="font-family:monospace;font-size:9px;color:#888;'
+            f'letter-spacing:1px;padding:2px 0;margin-bottom:3px">{label}</div>'
+            f'{_geo_iframe(src, label, 148)}'
+            f'</div>'
+        )
+    return (
+        '<div style="background:#030303;padding:8px;border:1px solid #1A1A1A">'
+        f'<div style="display:flex;flex-wrap:wrap;gap:6px">{items}</div>'
+        '</div>'
+    )
+
+
+# ── PyDeck layer builders ──────────────────────────────────────────────────────
+
+def _geo_military_layer(df):
+    if not _PYDECK_OK or df.empty:
+        return None
+    icon_data = {"url": _JET_ICON, "width": 64, "height": 64, "anchorY": 32}
+    df = df.copy()
+    df["icon_data"] = [icon_data] * len(df)
+    return pdk.Layer(
+        "IconLayer",
+        data=df,
+        get_icon="icon_data",
+        get_position=["lon", "lat"],
+        get_size="size",
+        size_scale=1,
+        get_angle="track",
+        pickable=True,
+        auto_highlight=True,
+        id="military-layer",
+    )
+
+
+def _geo_satellite_icon_layer(df):
+    if not _PYDECK_OK or df.empty:
+        return None
+    icon_data = {"url": _SAT_ICON, "width": 64, "height": 64, "anchorY": 32}
+    df = df.copy()
+    df["icon_data"] = [icon_data] * len(df)
+    return pdk.Layer(
+        "IconLayer",
+        data=df,
+        get_icon="icon_data",
+        get_position=["lon", "lat"],
+        get_size="size",
+        size_scale=1,
+        pickable=True,
+        auto_highlight=True,
+        id="satellite-icon-layer",
+    )
+
+
+def _geo_satellite_path_layer(path_features):
+    if not _PYDECK_OK or not path_features:
+        return None
+    return pdk.Layer(
+        "PathLayer",
+        data=path_features,
+        get_path="path",
+        get_color="color",
+        get_width=1,
+        width_min_pixels=1,
+        pickable=True,
+        id="satellite-path-layer",
+    )
+
+
+def _geo_events_scatter_layer(df):
+    if not _PYDECK_OK or df.empty:
+        return None
+    df = df.copy()
+    df["color"] = [[255, 50, 50, 200]] * len(df)
+    return pdk.Layer(
+        "ScatterplotLayer",
+        data=df,
+        get_position=["lon", "lat"],
+        get_fill_color="color",
+        get_radius=60000,
+        radius_min_pixels=4,
+        radius_max_pixels=20,
+        pickable=True,
+        opacity=0.85,
+        stroked=True,
+        get_line_color=[255, 100, 100, 255],
+        line_width_min_pixels=1,
+        id="events-scatter-layer",
+    )
+
+
+def _geo_events_hexagon_layer(df):
+    if not _PYDECK_OK or df.empty:
+        return None
+    return pdk.Layer(
+        "HexagonLayer",
+        data=df,
+        get_position=["lon", "lat"],
+        radius=200000,
+        elevation_scale=5000,
+        elevation_range=[0, 500000],
+        extruded=True,
+        pickable=True,
+        coverage=0.9,
+        color_range=[
+            [65, 182, 196], [127, 205, 187], [199, 233, 180],
+            [237, 248, 177], [255, 170, 0],  [255, 60, 60],
+        ],
+        id="events-hex-layer",
+    )
+
+
+def _geo_infra_layer():
+    if not _PYDECK_OK:
+        return None
+    return pdk.Layer(
+        "GeoJsonLayer",
+        data=GEO_SHIPPING_LANES,
+        get_line_color=[100, 150, 250, 100],
+        get_line_width=2,
+        line_width_min_pixels=1,
+        line_width_max_pixels=4,
+        pickable=True,
+        id="infra-layer",
+    )
+
+
+def _geo_tooltip():
+    """Single tooltip that handles all four layer types via field presence checks."""
+    return {
+        "html": """
+        <div style="background:#0D0D0D;border:1px solid #FF6600;padding:10px 12px;
+                    font-family:monospace;font-size:11px;color:#CCC;
+                    max-width:320px;line-height:1.7">
+
+          {%if flight%}
+          <div style="color:#FF6600;font-weight:700;font-size:12px;
+                      letter-spacing:1px;margin-bottom:6px">✈ MILITARY AIR</div>
+          <div><span style="color:#888">CALL SIGN</span>&nbsp;
+               <span style="color:#FFF;font-weight:700">{flight}</span></div>
+          <div><span style="color:#888">HEX &nbsp;&nbsp;&nbsp;</span>&nbsp;
+               <span style="color:#555">{hex}</span></div>
+          <div><span style="color:#888">ALTITUDE</span>&nbsp;
+               <span style="color:#00CC44">{alt_baro} ft</span></div>
+          <div><span style="color:#888">SPEED &nbsp;</span>&nbsp;
+               <span style="color:#00AAFF">{gs} kts</span></div>
+          <div style="margin-top:6px">
+            <img src="https://api.planespotters.net/pub/photos/hex/{hex}"
+                 width="240" style="border:1px solid #333;margin-top:4px"
+                 onerror="this.style.display='none'">
+          </div>
+          {%endif%}
+
+          {%if alt_km%}
+          <div style="color:#00AAFF;font-weight:700;font-size:12px;
+                      letter-spacing:1px;margin-bottom:6px">🛰 SATELLITE</div>
+          <div><span style="color:#888">NAME &nbsp;</span>&nbsp;
+               <span style="color:#FFF;font-weight:700">{name}</span></div>
+          <div><span style="color:#888">ALT &nbsp;&nbsp;</span>&nbsp;
+               <span style="color:#00CC44">{alt_km} km</span></div>
+          <div><span style="color:#888">VEL &nbsp;&nbsp;</span>&nbsp;
+               <span style="color:#00AAFF">{vel_kms} km/s</span></div>
+          {%endif%}
+
+          {%if url%}
+          <div style="color:#FF4444;font-weight:700;font-size:12px;
+                      letter-spacing:1px;margin-bottom:6px">⚡ CONFLICT EVENT</div>
+          <div style="color:#CCC">{name}</div>
+          <div style="margin-top:4px">
+            <a href="{url}" target="_blank"
+               style="color:#FF6600;text-decoration:none;font-size:10px">
+               → Open Source Article
+            </a>
+          </div>
+          {%endif%}
+
+          {%if type%}
+          <div style="color:#6496FA;font-weight:700;font-size:12px;
+                      letter-spacing:1px;margin-bottom:4px">⚓ INFRASTRUCTURE</div>
+          <div style="color:#CCC">{name}</div>
+          {%endif%}
+
+        </div>
+        """,
+        "style": {"backgroundColor": "transparent", "padding": "0"},
+    }
+
+
+@st.fragment(run_every="10m")
+def render_geo_tab():
+    """
+    Full Geo Tab — @st.fragment so it auto-refreshes every 10 min without
+    triggering a full-app rerun.
+
+    Sections:
+      1. Live Video Intelligence Matrix (broadcast networks + webcams)
+      2. Layer toggles + PyDeck globe (military air / satellites / conflict events / infra)
+      3. GDELT theater intel feed + commodity/currency impact radar
+    """
+    import streamlit.components.v1 as _components
+    from datetime import timezone as _tz
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    st.markdown(
+        '<div class="bb-ph">🌍 GEOPOLITICAL INTELLIGENCE — LIVE MAP + SURVEILLANCE MATRIX</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div style="color:#555;font-family:monospace;font-size:10px;margin-bottom:6px">'
+        'Auto-refresh every 10 minutes · Click markers for intel · Drag / Scroll to navigate'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── 1. Live Video Intelligence Matrix ─────────────────────────────────────
+    st.markdown(
+        '<div class="bb-ph" style="margin-top:4px">📺 LIVE VIDEO INTELLIGENCE MATRIX</div>',
+        unsafe_allow_html=True,
+    )
+    _components.html(_geo_video_matrix_html(), height=240, scrolling=False)
+
+    with st.expander("🌍 Live Global Cams", expanded=False):
+        _components.html(_geo_webcam_grid_html(), height=520, scrolling=True)
+
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+    # ── 2. Layer toggles ──────────────────────────────────────────────────────
+    if not _PYDECK_OK:
+        st.warning("⚠️ pydeck not installed — add `pydeck>=0.9.0` to requirements.txt to enable the map.")
+    else:
+        st.markdown(
+            '<div style="font-family:monospace;font-size:9px;color:#555;'
+            'letter-spacing:2px;text-transform:uppercase;margin-bottom:4px">MAP LAYERS</div>',
+            unsafe_allow_html=True,
+        )
+        t1, t2, t3, t4 = st.columns(4)
+        with t1: show_mil  = st.toggle("✈ Military Air",  value=True,  key="geo_mil")
+        with t2: show_sat  = st.toggle("🛰 Satellites",    value=True,  key="geo_sat")
+        with t3: show_evt  = st.toggle("⚡ Tail Events",   value=True,  key="geo_evt")
+        with t4: show_inf  = st.toggle("⚓ Infrastructure", value=True, key="geo_inf")
+
+        # ── Fetch data ────────────────────────────────────────────────────────
+        with st.spinner("🌐 Fetching live intelligence feeds…"):
+            df_mil                 = fetch_military_aircraft()      if show_mil  else __import__("pandas").DataFrame()
+            df_sat, sat_paths      = fetch_satellite_positions()    if show_sat  else (__import__("pandas").DataFrame(), [])
+            df_evt                 = fetch_conflict_events()        if show_evt  else __import__("pandas").DataFrame()
+
+        # ── Assemble layers ───────────────────────────────────────────────────
+        layers = []
+        if show_inf:
+            lyr = _geo_infra_layer()
+            if lyr: layers.append(lyr)
+        if show_evt and not df_evt.empty:
+            for lyr in (_geo_events_hexagon_layer(df_evt), _geo_events_scatter_layer(df_evt)):
+                if lyr: layers.append(lyr)
+        if show_sat:
+            for lyr in (_geo_satellite_path_layer(sat_paths), _geo_satellite_icon_layer(df_sat)):
+                if lyr: layers.append(lyr)
+        if show_mil:
+            lyr = _geo_military_layer(df_mil)
+            if lyr: layers.append(lyr)
+
+        # ── Render deck ───────────────────────────────────────────────────────
+        deck = pdk.Deck(
+            layers=layers,
+            initial_view_state=pdk.ViewState(
+                latitude=20.0, longitude=10.0,
+                zoom=1.5, pitch=35, bearing=0,
+            ),
+            map_style="mapbox://styles/mapbox/dark-v10",
+            tooltip=_geo_tooltip(),
+        )
+        st.pydeck_chart(deck, use_container_width=True)
+
+        # ── Status bar ────────────────────────────────────────────────────────
+        ts_now = __import__("datetime").datetime.now(_tz.utc).strftime("%H:%M:%S UTC")
+        st.markdown(
+            f'<div style="font-family:monospace;font-size:9px;color:#444;'
+            f'letter-spacing:1px;padding:4px 0;border-top:1px solid #111">'
+            f'✈ {len(df_mil)} AIRCRAFT &nbsp;|&nbsp; 🛰 {len(df_sat)} SATELLITES &nbsp;|&nbsp; '
+            f'⚡ {len(df_evt)} EVENTS &nbsp;|&nbsp; LAST REFRESH {ts_now}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+    # ── 3. Theater intel feed + commodity radar ────────────────────────────────
+    geo_col1, geo_col2 = st.columns([3, 1])
+
+    with geo_col1:
+        theater_sel = st.selectbox(
+            "📡 THEATER INTEL FEED",
+            list(GEO_THEATERS.keys()) + ["Custom query…"],
+            key="geo_theater",
+        )
+        custom_q = ""
+        if theater_sel == "Custom query…":
+            custom_q = st.text_input("Custom GDELT query", key="geo_cq")
+        query = custom_q if custom_q else GEO_THEATERS.get(theater_sel, "")
+
+        if query:
+            with st.spinner(f"Fetching GDELT feed for: {query}…"):
+                arts = gdelt_news(query, max_rec=12)
+            if arts:
+                st.markdown(
+                    f'<div class="bb-ph">GDELT LIVE FEED — {len(arts)} articles</div>',
+                    unsafe_allow_html=True,
+                )
+                for art in arts:
+                    t   = art.get("title", "")[:100]
+                    u   = art.get("url", "#")
+                    dom = art.get("domain", "GDELT")
+                    sd  = art.get("seendate", "")
+                    d   = f"{sd[:4]}-{sd[4:6]}-{sd[6:8]}" if sd and len(sd) >= 8 else ""
+                    st.markdown(render_news_card(t, u, dom, d, "bb-news bb-news-geo"), unsafe_allow_html=True)
+            else:
+                st.markdown(
+                    '<div style="background:#0D0D0D;border-left:3px solid #FF6600;'
+                    'padding:10px 12px;font-family:monospace;font-size:11px;color:#888">'
+                    'No articles found in GDELT for this query.</div>',
+                    unsafe_allow_html=True,
+                )
+
+            # NewsAPI layer (if key available)
+            newsapi_key = st.session_state.get("newsapi_key")
+            if newsapi_key:
+                with st.spinner("Loading NewsAPI layer…"):
+                    na_arts = newsapi_headlines(newsapi_key, query)
+                if na_arts:
+                    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+                    st.markdown('<div class="bb-ph">NEWSAPI LAYER — 150K+ SOURCES</div>', unsafe_allow_html=True)
+                    for art in na_arts[:8]:
+                        title = art.get("title", "")
+                        if not title or "[Removed]" in title:
+                            continue
+                        u   = art.get("url", "#")
+                        src = art.get("source", {}).get("name", "")
+                        pub = art.get("publishedAt", "")[:10]
+                        st.markdown(render_news_card(title[:100], u, src, pub, "bb-news bb-news-macro"), unsafe_allow_html=True)
+
+    with geo_col2:
+        st.markdown('<div class="bb-ph">📊 COMMODITY & CURRENCY IMPACT RADAR</div>', unsafe_allow_html=True)
+        impact_qs = multi_quotes(list(GEO_IMPACT_TICKERS.values()))
+        for q in impact_qs:
+            name = next((k for k, v in GEO_IMPACT_TICKERS.items() if v == q["ticker"]), q["ticker"])
+            c   = pct_color(q["pct"])
+            arr = "▲" if q["pct"] >= 0 else "▼"
+            st.markdown(
+                f'<div style="display:flex;justify-content:space-between;'
+                f'padding:4px 0;border-bottom:1px solid #111;'
+                f'font-family:monospace;font-size:12px">'
+                f'<span style="color:#CCC">{name}</span>'
+                f'<span style="color:{c};font-weight:700">{arr} {q["pct"]:+.2f}% &nbsp; {fmt_p(q["price"])}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+        st.markdown('<div class="bb-ph">📖 CONFIDENCE LEVELS</div>', unsafe_allow_html=True)
+        for lbl, c, desc in [
+            ("HIGH",        "#00CC44", "Multiple verified sources"),
+            ("MEDIUM",      "#FF8C00", "Single source / partial confirm"),
+            ("LOW",         "#FFCC00", "Unverified rumor"),
+            ("UNCONFIRMED", "#555",    "Raw signal only"),
+        ]:
+            st.markdown(
+                f'<div style="font-family:monospace;font-size:10px;padding:3px 0">'
+                f'<span style="color:{c};font-weight:700">{lbl}</span> '
+                f'<span style="color:#444">— {desc}</span></div>',
+                unsafe_allow_html=True,
+            )
