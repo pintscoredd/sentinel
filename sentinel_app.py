@@ -49,7 +49,8 @@ from ui_components import (
     render_insider_cards, poly_url, poly_status, unusual_side,
     render_poly_card,
     SENTINEL_PROMPT, GEMINI_MODELS, list_gemini_models, gemini_response,
-    render_0dte_gex_chart, render_0dte_gex_decoder, render_0dte_recommendation, render_0dte_trade_log
+    render_0dte_gex_chart, render_0dte_gex_decoder, render_0dte_recommendation, render_0dte_trade_log,
+    render_geo_tab,
 )
 
 st.set_page_config(page_title="SENTINEL", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
@@ -1862,90 +1863,11 @@ Higher = more asymmetric<br><br>
 </div>""", unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════
-# TAB 6 — GEO GLOBE
+# ════════════════════════════════════════════════════════════════════
+# TAB 6 — GEO (PyDeck live map + surveillance matrix)
 # ════════════════════════════════════════════════════════════════════
 with tabs[6]:
-    st.markdown('<div class="bb-ph">🌍 GEOPOLITICAL INTELLIGENCE — LIVE GLOBE + GDELT</div>', unsafe_allow_html=True)
-    st.markdown('<div style="color:#555;font-family:monospace;font-size:10px;margin-bottom:6px">Drag to rotate · Scroll to zoom · Click markers for intel</div>', unsafe_allow_html=True)
-
-    globe_path = pathlib.Path(__file__).parent / "globe.html"
-    if globe_path.exists():
-        try:
-            globe_html = globe_path.read_text(encoding="utf-8")
-            components.html(globe_html, height=600, scrolling=False)
-        except Exception as e:
-            st.error(f"Error loading globe: {e}")
-    else:
-        st.markdown("""<div style="background:#0A0500;border:1px solid #FF6600;border-left:4px solid #FF6600;
-padding:16px;font-family:monospace;font-size:12px;color:#FF8C00">
-⚠️ globe.html not found in the same folder as sentinel_app.py<br><br>
-Place globe.html in your GitHub repo root alongside sentinel_app.py and redeploy.
-</div>""", unsafe_allow_html=True)
-
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-    THEATERS = {
-        "Middle East + Oil + Hormuz": "Middle East Iran oil Hormuz",
-        "China + Taiwan + Semiconductors": "China Taiwan semiconductor chips TSMC",
-        "Russia + Ukraine + Energy": "Russia Ukraine energy grain NATO",
-        "Africa + Cobalt + Lithium + Coup": "Africa cobalt lithium coup Sahel Mali",
-        "Red Sea + Suez + Shipping": "Red Sea Suez shipping Houthi container",
-        "South China Sea + Trade": "South China Sea shipping Philippines trade",
-    }
-    geo_col1, geo_col2 = st.columns([3,1])
-
-    with geo_col1:
-        theater_sel = st.selectbox("📡 THEATER INTEL FEED", list(THEATERS.keys()) + ["Custom query…"])
-        custom_q = ""
-        if theater_sel == "Custom query…":
-            custom_q = st.text_input("Custom GDELT query", key="cq")
-        query = custom_q if custom_q else THEATERS.get(theater_sel,"")
-
-        if query:
-            with st.spinner(f"Fetching GDELT feed for: {query}…"):
-                arts = gdelt_news(query, max_rec=12)
-
-            if arts:
-                st.markdown(f'<div class="bb-ph">GDELT LIVE FEED — {len(arts)} articles</div>', unsafe_allow_html=True)
-                for art in arts:
-                    t=art.get("title","")[:100]; u=art.get("url","#")
-                    dom=art.get("domain","GDELT"); sd=art.get("seendate","")
-                    d=f"{sd[:4]}-{sd[4:6]}-{sd[6:8]}" if sd and len(sd)>=8 else ""
-                    st.markdown(render_news_card(t,u,dom,d,"bb-news bb-news-geo"), unsafe_allow_html=True)
-            else:
-                st.markdown('<div style="background:#0D0D0D;border-left:3px solid #FF6600;padding:10px 12px;font-family:monospace;font-size:11px;color:#888">No articles found in GDELT for this query in the last 48h.</div>', unsafe_allow_html=True)
-
-            if st.session_state.newsapi_key:
-                with st.spinner("Loading NewsAPI layer…"):
-                    na_arts = newsapi_headlines(st.session_state.newsapi_key, query)
-                if na_arts:
-                    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-                    st.markdown('<div class="bb-ph">NEWSAPI LAYER — 150K+ SOURCES</div>', unsafe_allow_html=True)
-                    for art in na_arts[:8]:
-                        title = art.get("title","")
-                        if not title or "[Removed]" in title: continue
-                        u=art.get("url","#"); src=art.get("source",{}).get("name",""); pub=art.get("publishedAt","")[:10]
-                        st.markdown(render_news_card(title[:100],u,src,pub,"bb-news bb-news-macro"), unsafe_allow_html=True)
-
-    with geo_col2:
-        st.markdown('<div class="bb-ph">📊 COMMODITY & CURRENCY IMPACT RADAR</div>', unsafe_allow_html=True)
-        impact_tickers = {"WTI Crude": "CL=F", "Brent Crude": "BZ=F", "Natural Gas": "NG=F",
-                          "Gold": "GC=F", "Silver": "SI=F", "Wheat": "ZW=F",
-                          "USD Index": "DX-Y.NYB", "EUR/USD": "EURUSD=X", "10Y Yield": "^TNX"}
-        impact_qs = multi_quotes(list(impact_tickers.values()))
-        for q in impact_qs:
-            name = [k for k,v in impact_tickers.items() if v == q['ticker']]
-            name = name[0] if name else q['ticker']
-            c = pct_color(q['pct'])
-            arr = "▲" if q['pct'] >= 0 else "▼"
-            st.markdown(f'<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #111;font-family:monospace;font-size:12px">'
-                        f'<span style="color:#CCC">{name}</span>'
-                        f'<span style="color:{c};font-weight:700">{arr} {q["pct"]:+.2f}% &nbsp; {fmt_p(q["price"])}</span></div>', unsafe_allow_html=True)
-
-        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-        st.markdown('<div class="bb-ph">📖 CONFIDENCE LEVELS</div>', unsafe_allow_html=True)
-        for lbl, c, desc in [("HIGH","#00CC44","Multiple verified sources"),("MEDIUM","#FF8C00","Single source / partial confirm"),("LOW","#FFCC00","Unverified rumor"),("UNCONFIRMED","#555","Raw signal only")]:
-            st.markdown(f'<div style="font-family:monospace;font-size:10px;padding:3px 0"><span style="color:{c};font-weight:700">{lbl}</span> <span style="color:#444">— {desc}</span></div>', unsafe_allow_html=True)
+    render_geo_tab()
 
 # ════════════════════════════════════════════════════════════════════
 # TAB 7 — EARNINGS TRACKER
