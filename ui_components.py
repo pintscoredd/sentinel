@@ -1032,15 +1032,17 @@ def _geo_network_embed_html(network):
 
 
 def _geo_webcam_region_html(region_cams):
-    """HTML block: webcam feeds for a specific region in a responsive grid."""
+    """HTML block: webcam feeds for a specific region in a uniform CSS grid."""
+    # Determine column count: 2 columns for <=4 cams, 3 for more
+    cols = 2 if len(region_cams) <= 4 else 3
     items = ""
     for cam in region_cams:
         src   = f"https://www.youtube.com/embed/{cam['fallbackVideoId']}?autoplay=1&mute=1"
         label = f"{cam['city']}, {cam['country']}"
         items += (
-            f'<div style="flex:1;min-width:380px;max-width:520px">'
-            f'<div style="font-family:monospace;font-size:9px;color:#888;'
-            f'letter-spacing:1px;padding:2px 0;margin-bottom:3px">{label}</div>'
+            f'<div>'
+            f'<div style="font-family:monospace;font-size:10px;color:#888;'
+            f'letter-spacing:1px;padding:3px 0;margin-bottom:4px">{label}</div>'
             f'<div style="position:relative;width:100%;padding-top:56.25%;background:#000">'
             f'<iframe src="{src}" '
             f'style="position:absolute;top:0;left:0;width:100%;height:100%;border:1px solid #1A1A1A" '
@@ -1049,9 +1051,9 @@ def _geo_webcam_region_html(region_cams):
             f'</div>'
         )
     return (
-        '<div style="background:#030303;padding:8px;border:1px solid #1A1A1A">'
-        f'<div style="display:flex;flex-wrap:wrap;gap:8px">{items}</div>'
-        '</div>'
+        f'<div style="background:#030303;padding:8px;border:1px solid #1A1A1A">'
+        f'<div style="display:grid;grid-template-columns:repeat({cols},1fr);gap:10px">{items}</div>'
+        f'</div>'
     )
 
 
@@ -1156,7 +1158,10 @@ def render_geo_tab():
             unsafe_allow_html=True,
         )
 
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+    st.markdown(
+        '<div style="margin:4px 0;border-top:1px solid #111"></div>',
+        unsafe_allow_html=True,
+    )
 
     # ── 4. Theater intel feed + commodity radar ────────────────────────────────
     geo_col1, geo_col2 = st.columns([3, 1])
