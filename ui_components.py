@@ -1121,7 +1121,7 @@ def render_geo_tab():
 
     # Find the selected network and embed it
     net_obj = next((n for n in GEO_FINANCIAL_NETWORKS if n["name"] == selected_network), GEO_FINANCIAL_NETWORKS[0])
-    _components.html(_geo_network_embed_html(net_obj), height=620, scrolling=False)
+    _components.html(_geo_network_embed_html(net_obj), height=780, scrolling=False)
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
@@ -1148,11 +1148,7 @@ def render_geo_tab():
 
     region_cams = [cam for cam in GEO_WEBCAM_FEEDS if cam.get("region") == selected_region]
     if region_cams:
-        cam_count = len(region_cams)
-        # Determine iframe height based on number of cams
-        row_count = (cam_count + 1) // 2  # 2 per row (larger cards)
-        iframe_h = max(380, row_count * 340)
-        _components.html(_geo_webcam_region_html(region_cams), height=iframe_h, scrolling=True)
+        _components.html(_geo_webcam_region_html(region_cams), height=780, scrolling=True)
     else:
         st.markdown(
             '<div style="color:#555;font-family:monospace;font-size:11px">'
