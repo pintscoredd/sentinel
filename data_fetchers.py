@@ -439,10 +439,13 @@ def build_brief_context():
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
 
-    # Single broad query covers conflicts, sanctions, CBs, energy, trade
+    # Broad query covering conflicts, sanctions, CBs, energy, trade + active hotspots
     GEO_QUERY = (
         "war OR strike OR attack OR sanctions OR geopolitical OR crisis "
-        "OR central bank OR interest rate OR oil OR tariff OR embargo"
+        "OR central bank OR interest rate OR oil OR tariff OR embargo "
+        "OR Israel OR Iran OR Hamas OR Hezbollah OR Ukraine OR Russia "
+        "OR Taiwan OR China OR Red Sea OR Houthi OR Gaza OR nuclear "
+        "OR missile OR airstrike OR invasion OR ceasefire"
     )
 
     def _fetch_geo():
@@ -495,9 +498,26 @@ def build_brief_context():
             + "\n".join(geo_headlines[:20])
         )
     else:
-        headlines_block = "LIVE GEO HEADLINES: unavailable (GDELT timeout — use model knowledge)"
+        headlines_block = "LIVE GEO HEADLINES: unavailable (GDELT timeout — use model knowledge for recent conflicts including Israel-Iran, Ukraine, Red Sea)"
 
-    return f"{base}\n\n{headlines_block}"
+    # Add macro/rates snapshot for macro trade idea context
+    try:
+        macro_qs = multi_quotes(["^TNX", "^TYX", "DX-Y.NYB", "GC=F", "CL=F", "TLT", "GLD", "UUP", "HYG", "LQD"])
+        macro_lines = []
+        labels = {"^TNX": "10Y Yield", "^TYX": "30Y Yield", "DX-Y.NYB": "DXY",
+                  "GC=F": "Gold", "CL=F": "WTI Crude", "TLT": "TLT (20Y Bond)",
+                  "GLD": "GLD ETF", "UUP": "Dollar ETF", "HYG": "HY Credit", "LQD": "IG Credit"}
+        for q in macro_qs:
+            lbl = labels.get(q["ticker"], q["ticker"])
+            macro_lines.append(f"  {lbl}: {q['price']:,.2f} ({q['pct']:+.2f}%)")
+        macro_block = "MACRO & RATES DATA (for trade context):\n" + "\n".join(macro_lines)
+    except Exception:
+        macro_block = ""
+
+    sections = [base, headlines_block]
+    if macro_block:
+        sections.append(macro_block)
+    return "\n\n".join(s for s in sections if s)
 
 # ════════════════════════════════════════════════════════════════════
 # FRED
