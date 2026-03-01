@@ -404,27 +404,62 @@ def calc_stock_fear_greed():
 
 def market_snapshot_str():
     try:
-        from datetime import datetime
-        import pytz as _pytz
-        pst = _pytz.timezone("US/Pacific")
-        now_str = datetime.now(_pytz.utc).astimezone(pst).strftime("%A, %B %d, %Y %H:%M PST")
-
-        # SPX first so Gemini always sees the index price, not just the ETF proxy
-        spx_q = yahoo_quote("^GSPC")
-        spy_q = yahoo_quote("SPY")
-        qs = multi_quotes(["QQQ", "IWM", "DX-Y.NYB", "GLD", "TLT", "BTC-USD", "CL=F"])
-        parts = []
-        if spx_q:
-            parts.append(f"SPX: {spx_q['price']:,.2f} ({spx_q['pct']:+.2f}%)")
-        if spy_q:
-            parts.append(f"SPY: ${spy_q['price']:,.2f} ({spy_q['pct']:+.2f}%)")
-        parts += [f"{q['ticker']}: ${q['price']:,.2f} ({q['pct']:+.2f}%)" for q in qs]
+        qs = multi_quotes(["SPY", "QQQ", "DX-Y.NYB", "GLD", "BTC-USD"])
+        parts = [f"{q['ticker']}: ${q['price']:,.2f} ({q['pct']:+.2f}%)" for q in qs]
         v = vix_price()
         if v: parts.append(f"VIX: {v}")
-        snapshot = " | ".join(parts)
-        return f"CURRENT DATE/TIME: {now_str}\nLIVE MARKET DATA: {snapshot}"
-    except Exception:
+        return " | ".join(parts)
+    except:
         return ""
+
+
+@st.cache_data(ttl=300)
+def build_brief_context():
+    """
+    Assembles the full enriched context block for /brief and /geo commands.
+    Returns a string containing:
+      - Current date/time (PST)
+      - Live market snapshot (SPX-first)
+      - Live geopolitical headlines from GDELT (last 72h)
+    This is injected verbatim as the first block of the user message sent to Gemini,
+    ensuring the model always has real breaking news rather than relying on training data.
+    """
+    base = market_snapshot_str()
+
+    # Geo headline queries — cast wide to catch conflicts, sanctions, central banks, elections
+    GEO_QUERIES = [
+        "war conflict military strike attack",
+        "sanctions geopolitical tension crisis",
+        "central bank rate decision federal reserve ECB",
+        "oil energy supply disruption OPEC",
+        "trade tariff embargo economic war",
+    ]
+
+    all_headlines = []
+    seen_titles = set()
+    for query in GEO_QUERIES:
+        try:
+            arts = gdelt_news(query, max_rec=6)
+            for a in arts:
+                title = a.get("title", "").strip()
+                if not title or title in seen_titles:
+                    continue
+                seen_titles.add(title)
+                domain = a.get("domain", a.get("url", "")[:40])
+                seendate = a.get("seendate", "")
+                date_str = ""
+                if seendate and len(seendate) >= 8:
+                    date_str = f"{seendate[:4]}-{seendate[4:6]}-{seendate[6:8]}"
+                all_headlines.append(f"  • [{date_str}] {title} ({domain})")
+        except Exception:
+            pass
+
+    if all_headlines:
+        headlines_block = "LIVE GEOPOLITICAL & MACRO HEADLINES (last 72h, from GDELT):\n" + "\n".join(all_headlines[:20])
+    else:
+        headlines_block = "LIVE GEOPOLITICAL HEADLINES: unavailable (GDELT timeout)"
+
+    return f"{base}\n\n{headlines_block}"
 
 # ════════════════════════════════════════════════════════════════════
 # FRED
