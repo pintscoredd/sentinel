@@ -731,7 +731,7 @@ def gemini_response(user_msg, history, context=""):
                     contents=contents,
                     config=types.GenerateContentConfig(
                         system_instruction=SENTINEL_PROMPT,
-                        max_output_tokens=2048,
+                        max_output_tokens=4096,
                         temperature=0.35,
                     ),
                 )
