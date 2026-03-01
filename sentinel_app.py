@@ -27,7 +27,7 @@ from data_fetchers import (
     crypto_markets, crypto_global,
     gdelt_news, newsapi_headlines, finnhub_news, finnhub_insider, finnhub_officers,
     vix_price, options_chain, options_expiries, sector_etfs, top_movers,
-    detect_unusual_poly, market_snapshot_str, build_brief_context, _parse_poly_field,
+    detect_unusual_poly, market_snapshot_str, _parse_poly_field,
     score_options_chain, score_poly_mispricing,
     get_earnings_calendar, is_market_open,
     get_macro_overview, get_macro_calendar, get_ticker_exchange,
@@ -2108,7 +2108,14 @@ Try: <span style="color:#FF6600">/brief</span> &nbsp;
             if msg["role"]=="user":
                 st.markdown(f'<div class="chat-user">▶ &nbsp;{_esc(msg["content"])}</div>', unsafe_allow_html=True)
             else:
-                content = msg["content"].replace("<","&lt;").replace(">","&gt;")
+                # Clean Gemini markdown artifacts, then render with proper line breaks
+                import re as _re
+                raw = msg["content"]
+                raw = _re.sub(r'`([^`\n]+)`', r'\1', raw)          # strip backtick code spans
+                raw = _re.sub(r'\*\*([^*]+)\*\*', r'\1', raw)    # strip bold **
+                raw = _re.sub(r'\*([^*\n]+)\*', r'\1', raw)       # strip italic *
+                raw = raw.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+                content = raw.replace("\n", "<br>")
                 st.markdown(f'<div class="chat-ai">⚡ SENTINEL<br><br>{content}</div>', unsafe_allow_html=True)
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
@@ -2131,8 +2138,7 @@ Try: <span style="color:#FF6600">/brief</span> &nbsp;
                 if st.button(lbl,use_container_width=True,key=f"qb_{lbl}"):
                     st.session_state.chat_history.append({"role":"user","content":cmd})
                     with st.spinner("⚡ SENTINEL processing…"):
-                        _ctx = build_brief_context() if cmd.strip().lower().startswith(("/brief", "/geo")) else market_snapshot_str()
-                        resp = gemini_response(cmd,st.session_state.chat_history[:-1],_ctx)
+                        resp = gemini_response(cmd,st.session_state.chat_history[:-1],market_snapshot_str())
                     st.session_state.chat_history.append({"role":"assistant","content":resp})
                     st.rerun()
 
@@ -2142,9 +2148,7 @@ Try: <span style="color:#FF6600">/brief</span> &nbsp;
         if (send or user_input) and user_input:
             st.session_state.chat_history.append({"role":"user","content":user_input})
             with st.spinner("⚡ SENTINEL processing…"):
-                _cmd_lower = user_input.strip().lower()
-                _ctx = build_brief_context() if _cmd_lower.startswith(("/brief", "/geo")) else market_snapshot_str()
-                resp = gemini_response(user_input,st.session_state.chat_history[:-1],_ctx)
+                resp = gemini_response(user_input,st.session_state.chat_history[:-1],market_snapshot_str())
             st.session_state.chat_history.append({"role":"assistant","content":resp})
             st.rerun()
 
