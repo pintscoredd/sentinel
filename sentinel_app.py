@@ -27,7 +27,7 @@ from data_fetchers import (
     crypto_markets, crypto_global,
     gdelt_news, newsapi_headlines, finnhub_news, finnhub_insider, finnhub_officers,
     vix_price, options_chain, options_expiries, sector_etfs, top_movers,
-    detect_unusual_poly, market_snapshot_str, _parse_poly_field,
+    detect_unusual_poly, market_snapshot_str, build_brief_context, _parse_poly_field,
     score_options_chain, score_poly_mispricing,
     get_earnings_calendar, is_market_open,
     get_macro_overview, get_macro_calendar, get_ticker_exchange,
@@ -702,7 +702,7 @@ with tabs[1]:
             if expiries:
                 def _fmt_exp(d):
                     try: return datetime.strptime(str(d), "%Y-%m-%d").strftime("%B %-d, %Y")
-                    except Exception: return str(d)
+                    except: return str(d)
                 selected_exp = st.selectbox("EXPIRY DATE", expiries, index=0, key=f"exp_{tkr}", format_func=_fmt_exp)
             with st.spinner("Loading options…"):
                 calls, puts, exp_date = options_chain(tkr, selected_exp)
@@ -710,12 +710,12 @@ with tabs[1]:
                 try:
                     exp_dt = datetime.strptime(str(exp_date), "%Y-%m-%d")
                     exp_fmt = exp_dt.strftime("%B %-d, %Y")
-                except Exception:
+                except:
                     exp_fmt = str(exp_date)
 
                 try:
                     current_vix = vix_price()
-                except Exception:
+                except:
                     current_vix = 20.0
 
                 scored = score_options_chain(calls, puts, q["price"], vix=current_vix)
@@ -1588,7 +1588,7 @@ with tabs[5]:
                 try:
                     ed = datetime.fromisoformat(end.replace("Z","+00:00"))
                     if ed < _now_utc: return False
-                except Exception: pass
+                except: pass
             return True
 
         def is_recently_closed(e):
@@ -1599,7 +1599,7 @@ with tabs[5]:
                 try:
                     ed = datetime.fromisoformat(end.replace("Z","+00:00"))
                     return ed >= _two_months_ago
-                except Exception: pass
+                except: pass
             return False
 
         active_events = [e for e in all_poly if is_active(e)]
@@ -2069,9 +2069,9 @@ with tabs[7]:
 # ════════════════════════════════════════════════════════════════════
 # TAB 8 — SENTINEL AI
 # ════════════════════════════════════════════════════════════════════
-@st.fragment
-def _render_sentinel_ai():
-    """Fragment-isolated chat UI — interactions rerun only this block, not the full dashboard."""
+with tabs[8]:
+    st.markdown('<div class="bb-ph">🤖 SENTINEL AI — POWERED BY GOOGLE GEMINI</div>', unsafe_allow_html=True)
+
     if not st.session_state.gemini_key:
         st.markdown("""<div style="background:#0A0500;border:1px solid #FF6600;border-left:4px solid #FF6600;
 padding:16px;font-family:monospace;font-size:12px;color:#FF8C00">
@@ -2131,7 +2131,8 @@ Try: <span style="color:#FF6600">/brief</span> &nbsp;
                 if st.button(lbl,use_container_width=True,key=f"qb_{lbl}"):
                     st.session_state.chat_history.append({"role":"user","content":cmd})
                     with st.spinner("⚡ SENTINEL processing…"):
-                        resp = gemini_response(cmd,st.session_state.chat_history[:-1],market_snapshot_str())
+                        _ctx = build_brief_context() if cmd.strip().lower().startswith(("/brief", "/geo")) else market_snapshot_str()
+                        resp = gemini_response(cmd,st.session_state.chat_history[:-1],_ctx)
                     st.session_state.chat_history.append({"role":"assistant","content":resp})
                     st.rerun()
 
@@ -2141,15 +2142,11 @@ Try: <span style="color:#FF6600">/brief</span> &nbsp;
         if (send or user_input) and user_input:
             st.session_state.chat_history.append({"role":"user","content":user_input})
             with st.spinner("⚡ SENTINEL processing…"):
-                resp = gemini_response(user_input,st.session_state.chat_history[:-1],market_snapshot_str())
+                _cmd_lower = user_input.strip().lower()
+                _ctx = build_brief_context() if _cmd_lower.startswith(("/brief", "/geo")) else market_snapshot_str()
+                resp = gemini_response(user_input,st.session_state.chat_history[:-1],_ctx)
             st.session_state.chat_history.append({"role":"assistant","content":resp})
             st.rerun()
-
-# TAB 8 entry-point: header lives outside the fragment so it renders immediately;
-# the interactive chat block is isolated so only it reruns on each message send.
-with tabs[8]:
-    st.markdown('<div class="bb-ph">🤖 SENTINEL AI — POWERED BY GOOGLE GEMINI</div>', unsafe_allow_html=True)
-    _render_sentinel_ai()
 
 # ════════════════════════════════════════════════════════════════════
 # FOOTER
