@@ -663,8 +663,7 @@ def gemini_response(user_msg, history, context=""):
         client = genai.Client(api_key=st.session_state.gemini_key)
 
         # ── Build the enriched user message ──────────────────────────────────
-        # context already contains: "CURRENT DATE/TIME: ...
-LIVE MARKET DATA: ..."
+        # context already contains: "CURRENT DATE/TIME: ...\nLIVE MARKET DATA: ..."
         # Append any user-configured session context below that.
         ctx_sections = []
         if context:
