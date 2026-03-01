@@ -1062,9 +1062,9 @@ def render_geo_tab():
     triggering a full-app rerun.
 
     Sections:
-      1. Live Network Selector (toggle between news networks)
-      2. Live Webcam Grid (toggle by region)
-      3. 3D Globe (globe.html — military air / satellites / conflict events / infra)
+      1. 3D Globe (globe.html — military air / satellites / conflict events / infra)
+      2. Live Network Selector (toggle between news networks)
+      3. Live Webcam Grid (toggle by region)
       4. GDELT theater intel feed + commodity/currency impact radar
     """
     import streamlit.components.v1 as _components
@@ -1082,7 +1082,29 @@ def render_geo_tab():
         unsafe_allow_html=True,
     )
 
-    # ── 1. Live Network Selector ──────────────────────────────────────────────
+    # ── 1. 3D Globe ───────────────────────────────────────────────────────────
+    st.markdown(
+        '<div class="bb-ph">🌐 3D INTELLIGENCE GLOBE — MILITARY AIR · SATELLITES · CONFLICT EVENTS</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div style="color:#555;font-family:monospace;font-size:10px;margin-bottom:6px">'
+        'Drag to rotate · Scroll to zoom · Click markers for intel · Toggle layers in left sidebar'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Read globe.html from disk and embed inline
+    globe_path = _pathlib.Path(__file__).parent / "globe.html"
+    try:
+        globe_html = globe_path.read_text(encoding="utf-8")
+        _components.html(globe_html, height=700, scrolling=False)
+    except FileNotFoundError:
+        st.error("⚠️ globe.html not found — place it in the same directory as ui_components.py.")
+
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+    # ── 2. Live Network Selector ──────────────────────────────────────────────
     st.markdown(
         '<div class="bb-ph" style="margin-top:4px">📺 LIVE FINANCIAL NETWORK</div>',
         unsafe_allow_html=True,
@@ -1103,7 +1125,7 @@ def render_geo_tab():
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-    # ── 2. Live Webcam Grid — Toggle by Region ────────────────────────────────
+    # ── 3. Live Webcam Grid — Toggle by Region ────────────────────────────────
     st.markdown(
         '<div class="bb-ph">🌍 LIVE GLOBAL CAMS</div>',
         unsafe_allow_html=True,
@@ -1137,28 +1159,6 @@ def render_geo_tab():
             'No webcams available for this region.</div>',
             unsafe_allow_html=True,
         )
-
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-    # ── 3. 3D Globe ───────────────────────────────────────────────────────────
-    st.markdown(
-        '<div class="bb-ph">🌐 3D INTELLIGENCE GLOBE — MILITARY AIR · SATELLITES · CONFLICT EVENTS</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<div style="color:#555;font-family:monospace;font-size:10px;margin-bottom:6px">'
-        'Drag to rotate · Scroll to zoom · Click markers for intel · Toggle layers in left sidebar'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-
-    # Read globe.html from disk and embed inline
-    globe_path = _pathlib.Path(__file__).parent / "globe.html"
-    try:
-        globe_html = globe_path.read_text(encoding="utf-8")
-        _components.html(globe_html, height=700, scrolling=False)
-    except FileNotFoundError:
-        st.error("⚠️ globe.html not found — place it in the same directory as ui_components.py.")
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
