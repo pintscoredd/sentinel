@@ -2364,9 +2364,9 @@ GEO_FINANCIAL_NETWORKS = [
 GEO_WEBCAM_FEEDS = [
     # ── Middle East ──────────────────────────────────────────────────
     {"id": "tehran",         "city": "Tehran",       "country": "Iran",         "region": "Middle East", "fallbackVideoId": "-zGuR1qVKrU"},
-    {"id": "tel-aviv",       "city": "Tel Aviv",     "country": "Israel",       "region": "Middle East", "fallbackVideoId": "-VLcYT5QBrY"},
+    {"id": "tel-aviv",       "city": "Tel Aviv",     "country": "Israel",       "region": "Middle East", "fallbackVideoId": "JHwwZRH2wz8"},
     {"id": "jerusalem",      "city": "Jerusalem",    "country": "Israel",       "region": "Middle East", "fallbackVideoId": "UyduhBUpO7Q"},
-    {"id": "mecca",          "city": "Mecca",        "country": "Saudi Arabia", "region": "Middle East", "fallbackVideoId": "DEcpmPUbkDQ"},
+    {"id": "dubai",          "city": "Dubai",        "country": "UAE",          "region": "Middle East", "fallbackVideoId": "MfIpyflPbHQ"},
     # ── Europe ──────────────────────────────────────────────────────
     {"id": "kyiv",           "city": "Kyiv",         "country": "Ukraine",      "region": "Europe", "fallbackVideoId": "-Q7FuPINDjA"},
     {"id": "odessa",         "city": "Odessa",       "country": "Ukraine",      "region": "Europe", "fallbackVideoId": "e2gC37ILQmk"},
