@@ -2336,3 +2336,247 @@ def score_poly_mispricing(markets, base_rate_fn=None):
 
     results.sort(key=lambda x: x["mispricing_score"], reverse=True)
     return results[:15]  # Top 15 anomalies
+
+
+# ════════════════════════════════════════════════════════════════════
+# GEO TAB — DATA FETCHERS & CONSTANTS
+# ════════════════════════════════════════════════════════════════════
+
+# ── Financial broadcast networks ──────────────────────────────────────────────
+GEO_FINANCIAL_NETWORKS = [
+    {"name": "Bloomberg",  "channel_id": "UCIALMKvObZNtJ6AmdCLP7Lg"},
+    {"name": "CNBC",       "channel_id": "UCvJJ_dzjViJCoLf5uKUTwoA"},
+    {"name": "Euronews",   "channel_id": "UCW2QcKZiU8aUGg4yxCIditg"},
+    {"name": "France 24",  "channel_id": "UCQfwfsi5VrQ8yKZ-UWmAoBw"},
+    {"name": "Al Jazeera", "channel_id": "UCNye-wNBqNL5ZzHSJj3l8Bg"},
+]
+
+# ── Global webcam feeds ────────────────────────────────────────────────────────
+GEO_WEBCAM_FEEDS = [
+    {"id": "iran-tehran",    "city": "Tehran",       "country": "Iran",         "fallbackVideoId": "-zGuR1qVKrU"},
+    {"id": "iran-telaviv",   "city": "Tel Aviv",     "country": "Israel",       "fallbackVideoId": "-VLcYT5QBrY"},
+    {"id": "iran-jerusalem", "city": "Jerusalem",    "country": "Israel",       "fallbackVideoId": "JHwwZRH2wz8"},
+    {"id": "iran-multicam",  "city": "Middle East",  "country": "Multi",        "fallbackVideoId": "4E-iFtUM2kk"},
+    {"id": "jerusalem",      "city": "Jerusalem",    "country": "Israel",       "fallbackVideoId": "UyduhBUpO7Q"},
+    {"id": "tehran",         "city": "Tehran",       "country": "Iran",         "fallbackVideoId": "-zGuR1qVKrU"},
+    {"id": "tel-aviv",       "city": "Tel Aviv",     "country": "Israel",       "fallbackVideoId": "-VLcYT5QBrY"},
+    {"id": "mecca",          "city": "Mecca",        "country": "Saudi Arabia", "fallbackVideoId": "DEcpmPUbkDQ"},
+    {"id": "kyiv",           "city": "Kyiv",         "country": "Ukraine",      "fallbackVideoId": "-Q7FuPINDjA"},
+    {"id": "odessa",         "city": "Odessa",       "country": "Ukraine",      "fallbackVideoId": "e2gC37ILQmk"},
+    {"id": "paris",          "city": "Paris",        "country": "France",       "fallbackVideoId": "OzYp4NRZlwQ"},
+    {"id": "st-petersburg",  "city": "St. Petersburg","country": "Russia",      "fallbackVideoId": "CjtIYbmVfck"},
+    {"id": "london",         "city": "London",       "country": "UK",           "fallbackVideoId": "Lxqcg1qt0XU"},
+    {"id": "washington",     "city": "Washington DC","country": "USA",          "fallbackVideoId": "1wV9lLe14aU"},
+    {"id": "new-york",       "city": "New York",     "country": "USA",          "fallbackVideoId": "4qyZLflp-sI"},
+    {"id": "los-angeles",    "city": "Los Angeles",  "country": "USA",          "fallbackVideoId": "EO_1LWqsCNE"},
+    {"id": "miami",          "city": "Miami",        "country": "USA",          "fallbackVideoId": "5YCajRjvWCg"},
+    {"id": "taipei",         "city": "Taipei",       "country": "Taiwan",       "fallbackVideoId": "z_fY1pj1VBw"},
+    {"id": "shanghai",       "city": "Shanghai",     "country": "China",        "fallbackVideoId": "76EwqI5XZIc"},
+    {"id": "tokyo",          "city": "Tokyo",        "country": "Japan",        "fallbackVideoId": "4pu9sF5Qssw"},
+    {"id": "seoul",          "city": "Seoul",        "country": "South Korea",  "fallbackVideoId": "-JhoMGoAfFc"},
+    {"id": "sydney",         "city": "Sydney",       "country": "Australia",    "fallbackVideoId": "7pcL-0Wo77U"},
+]
+
+# ── Shipping-lane GeoJSON (static fallback — no external dependency) ──────────
+GEO_SHIPPING_LANES = {
+    "type": "FeatureCollection",
+    "features": [
+        {"type": "Feature", "properties": {"name": "Trans-Pacific", "type": "shipping"},
+         "geometry": {"type": "LineString", "coordinates": [
+             [121.5, 31.2], [140.0, 35.0], [160.0, 38.0],
+             [180.0, 35.0], [-160.0, 28.0], [-140.0, 24.0], [-118.2, 33.7]]}},
+        {"type": "Feature", "properties": {"name": "Trans-Atlantic", "type": "shipping"},
+         "geometry": {"type": "LineString", "coordinates": [
+             [2.35, 48.85], [-5.0, 48.0], [-20.0, 42.0],
+             [-40.0, 38.0], [-60.0, 35.0], [-74.0, 40.7]]}},
+        {"type": "Feature", "properties": {"name": "Suez / Red Sea", "type": "shipping"},
+         "geometry": {"type": "LineString", "coordinates": [
+             [5.0, 36.0], [15.0, 37.0], [25.0, 35.0], [32.0, 31.0],
+             [32.5, 29.9], [33.5, 27.0], [38.0, 23.0], [43.5, 12.5], [50.0, 10.0]]}},
+        {"type": "Feature", "properties": {"name": "Strait of Hormuz", "type": "shipping"},
+         "geometry": {"type": "LineString", "coordinates": [
+             [50.0, 10.0], [55.0, 15.0], [58.0, 20.0], [56.5, 24.0], [57.5, 23.6]]}},
+        {"type": "Feature", "properties": {"name": "Malacca / SCS", "type": "shipping"},
+         "geometry": {"type": "LineString", "coordinates": [
+             [80.0, 5.0], [90.0, 3.0], [100.0, 2.5], [104.5, 1.3],
+             [108.0, 3.5], [110.0, 5.0], [115.0, 8.0], [121.5, 22.0], [121.5, 31.2]]}},
+        {"type": "Feature", "properties": {"name": "Cape of Good Hope", "type": "shipping"},
+         "geometry": {"type": "LineString", "coordinates": [
+             [2.35, 48.85], [-10.0, 30.0], [-17.0, 14.0], [-14.0, -8.0],
+             [0.0, -20.0], [18.5, -34.0], [25.0, -34.5],
+             [35.0, -28.0], [43.5, -12.0], [50.0, 10.0]]}},
+    ],
+}
+
+# ── Theater intel queries ──────────────────────────────────────────────────────
+GEO_THEATERS = {
+    "Middle East + Oil + Hormuz":         "Middle East Iran oil Hormuz",
+    "China + Taiwan + Semiconductors":    "China Taiwan semiconductor chips TSMC",
+    "Russia + Ukraine + Energy":          "Russia Ukraine energy grain NATO",
+    "Africa + Cobalt + Lithium + Coup":   "Africa cobalt lithium coup Sahel Mali",
+    "Red Sea + Suez + Shipping":          "Red Sea Suez shipping Houthi container",
+    "South China Sea + Trade":            "South China Sea shipping Philippines trade",
+}
+
+# ── Commodity/currency impact tickers ─────────────────────────────────────────
+GEO_IMPACT_TICKERS = {
+    "WTI Crude": "CL=F", "Brent Crude": "BZ=F", "Natural Gas": "NG=F",
+    "Gold":      "GC=F", "Silver":      "SI=F", "Wheat":       "ZW=F",
+    "USD Index": "DX-Y.NYB", "EUR/USD": "EURUSD=X", "10Y Yield": "^TNX",
+}
+
+
+def fetch_military_aircraft() -> "pd.DataFrame":
+    """Fetch live military ADS-B positions from airplanes.live."""
+    import pandas as _pd
+    try:
+        r = requests.get(
+            "https://api.airplanes.live/v2/military",
+            timeout=10,
+            headers={"User-Agent": "SENTINEL/3.0"},
+        )
+        r.raise_for_status()
+        ac_list = r.json().get("ac", [])
+        rows = []
+        for ac in ac_list:
+            lat = ac.get("lat")
+            lon = ac.get("lon")
+            if lat is None or lon is None:
+                continue
+            rows.append({
+                "hex":      ac.get("hex", ""),
+                "lat":      float(lat),
+                "lon":      float(lon),
+                "alt_baro": int(ac.get("alt_baro") or 0),
+                "gs":       int(ac.get("gs") or 0),
+                "flight":   (ac.get("flight") or ac.get("hex", "UNKN")).strip(),
+                "track":    float(ac.get("track") or 0),
+                "size":     48,
+            })
+        df = _pd.DataFrame(rows)
+        if not df.empty:
+            # Planespotters photo URL embedded in tooltip
+            df["photo_url"] = df["hex"].apply(
+                lambda h: f"https://api.planespotters.net/pub/photos/hex/{h}"
+            )
+        return df
+    except Exception:
+        return _pd.DataFrame()
+
+
+def fetch_satellite_positions():
+    """Fetch active satellite TLEs from Celestrak, compute current positions
+    and 90-minute orbital paths using skyfield.
+
+    Returns:
+        positions_df  (pd.DataFrame)  — one row per satellite with lat/lon/alt_km
+        path_features (list[dict])    — PathLayer-ready dicts
+    """
+    import pandas as _pd
+    try:
+        from skyfield.api import EarthSatellite, load, wgs84 as _wgs84
+        import numpy as _np
+    except ImportError:
+        return _pd.DataFrame(), []
+
+    try:
+        r = requests.get(
+            "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle",
+            timeout=15,
+            headers={"User-Agent": "SENTINEL/3.0"},
+        )
+        r.raise_for_status()
+        lines = [l.strip() for l in r.text.strip().splitlines() if l.strip()]
+    except Exception:
+        return _pd.DataFrame(), []
+
+    from datetime import timezone as _tz, timedelta as _td
+    ts = load.timescale()
+    now_utc = datetime.now(_tz.utc)
+    t_now = ts.from_datetime(now_utc)
+
+    # Parse TLE triplets
+    sats = []
+    i = 0
+    while i + 2 < len(lines):
+        name, tle1, tle2 = lines[i], lines[i + 1], lines[i + 2]
+        if tle1.startswith("1 ") and tle2.startswith("2 "):
+            try:
+                sats.append(EarthSatellite(tle1, tle2, name, ts))
+            except Exception:
+                pass
+            i += 3
+        else:
+            i += 1
+
+    sats = sats[:50]  # cap for performance
+    rows, path_features = [], []
+
+    for sat in sats:
+        try:
+            geo = _wgs84.geographic_position_of(sat.at(t_now))
+            lat = float(geo.latitude.degrees)
+            lon = float(geo.longitude.degrees)
+            alt_km = float(geo.elevation.km)
+
+            # Mean motion (rev/day) → approx orbital velocity (km/s)
+            try:
+                n = sat.model.no_kozai * (1440 / (2 * _np.pi))
+            except Exception:
+                n = 15.5
+            vel_kms = round(n * 2 * _np.pi * (6371 + alt_km) / 86400, 2)
+
+            rows.append({
+                "name":    sat.name,
+                "lat":     lat,
+                "lon":     lon,
+                "alt_km":  round(alt_km, 1),
+                "vel_kms": vel_kms,
+                "size":    32,
+            })
+
+            # 90-min forward path, sampled every 3 min
+            path_coords = []
+            for offset in range(0, 91, 3):
+                t_f = ts.from_datetime(now_utc + _td(minutes=offset))
+                g = _wgs84.geographic_position_of(sat.at(t_f))
+                path_coords.append([float(g.longitude.degrees), float(g.latitude.degrees)])
+            path_features.append({
+                "path":  path_coords,
+                "name":  sat.name,
+                "color": [0, 180, 255, 100],
+            })
+        except Exception:
+            continue
+
+    return _pd.DataFrame(rows), path_features
+
+
+@st.cache_data(ttl=300)
+def fetch_conflict_events() -> "pd.DataFrame":
+    """Fetch last 1 hour of conflict/strike events from GDELT GEO API as a DataFrame."""
+    import pandas as _pd
+    try:
+        url = (
+            "https://api.gdeltproject.org/api/v2/geo/geo"
+            "?query=(strike%20OR%20attack%20OR%20bombing%20OR%20explosion)"
+            "&mode=pointdata&format=geojson&timespan=1h"
+        )
+        r = requests.get(url, timeout=12, headers={"User-Agent": "SENTINEL/3.0"})
+        r.raise_for_status()
+        features = r.json().get("features", [])
+        rows = []
+        for f in features:
+            coords = f.get("geometry", {}).get("coordinates", [])
+            props  = f.get("properties", {})
+            if len(coords) < 2:
+                continue
+            rows.append({
+                "lon":  float(coords[0]),
+                "lat":  float(coords[1]),
+                "name": props.get("name", "Event"),
+                "url":  props.get("url", ""),
+            })
+        return _pd.DataFrame(rows)
+    except Exception:
+        return _pd.DataFrame()
