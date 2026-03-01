@@ -1038,7 +1038,7 @@ def _geo_webcam_region_html(region_cams):
         src   = f"https://www.youtube.com/embed/{cam['fallbackVideoId']}?autoplay=1&mute=1"
         label = f"{cam['city']}, {cam['country']}"
         items += (
-            f'<div style="flex:1;min-width:220px;max-width:320px">'
+            f'<div style="flex:1;min-width:380px;max-width:520px">'
             f'<div style="font-family:monospace;font-size:9px;color:#888;'
             f'letter-spacing:1px;padding:2px 0;margin-bottom:3px">{label}</div>'
             f'<div style="position:relative;width:100%;padding-top:56.25%;background:#000">'
@@ -1121,7 +1121,7 @@ def render_geo_tab():
 
     # Find the selected network and embed it
     net_obj = next((n for n in GEO_FINANCIAL_NETWORKS if n["name"] == selected_network), GEO_FINANCIAL_NETWORKS[0])
-    _components.html(_geo_network_embed_html(net_obj), height=420, scrolling=False)
+    _components.html(_geo_network_embed_html(net_obj), height=620, scrolling=False)
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
@@ -1150,8 +1150,8 @@ def render_geo_tab():
     if region_cams:
         cam_count = len(region_cams)
         # Determine iframe height based on number of cams
-        row_count = (cam_count + 2) // 3  # 3 per row
-        iframe_h = max(260, row_count * 240)
+        row_count = (cam_count + 1) // 2  # 2 per row (larger cards)
+        iframe_h = max(380, row_count * 340)
         _components.html(_geo_webcam_region_html(region_cams), height=iframe_h, scrolling=True)
     else:
         st.markdown(
