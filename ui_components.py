@@ -1108,9 +1108,7 @@ def render_crypto_etf_chart(df, height=420, is_estimated=False):
             hovertemplate="<b>Cumulative</b><br>%{x|%b %d}<br>$%{y:,.0f}M<extra></extra>",
         ))
 
-    title_text = "INSTITUTIONAL BTC ETF FLOWS — DAILY NET ($M)"
-    if is_estimated:
-        title_text += "  ⚠ ESTIMATED (yfinance proxy)"
+
 
     fig.update_layout(
         barmode="relative",
@@ -1118,12 +1116,7 @@ def render_crypto_etf_chart(df, height=420, is_estimated=False):
         plot_bgcolor="#050505",
         font=dict(color="#FF8C00", family="IBM Plex Mono"),
         height=height,
-        margin=dict(l=0, r=60, t=40, b=0),
-        title=dict(
-            text=title_text,
-            font=dict(size=11, color="#FF6600"),
-            x=0,
-        ),
+        margin=dict(l=0, r=60, t=30, b=0),
         xaxis=dict(
             gridcolor="#111111",
             color="#555555",
