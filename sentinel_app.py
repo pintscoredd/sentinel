@@ -40,7 +40,7 @@ from data_fetchers import (
     get_whale_trades, get_exchange_netflow, get_funding_rates,
     get_open_interest, get_liquidations,
     build_brief_context,
-    fetch_btc_etf_flows, fetch_btc_etf_flows_fallback,
+    fetch_btc_etf_flows, fetch_btc_etf_flows_fallback, _ETF_TICKERS,
 )
 from ui_components import (
     CHART_LAYOUT, dark_fig, tv_chart, tv_mini, tv_tape,
@@ -1409,6 +1409,55 @@ with tabs[4]:
                 'volume × price action. Actual fund flow data from Farside Investors was unavailable.</div>',
                 unsafe_allow_html=True
             )
+
+        # ── Mini summary dashboard for latest day ──────────────────────
+        try:
+            _latest = _etf_df.iloc[-1]
+            _etf_only = {k: v for k, v in _latest.items() if k != "Total" and k in _ETF_TICKERS}
+            _net = _latest.get("Total", sum(_etf_only.values()))
+            _inflows = {k: v for k, v in _etf_only.items() if v > 0}
+            _outflows = {k: v for k, v in _etf_only.items() if v < 0}
+            _top_name, _top_val = max(_etf_only.items(), key=lambda x: abs(x[1])) if _etf_only else ("—", 0)
+            _net_color = "#00CC44" if _net >= 0 else "#FF4444"
+            _net_sign = "+" if _net >= 0 else ""
+            _top_color = "#00CC44" if _top_val >= 0 else "#FF4444"
+            _top_sign = "+" if _top_val >= 0 else ""
+            _date_str = _etf_df.index[-1].strftime("%b %d, %Y")
+
+            st.markdown(
+                f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;'
+                f'background:#060606;border:1px solid #1A1A1A;border-radius:4px;padding:10px 14px;'
+                f'margin:6px 0;font-family:\'IBM Plex Mono\',monospace">'
+                # Net Flow
+                f'<div style="text-align:center">'
+                f'<div style="color:#555;font-size:9px;letter-spacing:1px">NET FLOW</div>'
+                f'<div style="color:{_net_color};font-size:16px;font-weight:700">{_net_sign}${abs(_net):,.0f}M</div>'
+                f'<div style="color:#444;font-size:8px">{_date_str}</div>'
+                f'</div>'
+                # Inflows
+                f'<div style="text-align:center">'
+                f'<div style="color:#555;font-size:9px;letter-spacing:1px">INFLOWS</div>'
+                f'<div style="color:#00CC44;font-size:16px;font-weight:700">{len(_inflows)}</div>'
+                f'<div style="color:#444;font-size:8px">ETFs positive</div>'
+                f'</div>'
+                # Outflows
+                f'<div style="text-align:center">'
+                f'<div style="color:#555;font-size:9px;letter-spacing:1px">OUTFLOWS</div>'
+                f'<div style="color:#FF4444;font-size:16px;font-weight:700">{len(_outflows)}</div>'
+                f'<div style="color:#444;font-size:8px">ETFs negative</div>'
+                f'</div>'
+                # Top Mover
+                f'<div style="text-align:center">'
+                f'<div style="color:#555;font-size:9px;letter-spacing:1px">TOP MOVER</div>'
+                f'<div style="color:{_top_color};font-size:16px;font-weight:700">{_top_name}</div>'
+                f'<div style="color:{_top_color};font-size:9px">{_top_sign}${abs(_top_val):,.0f}M</div>'
+                f'</div>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+        except Exception:
+            pass
+
     else:
         st.markdown(
             '<p style="color:#555;font-family:monospace;font-size:11px">'
