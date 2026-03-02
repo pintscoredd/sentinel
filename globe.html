@@ -1,111 +1,635 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <title>SENTINEL GEO</title>
   <style>
-    * { margin:0; padding:0; box-sizing:border-box; font-family:'Courier New',monospace; }
-    html,body { background:#000; color:#d0d3d8; width:100%; height:100%; overflow:hidden; }
-    #c { display:block; position:absolute; top:0; left:170px; width:calc(100% - 385px); height:100%; }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: 'Courier New', monospace;
+    }
+
+    html,
+    body {
+      background: #000;
+      color: #d0d3d8;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    #c {
+      display: block;
+      position: absolute;
+      top: 0;
+      left: 170px;
+      width: calc(100% - 385px);
+      height: 100%;
+    }
 
     /* Header */
-    #hdr { position:absolute; top:0; left:0; right:0; z-index:20; background:linear-gradient(180deg,rgba(0,0,0,.95) 0%,transparent 100%); padding:6px 12px; display:flex; justify-content:space-between; align-items:center; pointer-events:none; }
-    #logo { color:#FF6600; font-size:12px; font-weight:700; letter-spacing:3px; }
-    #hst { font-size:9px; color:#444; display:flex; gap:10px; }
-    .hd { display:inline-block; width:5px; height:5px; border-radius:50%; margin-right:3px; vertical-align:middle; }
-    .hg { background:#00CC44; animation:pb 2s infinite; }
-    .ha { background:#FF6600; }
-    .hr { background:#FF4444; animation:pb 1s infinite; }
-    @keyframes pb { 0%,100%{opacity:1} 50%{opacity:.2} }
+    #hdr {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 20;
+      background: linear-gradient(180deg, rgba(0, 0, 0, .95) 0%, transparent 100%);
+      padding: 6px 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      pointer-events: none;
+    }
+
+    #logo {
+      color: #FF6600;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 3px;
+    }
+
+    #hst {
+      font-size: 9px;
+      color: #444;
+      display: flex;
+      gap: 10px;
+    }
+
+    .hd {
+      display: inline-block;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      margin-right: 3px;
+      vertical-align: middle;
+    }
+
+    .hg {
+      background: #00CC44;
+      animation: pb 2s infinite;
+    }
+
+    .ha {
+      background: #FF6600;
+    }
+
+    .hr {
+      background: #FF4444;
+      animation: pb 1s infinite;
+    }
+
+    @keyframes pb {
+
+      0%,
+      100% {
+        opacity: 1
+      }
+
+      50% {
+        opacity: .2
+      }
+    }
 
     /* Filter bar */
-    #fb { position:absolute; left:8px; top:42px; z-index:20; display:flex; flex-direction:column; gap:2px; pointer-events:all; }
-    .fbtn { background:rgba(0,0,0,.9); border:1px solid #1a1a1a; color:#555; font-family:'Courier New',monospace; font-size:12px; letter-spacing:1px; padding:6px 12px; cursor:pointer; width:155px; text-align:left; transition:all .15s; }
-    .fbtn:hover,.fbtn.on { background:rgba(255,102,0,.12); border-color:#FF6600; color:#FF6600; }
-    .fbtn.sat-on { background:rgba(0,255,255,.08); border-color:#00FFFF; color:#00FFFF; }
-    .fbtn.flt-on { background:rgba(255,220,0,.08); border-color:#FFDD00; color:#FFDD00; }
-    .fbtn-sep { height:1px; background:#1a1a1a; margin:3px 0; }
+    #fb {
+      position: absolute;
+      left: 8px;
+      top: 42px;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      pointer-events: all;
+    }
+
+    .fbtn {
+      background: rgba(0, 0, 0, .9);
+      border: 1px solid #1a1a1a;
+      color: #555;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      letter-spacing: 1px;
+      padding: 6px 12px;
+      cursor: pointer;
+      width: 155px;
+      text-align: left;
+      transition: all .15s;
+    }
+
+    .fbtn:hover,
+    .fbtn.on {
+      background: rgba(255, 102, 0, .12);
+      border-color: #FF6600;
+      color: #FF6600;
+    }
+
+    .fbtn.sat-on {
+      background: rgba(0, 255, 255, .08);
+      border-color: #00FFFF;
+      color: #00FFFF;
+    }
+
+    .fbtn.flt-on {
+      background: rgba(255, 220, 0, .08);
+      border-color: #FFDD00;
+      color: #FFDD00;
+    }
+
+    .fbtn-sep {
+      height: 1px;
+      background: #1a1a1a;
+      margin: 3px 0;
+    }
 
     /* Theater panel */
-    #tp { position:absolute; right:0; top:42px; width:215px; background:rgba(0,0,0,.96); border:1px solid #222; border-right:none; z-index:20; }
-    .tph { padding:8px 11px; font-size:11px; letter-spacing:2px; color:#FF6600; border-bottom:1px solid #222; font-weight:700; }
-    .tpi { padding:10px 11px; border-bottom:1px solid #151515; cursor:pointer; transition:all .15s; border-left:3px solid transparent; pointer-events:all; }
-    .tpi:hover { background:rgba(255,102,0,.1); border-left-color:#FF6600; }
-    .tpn { font-size:13px; color:#ddd; font-weight:700; }
-    .tps { font-size:11px; margin-top:2px; font-weight:700; letter-spacing:1px; }
-    .tc { color:#FF4444; } .te { color:#FF8C00; } .tw { color:#FFCC00; }
+    #tp {
+      position: absolute;
+      right: 0;
+      top: 42px;
+      width: 215px;
+      background: rgba(0, 0, 0, .96);
+      border: 1px solid #222;
+      border-right: none;
+      z-index: 20;
+    }
+
+    .tph {
+      padding: 8px 11px;
+      font-size: 11px;
+      letter-spacing: 2px;
+      color: #FF6600;
+      border-bottom: 1px solid #222;
+      font-weight: 700;
+    }
+
+    .tpi {
+      padding: 10px 11px;
+      border-bottom: 1px solid #151515;
+      cursor: pointer;
+      transition: all .15s;
+      border-left: 3px solid transparent;
+      pointer-events: all;
+    }
+
+    .tpi:hover {
+      background: rgba(255, 102, 0, .1);
+      border-left-color: #FF6600;
+    }
+
+    .tpn {
+      font-size: 13px;
+      color: #ddd;
+      font-weight: 700;
+    }
+
+    .tps {
+      font-size: 11px;
+      margin-top: 2px;
+      font-weight: 700;
+      letter-spacing: 1px;
+    }
+
+    .tc {
+      color: #FF4444;
+    }
+
+    .te {
+      color: #FF8C00;
+    }
+
+    .tw {
+      color: #FFCC00;
+    }
 
     /* Info card popup */
-    #ic { position:absolute; z-index:50; background:rgba(0,0,2,.98); border:1px solid #2a2a2a; border-left:4px solid #FF6600; padding:15px 17px; width:300px; display:none; box-shadow:0 10px 40px rgba(0,0,0,.9); }
-    #ic.show { display:block; }
-    #ic.critical { border-left-color:#FF4444; }
-    #ic.elevated { border-left-color:#FF6600; }
-    #ic.watch { border-left-color:#FFCC00; }
-    #ic.satellite { border-left-color:#00FFFF; }
-    #ic.flight { border-left-color:#FFDD00; }
-    #ic-close { position:absolute; top:7px; right:9px; cursor:pointer; color:#444; font-size:16px; line-height:1; transition:color .15s; }
-    #ic-close:hover { color:#FF6600; }
-    .icl { font-size:8px; letter-spacing:2px; color:#444; margin-bottom:4px; text-transform:uppercase; }
-    .ict { font-size:14px; font-weight:700; color:#fff; margin-bottom:7px; line-height:1.35; }
-    .icb { font-size:11px; color:#999; line-height:1.75; }
-    .icm { color:#00AAFF; margin-top:7px; font-size:11px; font-weight:600; }
-    .ictags { margin-top:7px; display:flex; gap:3px; flex-wrap:wrap; }
-    .ictag { font-size:8px; padding:1px 5px; border:1px solid #252525; color:#555; letter-spacing:1px; }
-    #ic-date { color:#555; font-size:9px; margin-top:6px; letter-spacing:1px; }
-    #ic-track-btn { margin-top:9px; width:100%; padding:5px; font-family:'Courier New',monospace; font-size:9px; letter-spacing:1px; cursor:pointer; border:1px solid #00FFFF; background:rgba(0,255,255,.08); color:#00FFFF; transition:all .15s; display:none; }
-    #ic-track-btn:hover { background:rgba(0,255,255,.2); }
-    #ic-track-btn.flt { border-color:#FFDD00; background:rgba(255,220,0,.08); color:#FFDD00; }
-    #ic-track-btn.flt:hover { background:rgba(255,220,0,.2); }
+    #ic {
+      position: absolute;
+      z-index: 50;
+      background: rgba(0, 0, 2, .98);
+      border: 1px solid #2a2a2a;
+      border-left: 4px solid #FF6600;
+      padding: 15px 17px;
+      width: 300px;
+      display: none;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, .9);
+    }
+
+    #ic.show {
+      display: block;
+    }
+
+    #ic.critical {
+      border-left-color: #FF4444;
+    }
+
+    #ic.elevated {
+      border-left-color: #FF6600;
+    }
+
+    #ic.watch {
+      border-left-color: #FFCC00;
+    }
+
+    #ic.satellite {
+      border-left-color: #00FFFF;
+    }
+
+    #ic.flight {
+      border-left-color: #FFDD00;
+    }
+
+    #ic-close {
+      position: absolute;
+      top: 7px;
+      right: 9px;
+      cursor: pointer;
+      color: #444;
+      font-size: 16px;
+      line-height: 1;
+      transition: color .15s;
+    }
+
+    #ic-close:hover {
+      color: #FF6600;
+    }
+
+    .icl {
+      font-size: 8px;
+      letter-spacing: 2px;
+      color: #444;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+    }
+
+    .ict {
+      font-size: 14px;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 7px;
+      line-height: 1.35;
+    }
+
+    .icb {
+      font-size: 11px;
+      color: #999;
+      line-height: 1.75;
+    }
+
+    .icm {
+      color: #00AAFF;
+      margin-top: 7px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .ictags {
+      margin-top: 7px;
+      display: flex;
+      gap: 3px;
+      flex-wrap: wrap;
+    }
+
+    .ictag {
+      font-size: 8px;
+      padding: 1px 5px;
+      border: 1px solid #252525;
+      color: #555;
+      letter-spacing: 1px;
+    }
+
+    #ic-date {
+      color: #555;
+      font-size: 9px;
+      margin-top: 6px;
+      letter-spacing: 1px;
+    }
+
+    #ic-track-btn {
+      margin-top: 9px;
+      width: 100%;
+      padding: 5px;
+      font-family: 'Courier New', monospace;
+      font-size: 9px;
+      letter-spacing: 1px;
+      cursor: pointer;
+      border: 1px solid #00FFFF;
+      background: rgba(0, 255, 255, .08);
+      color: #00FFFF;
+      transition: all .15s;
+      display: none;
+    }
+
+    #ic-track-btn:hover {
+      background: rgba(0, 255, 255, .2);
+    }
+
+    #ic-track-btn.flt {
+      border-color: #FFDD00;
+      background: rgba(255, 220, 0, .08);
+      color: #FFDD00;
+    }
+
+    #ic-track-btn.flt:hover {
+      background: rgba(255, 220, 0, .2);
+    }
 
     /* Tracking bar */
-    #trackbar { position:absolute; top:28px; left:50%; transform:translateX(-50%); z-index:25; background:rgba(0,0,0,.92); border:1px solid #00FFFF; padding:4px 14px; font-size:9px; letter-spacing:2px; color:#00FFFF; display:none; white-space:nowrap; }
-    #trackbar.flt { border-color:#FFDD00; color:#FFDD00; }
-    #trackbar-stop { margin-left:10px; cursor:pointer; color:#444; }
-    #trackbar-stop:hover { color:#FF6600; }
+    #trackbar {
+      position: absolute;
+      top: 28px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 25;
+      background: rgba(0, 0, 0, .92);
+      border: 1px solid #00FFFF;
+      padding: 4px 14px;
+      font-size: 9px;
+      letter-spacing: 2px;
+      color: #00FFFF;
+      display: none;
+      white-space: nowrap;
+    }
+
+    #trackbar.flt {
+      border-color: #FFDD00;
+      color: #FFDD00;
+    }
+
+    #trackbar-stop {
+      margin-left: 10px;
+      cursor: pointer;
+      color: #444;
+    }
+
+    #trackbar-stop:hover {
+      color: #FF6600;
+    }
 
     /* Satellite status */
-    #satpanel { position:absolute; right:0; width:215px; background:rgba(0,0,0,.96); border:1px solid #222; border-right:none; z-index:20; display:none; }
-    .satph { padding:8px 11px; font-size:11px; letter-spacing:2px; color:#00FFFF; border-bottom:1px solid #222; font-weight:700; }
-    .satpi { padding:7px 11px; border-bottom:1px solid #111; cursor:pointer; transition:all .15s; border-left:3px solid transparent; }
-    .satpi:hover { background:rgba(0,255,255,.07); border-left-color:#00FFFF; }
-    .satpn { font-size:11px; color:#bbb; }
-    .satps { font-size:9px; color:#00FFFF; margin-top:1px; letter-spacing:1px; }
+    #satpanel {
+      position: absolute;
+      right: 0;
+      width: 215px;
+      background: rgba(0, 0, 0, .96);
+      border: 1px solid #222;
+      border-right: none;
+      z-index: 20;
+      display: none;
+    }
+
+    .satph {
+      padding: 8px 11px;
+      font-size: 11px;
+      letter-spacing: 2px;
+      color: #00FFFF;
+      border-bottom: 1px solid #222;
+      font-weight: 700;
+    }
+
+    .satpi {
+      padding: 7px 11px;
+      border-bottom: 1px solid #111;
+      cursor: pointer;
+      transition: all .15s;
+      border-left: 3px solid transparent;
+    }
+
+    .satpi:hover {
+      background: rgba(0, 255, 255, .07);
+      border-left-color: #00FFFF;
+    }
+
+    .satpn {
+      font-size: 11px;
+      color: #bbb;
+    }
+
+    .satps {
+      font-size: 9px;
+      color: #00FFFF;
+      margin-top: 1px;
+      letter-spacing: 1px;
+    }
 
     /* Add event */
-    #addbtn { position:absolute; right:225px; bottom:42px; z-index:20; background:rgba(255,102,0,.1); border:1px solid #FF6600; color:#FF6600; font-family:'Courier New',monospace; font-size:9px; padding:4px 10px; cursor:pointer; letter-spacing:1px; }
-    #addbtn:hover { background:rgba(255,102,0,.2); }
-    #adddlg { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); background:#060606; border:1px solid #FF6600; padding:18px; width:320px; z-index:60; display:none; }
-    #adddlg.show { display:block; }
-    #adddlg h3 { color:#FF6600; font-size:10px; letter-spacing:2px; margin-bottom:12px; }
-    #adddlg label { font-size:9px; color:#666; display:block; margin-bottom:2px; letter-spacing:1px; }
-    #adddlg input,#adddlg select,#adddlg textarea { width:100%; background:#000; border:1px solid #1a1a1a; color:#ccc; font-family:'Courier New',monospace; font-size:10px; padding:4px 7px; margin-bottom:8px; }
-    .dbtns { display:flex; gap:7px; margin-top:3px; }
-    .dbok { flex:1; padding:5px; font-family:'Courier New',monospace; font-size:9px; cursor:pointer; border:1px solid #FF6600; background:rgba(255,102,0,.15); color:#FF6600; }
-    .dbcancel { flex:1; padding:5px; font-family:'Courier New',monospace; font-size:9px; cursor:pointer; border:1px solid #1a1a1a; background:transparent; color:#555; }
+    #addbtn {
+      position: absolute;
+      right: 225px;
+      bottom: 42px;
+      z-index: 20;
+      background: rgba(255, 102, 0, .1);
+      border: 1px solid #FF6600;
+      color: #FF6600;
+      font-family: 'Courier New', monospace;
+      font-size: 9px;
+      padding: 4px 10px;
+      cursor: pointer;
+      letter-spacing: 1px;
+    }
+
+    #addbtn:hover {
+      background: rgba(255, 102, 0, .2);
+    }
+
+    #adddlg {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      background: #060606;
+      border: 1px solid #FF6600;
+      padding: 18px;
+      width: 320px;
+      z-index: 60;
+      display: none;
+    }
+
+    #adddlg.show {
+      display: block;
+    }
+
+    #adddlg h3 {
+      color: #FF6600;
+      font-size: 10px;
+      letter-spacing: 2px;
+      margin-bottom: 12px;
+    }
+
+    #adddlg label {
+      font-size: 9px;
+      color: #666;
+      display: block;
+      margin-bottom: 2px;
+      letter-spacing: 1px;
+    }
+
+    #adddlg input,
+    #adddlg select,
+    #adddlg textarea {
+      width: 100%;
+      background: #000;
+      border: 1px solid #1a1a1a;
+      color: #ccc;
+      font-family: 'Courier New', monospace;
+      font-size: 10px;
+      padding: 4px 7px;
+      margin-bottom: 8px;
+    }
+
+    .dbtns {
+      display: flex;
+      gap: 7px;
+      margin-top: 3px;
+    }
+
+    .dbok {
+      flex: 1;
+      padding: 5px;
+      font-family: 'Courier New', monospace;
+      font-size: 9px;
+      cursor: pointer;
+      border: 1px solid #FF6600;
+      background: rgba(255, 102, 0, .15);
+      color: #FF6600;
+    }
+
+    .dbcancel {
+      flex: 1;
+      padding: 5px;
+      font-family: 'Courier New', monospace;
+      font-size: 9px;
+      cursor: pointer;
+      border: 1px solid #1a1a1a;
+      background: transparent;
+      color: #555;
+    }
 
     /* Status bar */
-    #sb { position:absolute; bottom:0; left:0; right:0; padding:3px 12px; display:flex; justify-content:space-between; background:linear-gradient(0deg,rgba(0,0,0,.95) 0%,transparent 100%); z-index:20; font-size:8px; letter-spacing:1px; color:#2a2a2a; pointer-events:none; }
+    #sb {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 3px 12px;
+      display: flex;
+      justify-content: space-between;
+      background: linear-gradient(0deg, rgba(0, 0, 0, .95) 0%, transparent 100%);
+      z-index: 20;
+      font-size: 8px;
+      letter-spacing: 1px;
+      color: #2a2a2a;
+      pointer-events: none;
+    }
 
     /* Tooltip */
-    #tt { position:absolute; z-index:30; background:rgba(0,0,0,.92); border:1px solid #FF6600; padding:3px 7px; font-size:9px; color:#FF8C00; display:none; pointer-events:none; white-space:nowrap; }
-    #tt.sat { border-color:#00FFFF; color:#00FFFF; }
-    #tt.flt { border-color:#FFDD00; color:#FFDD00; }
+    #tt {
+      position: absolute;
+      z-index: 30;
+      background: rgba(0, 0, 0, .92);
+      border: 1px solid #FF6600;
+      padding: 3px 7px;
+      font-size: 9px;
+      color: #FF8C00;
+      display: none;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
+    #tt.sat {
+      border-color: #00FFFF;
+      color: #00FFFF;
+    }
+
+    #tt.flt {
+      border-color: #FFDD00;
+      color: #FFDD00;
+    }
 
     /* Loader */
-    #ls { position:absolute; inset:0; background:#000005; z-index:100; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:12px; }
-    #ls.gone { display:none; }
-    .lt { color:#FF6600; font-size:10px; letter-spacing:4px; animation:pb 1.5s infinite; }
-    .lb { width:180px; height:2px; background:#111; overflow:hidden; }
-    .lb::after { content:''; display:block; width:40%; height:100%; background:#FF6600; animation:sl 1.1s linear infinite; }
-    @keyframes sl { 0%{transform:translateX(-100%)} 100%{transform:translateX(350%)} }
+    #ls {
+      position: absolute;
+      inset: 0;
+      background: #000005;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    #ls.gone {
+      display: none;
+    }
+
+    .lt {
+      color: #FF6600;
+      font-size: 10px;
+      letter-spacing: 4px;
+      animation: pb 1.5s infinite;
+    }
+
+    .lb {
+      width: 180px;
+      height: 2px;
+      background: #111;
+      overflow: hidden;
+    }
+
+    .lb::after {
+      content: '';
+      display: block;
+      width: 40%;
+      height: 100%;
+      background: #FF6600;
+      animation: sl 1.1s linear infinite;
+    }
+
+    @keyframes sl {
+      0% {
+        transform: translateX(-100%)
+      }
+
+      100% {
+        transform: translateX(350%)
+      }
+    }
 
     /* Loading badges */
-    .layer-status { position:absolute; bottom:14px; left:180px; z-index:25; display:flex; gap:6px; pointer-events:none; }
-    .ls-badge { font-size:8px; letter-spacing:1px; padding:2px 6px; border:1px solid #1a1a1a; color:#333; }
-    .ls-badge.active { border-color:#00FFFF; color:#00FFFF; }
-    .ls-badge.flt-active { border-color:#FFDD00; color:#FFDD00; }
+    .layer-status {
+      position: absolute;
+      bottom: 14px;
+      left: 180px;
+      z-index: 25;
+      display: flex;
+      gap: 6px;
+      pointer-events: none;
+    }
+
+    .ls-badge {
+      font-size: 8px;
+      letter-spacing: 1px;
+      padding: 2px 6px;
+      border: 1px solid #1a1a1a;
+      color: #333;
+    }
+
+    .ls-badge.active {
+      border-color: #00FFFF;
+      color: #00FFFF;
+    }
+
+    .ls-badge.flt-active {
+      border-color: #FFDD00;
+      color: #FFDD00;
+    }
   </style>
 </head>
+
 <body>
   <div id="ls">
     <div style="color:#FF6600;font-size:18px;font-weight:900;letter-spacing:5px">⚡ SENTINEL GEO</div>
@@ -116,13 +640,16 @@
   <canvas id="c"></canvas>
 
   <div id="hdr">
-    <div><span id="logo">⚡ SENTINEL GEO</span><span style="color:#2a2a2a;font-size:8px;margin-left:10px">GEOPOLITICAL INTELLIGENCE</span></div>
+    <div><span id="logo">⚡ SENTINEL GEO</span><span style="color:#2a2a2a;font-size:8px;margin-left:10px">GEOPOLITICAL
+        INTELLIGENCE</span></div>
     <div id="hst">
       <span><span class="hd hg"></span>LIVE</span>
       <span><span class="hd hg"></span>GDELT</span>
       <span><span class="hd ha"></span>AIS</span>
-      <span id="sat-status" style="display:none"><span class="hd" style="background:#00FFFF;animation:pb 3s infinite"></span>SAT</span>
-      <span id="flt-status" style="display:none"><span class="hd" style="background:#FFDD00;animation:pb 2s infinite"></span>MIL-AIR</span>
+      <span id="sat-status" style="display:none"><span class="hd"
+          style="background:#00FFFF;animation:pb 3s infinite"></span>SAT</span>
+      <span id="flt-status" style="display:none"><span class="hd"
+          style="background:#FFDD00;animation:pb 2s infinite"></span>MIL-AIR</span>
       <span id="clk" style="color:#333"></span>
     </div>
   </div>
@@ -148,7 +675,8 @@
   </div>
 
   <div id="tp">
-    <div class="tph">⚠ THEATER STATUS <span id="tp-update" style="color:#333;font-size:7px;letter-spacing:0">LIVE</span></div>
+    <div class="tph">⚠ THEATER STATUS <span id="tp-update" style="color:#333;font-size:7px;letter-spacing:0">LIVE</span>
+    </div>
     <div id="tp-items"></div>
   </div>
 
@@ -170,8 +698,10 @@
   </div>
 
   <!-- Live news feed panel -->
-  <div id="newsfeed" style="position:absolute;bottom:38px;left:10px;z-index:20;width:520px;font-family:'Courier New',monospace">
-    <div style="color:#FF6600;font-size:11px;letter-spacing:2px;margin-bottom:6px;font-weight:700">📡 LIVE INTEL FEED</div>
+  <div id="newsfeed"
+    style="position:absolute;bottom:38px;left:10px;z-index:20;width:520px;font-family:'Courier New',monospace">
+    <div style="color:#FF6600;font-size:11px;letter-spacing:2px;margin-bottom:6px;font-weight:700">📡 LIVE INTEL FEED
+    </div>
     <div id="nf-items" style="font-size:13px"></div>
   </div>
 
@@ -206,27 +736,28 @@
   </div>
 
   <div id="sb">
-    <div><span class="hd hr" style="display:inline-block;margin-right:4px"></span>3 CRITICAL &nbsp;<span class="hd ha" style="display:inline-block;margin-right:4px;margin-left:8px"></span>4 ELEVATED</div>
+    <div><span class="hd hr" style="display:inline-block;margin-right:4px"></span>3 CRITICAL &nbsp;<span class="hd ha"
+        style="display:inline-block;margin-right:4px;margin-left:8px"></span>4 ELEVATED</div>
     <div>DRAG TO ROTATE · SCROLL TO ZOOM · CLICK MARKERS FOR INTEL</div>
     <div>THREE.JS · CELESTRAK · ADSBX · GDELT</div>
   </div>
 
   <!-- satellite.js — loaded dynamically with fallback CDNs -->
   <script>
-  (function(){
-    function tryLoad(urls, idx){
-      if(idx>=urls.length) return;
-      const s=document.createElement('script');
-      s.src=urls[idx];
-      s.onerror=function(){ tryLoad(urls, idx+1); };
-      document.head.appendChild(s);
-    }
-    tryLoad([
-      'https://cdn.jsdelivr.net/npm/satellite.js@4.1.3/dist/satellite.min.js',
-      'https://unpkg.com/satellite.js@4.1.3/dist/satellite.min.js',
-      'https://cdnjs.cloudflare.com/ajax/libs/satellite.js/4.1.3/satellite.min.js'
-    ], 0);
-  })();
+    (function () {
+      function tryLoad(urls, idx) {
+        if (idx >= urls.length) return;
+        const s = document.createElement('script');
+        s.src = urls[idx];
+        s.onerror = function () { tryLoad(urls, idx + 1); };
+        document.head.appendChild(s);
+      }
+      tryLoad([
+        'https://cdn.jsdelivr.net/npm/satellite.js@4.1.3/dist/satellite.min.js',
+        'https://unpkg.com/satellite.js@4.1.3/dist/satellite.min.js',
+        'https://cdnjs.cloudflare.com/ajax/libs/satellite.js/4.1.3/satellite.min.js'
+      ], 0);
+    })();
   </script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script>
@@ -246,8 +777,8 @@
     setInterval(() => {
       const d = new Date();
       const el = document.getElementById('clk');
-      if (el) el.textContent = d.toUTCString().slice(17,25)+' UTC';
-    },1000);
+      if (el) el.textContent = d.toUTCString().slice(17, 25) + ' UTC';
+    }, 1000);
 
     // ── CANVAS SIZE — deferred init so iframe layout has settled
     // Streamlit components.html() runs scripts before layout; offsetWidth=0 at that moment.
@@ -257,1222 +788,1256 @@
     function _getDims() {
       let w = canvas.clientWidth || canvas.offsetWidth;
       let h = canvas.clientHeight || canvas.offsetHeight;
-      if(w < 10) w = document.documentElement.clientWidth - 385;
-      if(w < 10) w = window.innerWidth - 385;
-      if(w < 50) w = 820;
-      if(h < 10) h = document.documentElement.clientHeight;
-      if(h < 10) h = window.innerHeight;
-      if(h < 50) h = 600;
-      return {w, h};
+      if (w < 10) w = document.documentElement.clientWidth - 385;
+      if (w < 10) w = window.innerWidth - 385;
+      if (w < 50) w = 820;
+      if (h < 10) h = document.documentElement.clientHeight;
+      if (h < 10) h = window.innerHeight;
+      if (h < 50) h = 600;
+      return { w, h };
     }
 
     function _waitAndInit() {
-      const {w, h} = _getDims();
-      if(w > 50 && h > 50) { CW=w; CH=h; _initThree(); }
+      const { w, h } = _getDims();
+      if (w > 50 && h > 50) { CW = w; CH = h; _initThree(); }
       else requestAnimationFrame(_waitAndInit);
     }
     requestAnimationFrame(_waitAndInit);
 
     function _initThree() {
 
-    renderer = new THREE.WebGLRenderer({canvas,antialias:true,alpha:false});
-    renderer.setSize(CW,CH);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
-    renderer.setClearColor(0x000003);
+      renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+      renderer.setSize(CW, CH);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setClearColor(0x000003);
 
-    scene = new THREE.Scene();
-    camera = new THREE.PerspectiveCamera(42,CW/CH,0.1,1000);
-    camera.position.set(0,0,2.65);
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera(42, CW / CH, 0.1, 1000);
+      camera.position.set(0, 0, 2.65);
 
-    // ── GLOBE SETUP
-    const globeGeo = new THREE.SphereGeometry(1,64,64);
-    const loader = new THREE.TextureLoader();
-    let globeMesh=null, earthTex=null;
+      // ── GLOBE SETUP
+      const globeGeo = new THREE.SphereGeometry(1, 64, 64);
+      const loader = new THREE.TextureLoader();
+      let globeMesh = null, earthTex = null;
 
-    function makeFallback(){
-      const cv=document.createElement('canvas'); cv.width=2048; cv.height=1024;
-      const ctx=cv.getContext('2d');
-      const og=ctx.createLinearGradient(0,0,0,1024);
-      og.addColorStop(0,'#000308'); og.addColorStop(.4,'#00050c'); og.addColorStop(.6,'#00050c'); og.addColorStop(1,'#000308');
-      ctx.fillStyle=og; ctx.fillRect(0,0,2048,1024);
-      ctx.fillStyle='#1d3c18';
-      const na=[[290,190,175,130,-.1],[245,285,110,95,.05],[215,335,70,58,0],[370,270,90,68,-.08],[295,150,60,45,.1],[260,125,45,30,.05]];
-      const sa=[[325,475,105,80,.08],[298,550,85,98,-.04],[308,618,68,75,-.08]];
-      const eu=[[610,200,92,68,.04],[658,232,62,50,-.08],[636,182,52,40,.12],[590,188,30,22,.05],[630,155,28,18,.1],[665,170,22,18,-.05]];
-      const af=[[628,342,108,98,.03],[618,428,98,108,-.04],[608,508,78,88,0],[600,582,58,54,.08]];
-      const as=[[718,192,145,108,.08],[825,212,128,95,-.04],[882,252,108,82,.04],[925,292,92,74,-.08],[968,192,88,64,.08],[1015,278,78,64,-.08],[845,172,65,54,.18],[870,148,48,35,.1]];
-      const jp=[[982,228,16,42,.18],[992,255,11,28,.18]];
-      const sea=[[922,375,72,58,.04],[962,418,58,44,-.08]];
-      const au=[[908,508,98,65,.04],[928,562,74,54,-.08]];
-      const gr=[[362,136,70,48,.08],[332,126,44,34,.12]];
-      const uk=[[592,192,18,26,.08],[607,188,12,20,.1]];
-      const ma=[[660,470,18,38,.1]];
-      [na,sa,eu,af,as,jp,sea,au,gr,uk,ma].flat().forEach(([x,y,w,h,r=0])=>{
-        ctx.save(); ctx.translate(x,y); ctx.rotate(r);
-        ctx.beginPath(); ctx.ellipse(0,0,w,h,0,0,Math.PI*2); ctx.fill(); ctx.restore();
-      });
-      ctx.fillStyle='#c0d8e8'; ctx.fillRect(0,0,2048,18); ctx.fillRect(0,1000,2048,24);
-      return new THREE.CanvasTexture(cv);
-    }
-
-    function buildGlobe(){
-      const mat=new THREE.MeshPhongMaterial({
-        map:earthTex||makeFallback(), color:new THREE.Color(0x8899bb),
-        specular:new THREE.Color(0x334466), shininess:15,
-        emissive:new THREE.Color(0x020815), emissiveIntensity:0.08,
-      });
-      if(globeMesh){scene.remove(globeMesh); if(globeMesh.material.map) globeMesh.material.map.dispose(); globeMesh.material.dispose();}
-      globeMesh=new THREE.Mesh(globeGeo,mat); scene.add(globeMesh);
-      document.getElementById('ls').classList.add('gone');
-    }
-    buildGlobe();
-    loader.load('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg',t=>{earthTex=t;buildGlobe();},undefined,()=>{});
-    setTimeout(()=>document.getElementById('ls').classList.add('gone'),2000);
-
-    // ── ATMOSPHERE
-    scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.02,32,32),new THREE.MeshPhongMaterial({color:0x000d1f,transparent:true,opacity:0.10,side:THREE.FrontSide,depthWrite:false,blending:THREE.AdditiveBlending})));
-    scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.001,24,12),new THREE.MeshBasicMaterial({color:0x000a14,wireframe:true,transparent:true,opacity:0.025})));
-
-    // ── LIGHTING
-    scene.add(new THREE.AmbientLight(0x334455,1.2));
-    const sun=new THREE.DirectionalLight(0xfff8ee,2.5); sun.position.set(6,2,4); scene.add(sun);
-    const fill=new THREE.DirectionalLight(0x2a3a50,0.8); fill.position.set(-6,-2,-4); scene.add(fill);
-    const rim=new THREE.DirectionalLight(0x2a3545,0.6); rim.position.set(-2,1,-5); scene.add(rim);
-
-    // ── STARS
-    const sg=new THREE.BufferGeometry(), sp=[], sc=[];
-    for(let i=0;i<2000;i++){
-      const th=Math.random()*Math.PI*2, ph=Math.acos(2*Math.random()-1), r=65+Math.random()*85;
-      sp.push(r*Math.sin(ph)*Math.cos(th),r*Math.cos(ph),r*Math.sin(ph)*Math.sin(th));
-      const t=Math.random();
-      if(t<.08) sc.push(.6,.6,1.0); else if(t<.16) sc.push(1.0,.85,.6); else if(t<.20) sc.push(1.0,.6,.5); else sc.push(.4,.45,.55);
-    }
-    sg.setAttribute('position',new THREE.Float32BufferAttribute(sp,3));
-    sg.setAttribute('color',new THREE.Float32BufferAttribute(sc,3));
-    scene.add(new THREE.Points(sg,new THREE.PointsMaterial({size:.11,vertexColors:true})));
-
-    // ── HOTSPOT DATA (dynamic from Streamlit or fallback)
-    let HOTSPOTS=[];
-    const FALLBACK_HOTSPOTS=[
-      {lat:31.5,lon:34.8,label:'GAZA/ISRAEL',sev:'critical',type:'conflict',title:'Gaza — Active Conflict Zone',body:'Ongoing operations in Gaza.',mkt:'WTI, GLD, XLE, ITA',tags:['OIL RISK','ESCALATION']},
-      {lat:14,lon:43,label:'RED SEA',sev:'critical',type:'shipping',title:'Red Sea — Houthi Shipping Campaign',body:'Houthi attacks on commercial vessels.',mkt:'Container ETFs, FDX, UPS',tags:['SHIPPING','HOUTHI']},
-      {lat:49,lon:31,label:'UKRAINE',sev:'critical',type:'conflict',title:'Ukraine — Active War Theater',body:'Frontline active across 1,000km.',mkt:'NG=F, ZW=F, Defense ETFs',tags:['NATGAS','GRAIN','NATO']},
-      {lat:25,lon:121,label:'TAIWAN',sev:'elevated',type:'trade',title:'Taiwan Strait — PLA Military Posture',body:'TSMC produces 90%+ advanced chips.',mkt:'SMH, NVDA, AAPL, TSM',tags:['TSMC','SEMICONDUCTORS']},
-      {lat:26.5,lon:56,label:'HORMUZ',sev:'elevated',type:'energy',title:'Strait of Hormuz',body:'20% of global oil transits daily.',mkt:'WTI, Brent, XLE',tags:['OIL','IRAN']},
-    ];
-
-    const COLORS={critical:'#FF4444',elevated:'#FF8C00',watch:'#FFCC00'};
-    let customEvents=[],activeFilter='all';
-    let autoRotate=true,dragging=false,isDrag=false,dragDist=0;
-    let prevX=0,prevY=0,rotX=0,rotY=0,targetRotX=0,targetRotY=0;
-    const markers=[];
-
-    function latLonToVec3(lat,lon,r=1.013){
-      const phi=(90-lat)*Math.PI/180;
-      const theta=(lon+180)*Math.PI/180;
-      return new THREE.Vector3(-r*Math.sin(phi)*Math.cos(theta),r*Math.cos(phi),r*Math.sin(phi)*Math.sin(theta));
-    }
-
-    // ── SHARED MARKER GEOMETRIES
-    const markerGeo=new THREE.SphereGeometry(0.023,8,8);
-    const glowGeo=new THREE.SphereGeometry(0.042,8,8);
-    const ringGeo=new THREE.RingGeometry(0.030,0.040,24);
-
-    // Satellite/Flight geometries (SHARED — reused, never created inside loops)
-    const satGeo=new THREE.SphereGeometry(0.014,6,6);
-    const satRingGeo=new THREE.RingGeometry(0.019,0.026,16);
-    const fltGeo=new THREE.ConeGeometry(0.010,0.022,4);
-
-    // Vessel geometry (SHARED)
-    const vesselGeo=new THREE.SphereGeometry(0.012,6,6);
-    const vesselRingGeo=new THREE.RingGeometry(0.016,0.022,12);
-
-    let rayTargets=[];
-    let satMeshes=[];
-    let flightMeshes=[];
-    let vesselMeshes=[];
-    let infraLines=[];
-
-    function rebuildRayTargets(){
-      rayTargets=[
-        ...markers.flatMap(m=>[m.mesh,m.glow]),
-        ...satMeshes.map(m=>m.mesh),
-        ...flightMeshes.map(m=>m.mesh),
-        ...vesselMeshes.map(m=>m.mesh)
-      ];
-    }
-
-    function makeMarker(h){
-      const col=COLORS[h.sev]||'#FF6600';
-      const c=new THREE.Color(col);
-      const pos=latLonToVec3(h.lat,h.lon);
-      const mesh=new THREE.Mesh(markerGeo,new THREE.MeshBasicMaterial({color:c}));
-      mesh.position.copy(pos); mesh.userData={type:'hotspot',hotspot:h};
-      const glow=new THREE.Mesh(glowGeo,new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:0.10,side:THREE.FrontSide}));
-      glow.position.copy(pos); glow.userData={type:'hotspot',hotspot:h};
-      const ring=new THREE.Mesh(ringGeo,new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:0.55,side:THREE.DoubleSide}));
-      ring.position.copy(pos); ring.lookAt(0,0,0); ring.rotateX(Math.PI/2);
-      ring.userData={phase:Math.random()*Math.PI*2};
-      scene.add(ring); scene.add(glow); scene.add(mesh);
-      markers.push({mesh,ring,glow,hotspot:h,basePos:pos.clone()});
-    }
-
-    function renderMarkers(){
-      markers.forEach(({mesh,ring,glow})=>{scene.remove(mesh);mesh.material.dispose();scene.remove(ring);ring.material.dispose();scene.remove(glow);glow.material.dispose();});
-      markers.length=0;
-      HOTSPOTS.filter(h=>activeFilter==='all'||h.type===activeFilter).forEach(makeMarker);
-      if(activeFilter==='custom'||activeFilter==='all') customEvents.forEach(makeMarker);
-      rebuildRayTargets();
-    }
-    renderMarkers();
-
-    // ============================================================
-    //  VESSEL TRACKING MODULE
-    // ============================================================
-    let vesselData=[];
-
-    function renderVesselMarkers(){
-      vesselMeshes.forEach(({mesh,ring})=>{
-        scene.remove(mesh); mesh.material.dispose();
-        if(ring){scene.remove(ring); ring.material.dispose();}
-      });
-      vesselMeshes.length=0;
-      if(vesselData.length===0){rebuildRayTargets();return;}
-      vesselData.forEach(v=>{
-        if(!isFinite(v.lat)||!isFinite(v.lon)) return;
-        const pos=latLonToVec3(v.lat,v.lon,1.012);
-        if(!isFinite(pos.x)) return;
-        const mesh=new THREE.Mesh(vesselGeo,new THREE.MeshBasicMaterial({color:new THREE.Color(0x4488FF)}));
-        mesh.position.copy(pos);
-        mesh.userData={type:'vessel',vessel:v,basePos:pos.clone()};
-        const ring=new THREE.Mesh(vesselRingGeo,new THREE.MeshBasicMaterial({color:new THREE.Color(0x4488FF),transparent:true,opacity:0.35,side:THREE.DoubleSide}));
-        ring.position.copy(pos);
-        ring.userData={phase:Math.random()*Math.PI*2,basePos:pos.clone()};
-        scene.add(mesh); scene.add(ring);
-        vesselMeshes.push({mesh,ring,vessel:v,basePos:pos.clone()});
-      });
-      rebuildRayTargets();
-    }
-
-    // ============================================================
-    //  INFRASTRUCTURE LINES MODULE (shipping lanes)
-    // ============================================================
-    const infraLineMat=new THREE.LineBasicMaterial({color:0x335577,transparent:true,opacity:0.45,linewidth:1});
-
-    function renderInfraLines(geojson){
-      infraLines.forEach(l=>{scene.remove(l); l.geometry.dispose();});
-      infraLines.length=0;
-      if(!geojson) return;
-      const features=geojson.features||geojson.geometries||[];
-      features.forEach(f=>{
-        const coords=(f.geometry||f).coordinates||[];
-        if(!coords||coords.length<2) return;
-        // Handle both LineString and MultiLineString
-        const lines=(f.geometry||f).type==='MultiLineString'?coords:[coords];
-        lines.forEach(line=>{
-          if(line.length<2) return;
-          const pts=[];
-          line.forEach(([lon,lat])=>{
-            if(!isFinite(lat)||!isFinite(lon)) return;
-            const v=latLonToVec3(lat,lon,1.006);
-            pts.push(v.x,v.y,v.z);
-          });
-          if(pts.length<6) return;
-          const geo=new THREE.BufferGeometry();
-          geo.setAttribute('position',new THREE.Float32BufferAttribute(pts,3));
-          const line3=new THREE.Line(geo,infraLineMat);
-          scene.add(line3);
-          infraLines.push(line3);
+      function makeFallback() {
+        const cv = document.createElement('canvas'); cv.width = 2048; cv.height = 1024;
+        const ctx = cv.getContext('2d');
+        const og = ctx.createLinearGradient(0, 0, 0, 1024);
+        og.addColorStop(0, '#000308'); og.addColorStop(.4, '#00050c'); og.addColorStop(.6, '#00050c'); og.addColorStop(1, '#000308');
+        ctx.fillStyle = og; ctx.fillRect(0, 0, 2048, 1024);
+        ctx.fillStyle = '#1d3c18';
+        const na = [[290, 190, 175, 130, -.1], [245, 285, 110, 95, .05], [215, 335, 70, 58, 0], [370, 270, 90, 68, -.08], [295, 150, 60, 45, .1], [260, 125, 45, 30, .05]];
+        const sa = [[325, 475, 105, 80, .08], [298, 550, 85, 98, -.04], [308, 618, 68, 75, -.08]];
+        const eu = [[610, 200, 92, 68, .04], [658, 232, 62, 50, -.08], [636, 182, 52, 40, .12], [590, 188, 30, 22, .05], [630, 155, 28, 18, .1], [665, 170, 22, 18, -.05]];
+        const af = [[628, 342, 108, 98, .03], [618, 428, 98, 108, -.04], [608, 508, 78, 88, 0], [600, 582, 58, 54, .08]];
+        const as = [[718, 192, 145, 108, .08], [825, 212, 128, 95, -.04], [882, 252, 108, 82, .04], [925, 292, 92, 74, -.08], [968, 192, 88, 64, .08], [1015, 278, 78, 64, -.08], [845, 172, 65, 54, .18], [870, 148, 48, 35, .1]];
+        const jp = [[982, 228, 16, 42, .18], [992, 255, 11, 28, .18]];
+        const sea = [[922, 375, 72, 58, .04], [962, 418, 58, 44, -.08]];
+        const au = [[908, 508, 98, 65, .04], [928, 562, 74, 54, -.08]];
+        const gr = [[362, 136, 70, 48, .08], [332, 126, 44, 34, .12]];
+        const uk = [[592, 192, 18, 26, .08], [607, 188, 12, 20, .1]];
+        const ma = [[660, 470, 18, 38, .1]];
+        [na, sa, eu, af, as, jp, sea, au, gr, uk, ma].flat().forEach(([x, y, w, h, r = 0]) => {
+          ctx.save(); ctx.translate(x, y); ctx.rotate(r);
+          ctx.beginPath(); ctx.ellipse(0, 0, w, h, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
         });
-      });
-    }
+        ctx.fillStyle = '#c0d8e8'; ctx.fillRect(0, 0, 2048, 18); ctx.fillRect(0, 1000, 2048, 24);
+        return new THREE.CanvasTexture(cv);
+      }
 
-    // ============================================================
-    //  SENTINEL DATA INGESTION (from Streamlit)
-    // ============================================================
-    function ingestSentinelData(){
-      const DATA=window.__SENTINEL_DATA__;
-      if(!DATA) return;
+      function buildGlobe() {
+        const mat = new THREE.MeshPhongMaterial({
+          map: earthTex || makeFallback(), color: new THREE.Color(0x8899bb),
+          specular: new THREE.Color(0x334466), shininess: 15,
+          emissive: new THREE.Color(0x020815), emissiveIntensity: 0.08,
+        });
+        if (globeMesh) { scene.remove(globeMesh); if (globeMesh.material.map) globeMesh.material.map.dispose(); globeMesh.material.dispose(); }
+        globeMesh = new THREE.Mesh(globeGeo, mat); scene.add(globeMesh);
+        document.getElementById('ls').classList.add('gone');
+      }
+      buildGlobe();
+      loader.load('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg', t => { earthTex = t; buildGlobe(); }, undefined, () => { });
+      setTimeout(() => document.getElementById('ls').classList.add('gone'), 2000);
 
-      // 1. Events (GDELT conflicts) → HOTSPOTS
-      if(DATA.events && DATA.events.length>0){
-        HOTSPOTS=DATA.events.map(e=>({
-          lat:parseFloat(e.lat)||0, lon:parseFloat(e.lon)||0,
-          label:(e.name||'EVENT').substring(0,30),
-          sev:'critical', type:'conflict',
-          title:e.name||'Conflict Event',
-          body:e.url?'Source: '+e.url:'GDELT Conflict Event',
-          mkt:'', tags:['GDELT','LIVE'],
-          url:e.url||''
-        }));
-        // Also keep fallback hotspots as persistent geopolitical markers
-        HOTSPOTS.push(...FALLBACK_HOTSPOTS);
-      } else {
-        HOTSPOTS=FALLBACK_HOTSPOTS.slice();
+      // ── ATMOSPHERE
+      scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.02, 32, 32), new THREE.MeshPhongMaterial({ color: 0x000d1f, transparent: true, opacity: 0.10, side: THREE.FrontSide, depthWrite: false, blending: THREE.AdditiveBlending })));
+      scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.001, 24, 12), new THREE.MeshBasicMaterial({ color: 0x000a14, wireframe: true, transparent: true, opacity: 0.025 })));
+
+      // ── LIGHTING
+      scene.add(new THREE.AmbientLight(0x334455, 1.2));
+      const sun = new THREE.DirectionalLight(0xfff8ee, 2.5); sun.position.set(6, 2, 4); scene.add(sun);
+      const fill = new THREE.DirectionalLight(0x2a3a50, 0.8); fill.position.set(-6, -2, -4); scene.add(fill);
+      const rim = new THREE.DirectionalLight(0x2a3545, 0.6); rim.position.set(-2, 1, -5); scene.add(rim);
+
+      // ── STARS
+      const sg = new THREE.BufferGeometry(), sp = [], sc = [];
+      for (let i = 0; i < 2000; i++) {
+        const th = Math.random() * Math.PI * 2, ph = Math.acos(2 * Math.random() - 1), r = 65 + Math.random() * 85;
+        sp.push(r * Math.sin(ph) * Math.cos(th), r * Math.cos(ph), r * Math.sin(ph) * Math.sin(th));
+        const t = Math.random();
+        if (t < .08) sc.push(.6, .6, 1.0); else if (t < .16) sc.push(1.0, .85, .6); else if (t < .20) sc.push(1.0, .6, .5); else sc.push(.4, .45, .55);
+      }
+      sg.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3));
+      sg.setAttribute('color', new THREE.Float32BufferAttribute(sc, 3));
+      scene.add(new THREE.Points(sg, new THREE.PointsMaterial({ size: .11, vertexColors: true })));
+
+      // ── HOTSPOT DATA (dynamic from Streamlit or fallback)
+      let HOTSPOTS = [];
+      const FALLBACK_HOTSPOTS = [
+        { lat: 31.5, lon: 34.8, label: 'GAZA/ISRAEL', sev: 'critical', type: 'conflict', title: 'Gaza — Active Conflict Zone', body: 'Ongoing operations in Gaza.', mkt: 'WTI, GLD, XLE, ITA', tags: ['OIL RISK', 'ESCALATION'] },
+        { lat: 14, lon: 43, label: 'RED SEA', sev: 'critical', type: 'shipping', title: 'Red Sea — Houthi Shipping Campaign', body: 'Houthi attacks on commercial vessels.', mkt: 'Container ETFs, FDX, UPS', tags: ['SHIPPING', 'HOUTHI'] },
+        { lat: 49, lon: 31, label: 'UKRAINE', sev: 'critical', type: 'conflict', title: 'Ukraine — Active War Theater', body: 'Frontline active across 1,000km.', mkt: 'NG=F, ZW=F, Defense ETFs', tags: ['NATGAS', 'GRAIN', 'NATO'] },
+        { lat: 25, lon: 121, label: 'TAIWAN', sev: 'elevated', type: 'trade', title: 'Taiwan Strait — PLA Military Posture', body: 'TSMC produces 90%+ advanced chips.', mkt: 'SMH, NVDA, AAPL, TSM', tags: ['TSMC', 'SEMICONDUCTORS'] },
+        { lat: 26.5, lon: 56, label: 'HORMUZ', sev: 'elevated', type: 'energy', title: 'Strait of Hormuz', body: '20% of global oil transits daily.', mkt: 'WTI, Brent, XLE', tags: ['OIL', 'IRAN'] },
+      ];
+
+      const COLORS = { critical: '#FF4444', elevated: '#FF8C00', watch: '#FFCC00' };
+      let customEvents = [], activeFilter = 'all';
+      let autoRotate = true, dragging = false, isDrag = false, dragDist = 0;
+      let prevX = 0, prevY = 0, rotX = 0, rotY = 0, targetRotX = 0, targetRotY = 0;
+      const markers = [];
+
+      function latLonToVec3(lat, lon, r = 1.013) {
+        const phi = (90 - lat) * Math.PI / 180;
+        const theta = (lon + 180) * Math.PI / 180;
+        return new THREE.Vector3(-r * Math.sin(phi) * Math.cos(theta), r * Math.cos(phi), r * Math.sin(phi) * Math.sin(theta));
+      }
+
+      // ── SHARED MARKER GEOMETRIES
+      const markerGeo = new THREE.SphereGeometry(0.023, 8, 8);
+      const glowGeo = new THREE.SphereGeometry(0.042, 8, 8);
+      const ringGeo = new THREE.RingGeometry(0.030, 0.040, 24);
+
+      // Satellite/Flight geometries (SHARED — reused, never created inside loops)
+      const satGeo = new THREE.SphereGeometry(0.014, 6, 6);
+      const satRingGeo = new THREE.RingGeometry(0.019, 0.026, 16);
+      const fltGeo = new THREE.ConeGeometry(0.010, 0.022, 4);
+
+      // Vessel geometry (SHARED)
+      const vesselGeo = new THREE.SphereGeometry(0.012, 6, 6);
+      const vesselRingGeo = new THREE.RingGeometry(0.016, 0.022, 12);
+
+      let rayTargets = [];
+      let satMeshes = [];
+      let flightMeshes = [];
+      let vesselMeshes = [];
+      let infraLines = [];
+
+      function rebuildRayTargets() {
+        rayTargets = [
+          ...markers.flatMap(m => [m.mesh, m.glow]),
+          ...satMeshes.map(m => m.mesh),
+          ...flightMeshes.map(m => m.mesh),
+          ...vesselMeshes.map(m => m.mesh)
+        ];
+      }
+
+      function makeMarker(h) {
+        const col = COLORS[h.sev] || '#FF6600';
+        const c = new THREE.Color(col);
+        const pos = latLonToVec3(h.lat, h.lon);
+        const mesh = new THREE.Mesh(markerGeo, new THREE.MeshBasicMaterial({ color: c }));
+        mesh.position.copy(pos); mesh.userData = { type: 'hotspot', hotspot: h };
+        const glow = new THREE.Mesh(glowGeo, new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.10, side: THREE.FrontSide }));
+        glow.position.copy(pos); glow.userData = { type: 'hotspot', hotspot: h };
+        const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.55, side: THREE.DoubleSide }));
+        ring.position.copy(pos); ring.lookAt(0, 0, 0); ring.rotateX(Math.PI / 2);
+        ring.userData = { phase: Math.random() * Math.PI * 2 };
+        scene.add(ring); scene.add(glow); scene.add(mesh);
+        markers.push({ mesh, ring, glow, hotspot: h, basePos: pos.clone() });
+      }
+
+      function renderMarkers() {
+        markers.forEach(({ mesh, ring, glow }) => { scene.remove(mesh); mesh.material.dispose(); scene.remove(ring); ring.material.dispose(); scene.remove(glow); glow.material.dispose(); });
+        markers.length = 0;
+        HOTSPOTS.filter(h => activeFilter === 'all' || h.type === activeFilter).forEach(makeMarker);
+        if (activeFilter === 'custom' || activeFilter === 'all') customEvents.forEach(makeMarker);
+        rebuildRayTargets();
       }
       renderMarkers();
 
-      // 2. Vessels (AIS)
-      if(DATA.vessels && DATA.vessels.length>0){
-        vesselData=DATA.vessels;
-        renderVesselMarkers();
+      // ============================================================
+      //  VESSEL TRACKING MODULE
+      // ============================================================
+      let vesselData = [];
+
+      function renderVesselMarkers() {
+        vesselMeshes.forEach(({ mesh, ring }) => {
+          scene.remove(mesh); mesh.material.dispose();
+          if (ring) { scene.remove(ring); ring.material.dispose(); }
+        });
+        vesselMeshes.length = 0;
+        if (vesselData.length === 0) { rebuildRayTargets(); return; }
+        vesselData.forEach(v => {
+          if (!isFinite(v.lat) || !isFinite(v.lon)) return;
+          const pos = latLonToVec3(v.lat, v.lon, 1.012);
+          if (!isFinite(pos.x)) return;
+          const mesh = new THREE.Mesh(vesselGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(0x4488FF) }));
+          mesh.position.copy(pos);
+          mesh.userData = { type: 'vessel', vessel: v, basePos: pos.clone() };
+          const ring = new THREE.Mesh(vesselRingGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(0x4488FF), transparent: true, opacity: 0.35, side: THREE.DoubleSide }));
+          ring.position.copy(pos);
+          ring.userData = { phase: Math.random() * Math.PI * 2, basePos: pos.clone() };
+          scene.add(mesh); scene.add(ring);
+          vesselMeshes.push({ mesh, ring, vessel: v, basePos: pos.clone() });
+        });
+        rebuildRayTargets();
       }
 
-      // 3. Infrastructure (shipping lanes GeoJSON)
-      if(DATA.infra){
-        renderInfraLines(DATA.infra);
+      // ============================================================
+      //  INFRASTRUCTURE LINES MODULE (shipping lanes)
+      // ============================================================
+      const infraLineMat = new THREE.LineBasicMaterial({ color: 0x335577, transparent: true, opacity: 0.45, linewidth: 1 });
+
+      function renderInfraLines(geojson) {
+        infraLines.forEach(l => { scene.remove(l); l.geometry.dispose(); });
+        infraLines.length = 0;
+        if (!geojson) return;
+        const features = geojson.features || geojson.geometries || [];
+        features.forEach(f => {
+          const coords = (f.geometry || f).coordinates || [];
+          if (!coords || coords.length < 2) return;
+          // Handle both LineString and MultiLineString
+          const lines = (f.geometry || f).type === 'MultiLineString' ? coords : [coords];
+          lines.forEach(line => {
+            if (line.length < 2) return;
+            const pts = [];
+            line.forEach(([lon, lat]) => {
+              if (!isFinite(lat) || !isFinite(lon)) return;
+              const v = latLonToVec3(lat, lon, 1.006);
+              pts.push(v.x, v.y, v.z);
+            });
+            if (pts.length < 6) return;
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+            const line3 = new THREE.Line(geo, infraLineMat);
+            scene.add(line3);
+            infraLines.push(line3);
+          });
+        });
       }
 
-      // 4. Pre-computed satellite positions from Python/skyfield
-      if(DATA.sats && DATA.sats.length>0 && showSats){
-        // Merge with existing satData if satellite.js loaded, otherwise use as-is
-        DATA.sats.forEach(s=>{
-          if(!s.lat || !s.lon) return;
-          const existing=satData.find(x=>x.name===s.name);
-          if(existing){
-            existing.lat=parseFloat(s.lat); existing.lon=parseFloat(s.lon);
-            existing.altKm=parseFloat(s.alt_km||s.altKm||400);
-            const r=1.015+Math.min(Math.max(existing.altKm,200),25000)*0.000055;
-            existing.basePos=latLonToVec3(existing.lat,existing.lon,r);
+      // ============================================================
+      //  SENTINEL DATA INGESTION (from Streamlit)
+      // ============================================================
+      function ingestSentinelData() {
+        const DATA = window.__SENTINEL_DATA__;
+        if (!DATA) return;
+
+        // 1. Events (GDELT conflicts) → HOTSPOTS
+        if (DATA.events && DATA.events.length > 0) {
+          HOTSPOTS = DATA.events.map(e => ({
+            lat: parseFloat(e.lat) || 0, lon: parseFloat(e.lon) || 0,
+            label: (e.name || 'EVENT').substring(0, 30),
+            sev: 'critical', type: 'conflict',
+            title: e.name || 'Conflict Event',
+            body: e.url ? 'Source: ' + e.url : 'GDELT Conflict Event',
+            mkt: '', tags: ['GDELT', 'LIVE'],
+            url: e.url || ''
+          }));
+          // Also keep fallback hotspots as persistent geopolitical markers
+          HOTSPOTS.push(...FALLBACK_HOTSPOTS);
+        } else {
+          HOTSPOTS = FALLBACK_HOTSPOTS.slice();
+        }
+        renderMarkers();
+
+        // 2. Vessels (AIS)
+        if (DATA.vessels && DATA.vessels.length > 0) {
+          vesselData = DATA.vessels;
+          renderVesselMarkers();
+        }
+
+        // 3. Infrastructure (shipping lanes GeoJSON)
+        if (DATA.infra) {
+          renderInfraLines(DATA.infra);
+        }
+
+        // 4. Pre-computed satellite positions from Python/skyfield
+        if (DATA.sats && DATA.sats.length > 0 && showSats) {
+          // Merge with existing satData if satellite.js loaded, otherwise use as-is
+          DATA.sats.forEach(s => {
+            if (!s.lat || !s.lon) return;
+            const existing = satData.find(x => x.name === s.name);
+            if (existing) {
+              existing.lat = parseFloat(s.lat); existing.lon = parseFloat(s.lon);
+              existing.altKm = parseFloat(s.alt_km || s.altKm || 400);
+              const r = 1.015 + Math.min(Math.max(existing.altKm, 200), 25000) * 0.000055;
+              existing.basePos = latLonToVec3(existing.lat, existing.lon, r);
+            }
+          });
+          if (showSats) renderSatMarkers();
+        }
+
+        // 5. Pre-computed military flights from Python
+        if (DATA.planes && DATA.planes.length > 0 && showFlights) {
+          flightData = DATA.planes.map(p => ({
+            callsign: (p.flight || p.callsign || p.hex || 'MIL').toString().trim(),
+            lat: parseFloat(p.lat), lon: parseFloat(p.lon),
+            alt: Math.round(parseFloat(p.alt_baro || p.alt || 0)),
+            speed: Math.round(parseFloat(p.gs || p.speed || 0)),
+            heading: parseFloat(p.track || p.heading || 0),
+            hex: (p.hex || '').toString(), country: 'MIL', type: p.type || 'MIL', reg: p.reg || ''
+          })).filter(f => isFinite(f.lat) && isFinite(f.lon));
+          renderFlightMarkers();
+        }
+      }
+      // Ingest on load
+      ingestSentinelData();
+
+      // ============================================================
+      //  SATELLITE TRACKING MODULE
+      // ============================================================
+      let satData = [];
+      let showSats = false;
+      let satLoaded = false;
+
+      // CelesTrak GP TLE API — correct paths (SOCRATES is conjunction-only, pub/TLE is catalog)
+      const CELESTRAK_URLS = [
+        g => `https://celestrak.org/pub/TLE/${g}.txt`,
+        g => `https://celestrak.com/pub/TLE/${g}.txt`,
+        g => `https://celestrak.org/SOCRATES/gp.php?GROUP=${g}&FORMAT=tle`,
+      ];
+
+      const SAT_GROUPS = [
+        { id: 'stations', label: 'Space Stations' },
+        { id: 'visual', label: 'Brightest Sats' },
+        { id: 'military', label: 'Military Sats' },
+        { id: 'starlink', label: 'Starlink' },
+      ];
+
+      async function fetchSatTLEs() {
+        if (typeof satellite === 'undefined') {
+          document.getElementById('sat-status').style.display = '';
+          document.getElementById('sat-status').textContent = '⚠ satellite.js CDN failed — using fallback';
+          loadFallbackSats(); return;
+        }
+        if (satLoaded) return updateSatPositions();
+        let loaded = 0;
+        for (const group of SAT_GROUPS) {
+          let ok = false;
+          for (const urlFn of CELESTRAK_URLS) {
+            if (ok) break;
+            try {
+              const ctrl = new AbortController();
+              const timer = setTimeout(() => ctrl.abort(), 8000);
+              const r = await fetch(urlFn(group.id), { signal: ctrl.signal });
+              clearTimeout(timer);
+              if (!r.ok) continue;
+              const text = await r.text();
+              if (!text.includes('1 ') || !text.includes('2 ')) continue;
+              const count = parseTLEGroup(text, group.id);
+              if (count > 0) { ok = true; loaded += count; }
+            } catch (e) { continue; }
+          }
+        }
+        satLoaded = true;
+        if (loaded > 0) {
+          document.getElementById('sat-status').style.display = '';
+          renderSatMarkers(); updateSatListPanel();
+        } else { loadFallbackSats(); }
+      }
+
+      function parseTLEGroup(text, groupId) {
+        const lines = text.trim().split('\n').map(l => l.trim()).filter(l => l.length > 0);
+        let count = 0;
+        for (let i = 0; i + 2 < lines.length; i += 3) {
+          const name = lines[i].replace(/^0 /, '');
+          const tle1 = lines[i + 1]; const tle2 = lines[i + 2];
+          if (!tle1.startsWith('1 ') || !tle2.startsWith('2 ')) continue;
+          if (satData.find(s => s.name === name)) continue;
+          try {
+            const satrec = satellite.twoline2satrec(tle1, tle2);
+            const parts = tle2.trim().split(/\s+/);
+            const incl = parseFloat(parts[2]) || 0;
+            const meanMotion = parseFloat(parts[7]) || 0;
+            const altKm = meanMotion > 0 ? Math.round(Math.pow(398600 / Math.pow(meanMotion * 2 * Math.PI / 1440, 2), 1 / 3) - 6371) : 400;
+            const period = meanMotion > 0 ? Math.round(1440 / meanMotion) : 92;
+            satData.push({
+              name, tle1, tle2, satrec, noradId: parts[1] || '?', groupId, basePos: null, lat: null, lon: null, altKm,
+              info: { incl: incl.toFixed(1), period, altKm, meanMotion: meanMotion.toFixed(4) }
+            });
+            count++;
+          } catch (e) { }
+        }
+        return count;
+      }
+
+      // 45 hardcoded satellites with 2025 epoch TLEs — guaranteed to load
+      function loadFallbackSats() {
+        const F = [
+          // Space Stations
+          ['ISS (ZARYA)', '1 25544U 98067A   25055.50000000  .00020000  00000-0  36000-3 0  9994', '2 25544  51.6400  45.0000 0003000  90.0000 270.0000 15.49600000000001', 'stations'],
+          ['CSS (TIANHE)', '1 48274U 21035A   25055.50000000  .00010000  00000-0  17000-3 0  9992', '2 48274  41.4700 110.0000 0005000 120.0000 240.0000 15.60000000000002', 'stations'],
+          // GPS
+          ['GPS BIIR-11', '1 29601U 06042A   25055.50000000 -.00000030  00000-0  00000+0 0  9994', '2 29601  54.9100 120.0000 0088000  60.0000 300.0000  2.00563000000001', 'gps'],
+          ['GPS BIIRM-1', '1 28874U 05038A   25055.50000000 -.00000020  00000-0  00000+0 0  9991', '2 28874  54.8600 200.0000 0095000 120.0000 240.0000  2.00566000000002', 'gps'],
+          ['GPS BIII-1', '1 43873U 18109A   25055.50000000 -.00000010  00000-0  00000+0 0  9993', '2 43873  55.0100 280.0000 0010000  30.0000 330.0000  2.00563000000003', 'gps'],
+          ['GPS BIII-4', '1 48859U 21054A   25055.50000000 -.00000010  00000-0  00000+0 0  9995', '2 48859  55.0600  40.0000 0012000 150.0000 210.0000  2.00564000000001', 'gps'],
+          ['GPS BIII-6', '1 50471U 22007A   25055.50000000 -.00000010  00000-0  00000+0 0  9993', '2 50471  55.0400  80.0000 0009000  45.0000 315.0000  2.00564000000002', 'gps'],
+          // US Military recon
+          ['USA-224 (KH-11)', '1 36119U 09001A   25055.50000000  .00001500  00000-0  32000-4 0  9997', '2 36119  97.9000 160.0000 0005000  90.0000 270.0000 14.85000000000001', 'military'],
+          ['USA-245 (KH-11)', '1 39232U 13043A   25055.50000000  .00001200  00000-0  28000-4 0  9993', '2 39232  97.8500 200.0000 0006000 120.0000 240.0000 14.82000000000002', 'military'],
+          ['LACROSSE 5', '1 28646U 05016A   25055.50000000  .00001000  00000-0  22000-4 0  9992', '2 28646  57.0000  80.0000 0008000  45.0000 315.0000 14.90000000000001', 'military'],
+          ['SBIRS GEO-1', '1 37496U 11013A   25055.50000000 -.00000200  00000-0  00000+0 0  9999', '2 37496   0.3000 155.0000 0001500  80.0000 280.0000  1.00272000000001', 'military'],
+          ['SBIRS GEO-4', '1 43647U 18033A   25055.50000000 -.00000200  00000-0  00000+0 0  9996', '2 43647   0.1000 110.0000 0000800  70.0000 290.0000  1.00272000000002', 'military'],
+          ['WGS-11', '1 46114U 20057A   25055.50000000 -.00000300  00000-0  00000+0 0  9995', '2 46114   0.0500 280.0000 0000300 120.0000 240.0000  1.00271000000002', 'military'],
+          ['MUOS-5', '1 41622U 16001A   25055.50000000 -.00000300  00000-0  00000+0 0  9997', '2 41622   2.0000 175.0000 0001200  60.0000 300.0000  1.00272000000001', 'military'],
+          ['AEHF-6', '1 50286U 21054A   25055.50000000 -.00000300  00000-0  00000+0 0  9997', '2 50286   3.2000 350.0000 0002000  45.0000 315.0000  1.00271000000003', 'military'],
+          ['MILSTAR-6', '1 27169U 02001A   25055.50000000 -.00000200  00000-0  00000+0 0  9998', '2 27169   0.1200 295.0000 0000400  70.0000 290.0000  1.00272000000002', 'military'],
+          // Weather
+          ['GOES-18', '1 51850U 22021A   25055.50000000 -.00000300  00000-0  00000+0 0  9993', '2 51850   0.1000 105.0000 0001000  60.0000 300.0000  1.00272000000001', 'weather'],
+          ['GOES-16', '1 41866U 16071A   25055.50000000 -.00000300  00000-0  00000+0 0  9991', '2 41866   0.0800  75.0000 0000800  80.0000 280.0000  1.00272000000002', 'weather'],
+          ['NOAA 19', '1 33591U 09005A   25055.50000000  .00000900  00000-0  63000-4 0  9997', '2 33591  98.7000  90.0000 0013000  60.0000 300.0000 14.12000000000001', 'weather'],
+          ['Meteosat-11', '1 41732U 16040A   25055.50000000 -.00000200  00000-0  00000+0 0  9994', '2 41732   0.1100  40.0000 0000900  90.0000 270.0000  1.00272000000001', 'weather'],
+          // GNSS
+          ['GLONASS-M 751', '1 32276U 07065B   25055.50000000 -.00000100  00000-0  00000+0 0  9992', '2 32276  64.8000  80.0000 0010000  30.0000 330.0000  2.13103000000001', 'gnss'],
+          ['GALILEO-12', '1 40890U 15017A   25055.50000000  .00000000  00000-0  00000+0 0  9993', '2 40890  56.2000 100.0000 0001500  60.0000 300.0000  1.70474000000002', 'gnss'],
+          ['BEIDOU G7', '1 41434U 16037A   25055.50000000 -.00000200  00000-0  00000+0 0  9995', '2 41434   1.4000 140.0000 0003000  90.0000 270.0000  1.00269000000001', 'gnss'],
+          ['BEIDOU IGSO-3', '1 38250U 12018A   25055.50000000 -.00000100  00000-0  00000+0 0  9994', '2 38250  55.2000 160.0000 0018000  80.0000 280.0000  1.00270000000002', 'gnss'],
+          // Science
+          ['HUBBLE', '1 20580U 90037B   25055.50000000  .00002600  00000-0  44000-4 0  9992', '2 20580  28.4700 135.0000 0002500  90.0000 270.0000 15.09000000000001', 'science'],
+          ['TERRA', '1 25994U 99068A   25055.50000000  .00000800  00000-0  22000-4 0  9990', '2 25994  98.2000  90.0000 0001000  60.0000 300.0000 14.58000000000002', 'science'],
+          ['AQUA', '1 27424U 02022A   25055.50000000  .00000900  00000-0  25000-4 0  9993', '2 27424  98.2200 110.0000 0001200  80.0000 280.0000 14.58000000000001', 'science'],
+          ['SENTINEL-2A', '1 40697U 15028A   25055.50000000  .00001000  00000-0  28000-4 0  9990', '2 40697  98.5600  80.0000 0000900  70.0000 290.0000 14.31000000000002', 'science'],
+          ['SENTINEL-1A', '1 39634U 14016A   25055.50000000  .00001100  00000-0  30000-4 0  9991', '2 39634  98.1800  95.0000 0001100  55.0000 305.0000 14.59000000000001', 'science'],
+          // Commercial
+          ['WORLDVIEW-3', '1 40115U 14048A   25055.50000000  .00003500  00000-0  56000-4 0  9994', '2 40115  97.9200 120.0000 0001300  65.0000 295.0000 14.84000000000001', 'commercial'],
+          ['GEOEYE-1', '1 33331U 08042A   25055.50000000  .00003000  00000-0  48000-4 0  9990', '2 33331  98.1000 145.0000 0002000  75.0000 285.0000 14.69000000000001', 'commercial'],
+          ['PLANET LABS FM1', '1 40012U 14033S   25055.50000000  .00004000  00000-0  62000-4 0  9995', '2 40012  98.0000  75.0000 0010000  85.0000 275.0000 14.90000000000002', 'commercial'],
+          // Starlink samples
+          ['STARLINK-1007', '1 44713U 19074B   25055.50000000  .00000200  00000-0  22000-4 0  9997', '2 44713  53.0500 100.0000 0001000  60.0000 300.0000 15.06000000000003', 'starlink'],
+          ['STARLINK-1130', '1 44914U 19074AB  25055.50000000  .00000180  00000-0  20000-4 0  9992', '2 44914  53.0400 120.0000 0001200  80.0000 280.0000 15.06000000000001', 'starlink'],
+          ['STARLINK-2027', '1 46372U 20070H   25055.50000000  .00000160  00000-0  18000-4 0  9990', '2 46372  53.0300 140.0000 0000800  70.0000 290.0000 15.07000000000002', 'starlink'],
+          ['STARLINK-3010', '1 47777U 21013P   25055.50000000  .00000150  00000-0  16000-4 0  9993', '2 47777  53.0200 160.0000 0000600  90.0000 270.0000 15.06000000000004', 'starlink'],
+          ['STARLINK-4080', '1 49140U 21082R   25055.50000000  .00000140  00000-0  15000-4 0  9991', '2 49140  53.0600  60.0000 0001100  50.0000 310.0000 15.05000000000003', 'starlink'],
+          // Chinese/Russian military
+          ['YAOGAN-30G', '1 43722U 18082A   25055.50000000  .00001200  00000-0  28000-4 0  9994', '2 43722  35.0000  90.0000 0009000  85.0000 275.0000 15.00000000000001', 'military'],
+          ['COSMOS 2545', '1 44521U 19047A   25055.50000000  .00001500  00000-0  35000-4 0  9990', '2 44521  97.6000  85.0000 0003500  75.0000 285.0000 14.82000000000001', 'military'],
+          ['COSMOS 2576', '1 57166U 23091A   25055.50000000  .00001800  00000-0  40000-4 0  9993', '2 57166  97.7500  70.0000 0004000  80.0000 280.0000 14.80000000000002', 'military'],
+          ['GLONASS-K1', '1 39620U 14012A   25055.50000000 -.00000100  00000-0  00000+0 0  9990', '2 39620  64.8500  60.0000 0008000  45.0000 315.0000  2.13105000000002', 'gnss'],
+          // DPRK/Iran
+          ['NOUR-3', '1 57475U 23090A   25055.50000000  .00002000  00000-0  45000-4 0  9994', '2 57475  58.4000 200.0000 0015000 100.0000 260.0000 14.72000000000001', 'military'],
+          ['KWANGMYONGSONG-4', '1 41332U 16009A   25055.50000000  .00001400  00000-0  32000-4 0  9991', '2 41332  97.4000 170.0000 0011000  90.0000 270.0000 14.91000000000002', 'military'],
+        ];
+        F.forEach(([name, tle1, tle2, groupId]) => {
+          try {
+            const satrec = satellite.twoline2satrec(tle1, tle2);
+            const parts = tle2.trim().split(/\s+/);
+            const meanMotion = parseFloat(parts[7]) || 14.5;
+            const altKm = Math.round(Math.pow(398600 / Math.pow(meanMotion * 2 * Math.PI / 1440, 2), 1 / 3) - 6371);
+            const incl = parseFloat(parts[2]) || 0;
+            satData.push({
+              name, tle1, tle2, satrec, noradId: parts[1] || '?', groupId, basePos: null, lat: null, lon: null, altKm,
+              info: { incl: incl.toFixed(1), period: Math.round(1440 / meanMotion), altKm, meanMotion: meanMotion.toFixed(4) }
+            });
+          } catch (e) { }
+        });
+        document.getElementById('sat-status').style.display = '';
+        renderSatMarkers(); updateSatListPanel();
+      }
+
+      function updateSatPositions() {
+        const now = new Date();
+        satData.forEach(sat => {
+          try {
+            const pv = satellite.propagate(sat.satrec, now);
+            if (!pv || !pv.position) return;
+            const { x, y, z } = pv.position;
+            if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return;
+            const gmst = satellite.gstime(now);
+            const geo = satellite.eciToGeodetic(pv.position, gmst);
+            const lat = satellite.degreesLat(geo.latitude);
+            const lon = satellite.degreesLong(geo.longitude);
+            const altKm = geo.height;
+            if (!isFinite(lat) || !isFinite(lon) || !isFinite(altKm)) return;
+            if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
+            sat.lat = lat; sat.lon = lon; sat.altKm = altKm;
+            const r = 1.015 + Math.min(Math.max(altKm, 200), 25000) * 0.000055;
+            sat.basePos = latLonToVec3(lat, lon, r);
+            sat.speed = pv.velocity ? Math.sqrt(pv.velocity.x ** 2 + pv.velocity.y ** 2 + pv.velocity.z ** 2) * 3600 : 0;
+          } catch (e) { sat.basePos = null; }
+        });
+        satMeshes.forEach(({ mesh, ring, sat }) => {
+          if (sat.basePos && isFinite(sat.basePos.x)) {
+            mesh.userData.basePos = sat.basePos.clone();
+            if (ring) ring.userData.basePos = sat.basePos.clone();
           }
         });
-        if(showSats) renderSatMarkers();
       }
 
-      // 5. Pre-computed military flights from Python
-      if(DATA.planes && DATA.planes.length>0 && showFlights){
-        flightData=DATA.planes.map(p=>({
-          callsign:(p.flight||p.callsign||p.hex||'MIL').toString().trim(),
-          lat:parseFloat(p.lat), lon:parseFloat(p.lon),
-          alt:Math.round(parseFloat(p.alt_baro||p.alt||0)),
-          speed:Math.round(parseFloat(p.gs||p.speed||0)),
-          heading:parseFloat(p.track||p.heading||0),
-          hex:(p.hex||'').toString(), country:'MIL', type:p.type||'MIL', reg:p.reg||''
-        })).filter(f=>isFinite(f.lat)&&isFinite(f.lon));
-        renderFlightMarkers();
-      }
-    }
-    // Ingest on load
-    ingestSentinelData();
-
-    // ============================================================
-    //  SATELLITE TRACKING MODULE
-    // ============================================================
-    let satData=[];
-    let showSats=false;
-    let satLoaded=false;
-
-    // CelesTrak GP TLE API — correct paths (SOCRATES is conjunction-only, pub/TLE is catalog)
-    const CELESTRAK_URLS=[
-      g=>`https://celestrak.org/pub/TLE/${g}.txt`,
-      g=>`https://celestrak.com/pub/TLE/${g}.txt`,
-      g=>`https://celestrak.org/SOCRATES/gp.php?GROUP=${g}&FORMAT=tle`,
-    ];
-
-    const SAT_GROUPS=[
-      {id:'stations',label:'Space Stations'},
-      {id:'visual',  label:'Brightest Sats'},
-      {id:'military',label:'Military Sats'},
-      {id:'starlink',label:'Starlink'},
-    ];
-
-    async function fetchSatTLEs(){
-      if(typeof satellite==='undefined'){
-        document.getElementById('sat-status').style.display='';
-        document.getElementById('sat-status').textContent='⚠ satellite.js CDN failed — using fallback';
-        loadFallbackSats(); return;
-      }
-      if(satLoaded) return updateSatPositions();
-      let loaded=0;
-      for(const group of SAT_GROUPS){
-        let ok=false;
-        for(const urlFn of CELESTRAK_URLS){
-          if(ok) break;
-          try{
-            const ctrl=new AbortController();
-            const timer=setTimeout(()=>ctrl.abort(),8000);
-            const r=await fetch(urlFn(group.id),{signal:ctrl.signal});
-            clearTimeout(timer);
-            if(!r.ok) continue;
-            const text=await r.text();
-            if(!text.includes('1 ')||!text.includes('2 ')) continue;
-            const count=parseTLEGroup(text,group.id);
-            if(count>0){ok=true; loaded+=count;}
-          }catch(e){continue;}
-        }
-      }
-      satLoaded=true;
-      if(loaded>0){
-        document.getElementById('sat-status').style.display='';
-        renderSatMarkers(); updateSatListPanel();
-      } else { loadFallbackSats(); }
-    }
-
-    function parseTLEGroup(text,groupId){
-      const lines=text.trim().split('\n').map(l=>l.trim()).filter(l=>l.length>0);
-      let count=0;
-      for(let i=0;i+2<lines.length;i+=3){
-        const name=lines[i].replace(/^0 /,'');
-        const tle1=lines[i+1]; const tle2=lines[i+2];
-        if(!tle1.startsWith('1 ')||!tle2.startsWith('2 ')) continue;
-        if(satData.find(s=>s.name===name)) continue;
-        try{
-          const satrec=satellite.twoline2satrec(tle1,tle2);
-          const parts=tle2.trim().split(/\s+/);
-          const incl=parseFloat(parts[2])||0;
-          const meanMotion=parseFloat(parts[7])||0;
-          const altKm=meanMotion>0?Math.round(Math.pow(398600/Math.pow(meanMotion*2*Math.PI/1440,2),1/3)-6371):400;
-          const period=meanMotion>0?Math.round(1440/meanMotion):92;
-          satData.push({name,tle1,tle2,satrec,noradId:parts[1]||'?',groupId,basePos:null,lat:null,lon:null,altKm,
-            info:{incl:incl.toFixed(1),period,altKm,meanMotion:meanMotion.toFixed(4)}});
-          count++;
-        }catch(e){}
-      }
-      return count;
-    }
-
-    // 45 hardcoded satellites with 2025 epoch TLEs — guaranteed to load
-    function loadFallbackSats(){
-      const F=[
-        // Space Stations
-        ['ISS (ZARYA)',       '1 25544U 98067A   25055.50000000  .00020000  00000-0  36000-3 0  9994','2 25544  51.6400  45.0000 0003000  90.0000 270.0000 15.49600000000001','stations'],
-        ['CSS (TIANHE)',      '1 48274U 21035A   25055.50000000  .00010000  00000-0  17000-3 0  9992','2 48274  41.4700 110.0000 0005000 120.0000 240.0000 15.60000000000002','stations'],
-        // GPS
-        ['GPS BIIR-11',      '1 29601U 06042A   25055.50000000 -.00000030  00000-0  00000+0 0  9994','2 29601  54.9100 120.0000 0088000  60.0000 300.0000  2.00563000000001','gps'],
-        ['GPS BIIRM-1',      '1 28874U 05038A   25055.50000000 -.00000020  00000-0  00000+0 0  9991','2 28874  54.8600 200.0000 0095000 120.0000 240.0000  2.00566000000002','gps'],
-        ['GPS BIII-1',       '1 43873U 18109A   25055.50000000 -.00000010  00000-0  00000+0 0  9993','2 43873  55.0100 280.0000 0010000  30.0000 330.0000  2.00563000000003','gps'],
-        ['GPS BIII-4',       '1 48859U 21054A   25055.50000000 -.00000010  00000-0  00000+0 0  9995','2 48859  55.0600  40.0000 0012000 150.0000 210.0000  2.00564000000001','gps'],
-        ['GPS BIII-6',       '1 50471U 22007A   25055.50000000 -.00000010  00000-0  00000+0 0  9993','2 50471  55.0400  80.0000 0009000  45.0000 315.0000  2.00564000000002','gps'],
-        // US Military recon
-        ['USA-224 (KH-11)',  '1 36119U 09001A   25055.50000000  .00001500  00000-0  32000-4 0  9997','2 36119  97.9000 160.0000 0005000  90.0000 270.0000 14.85000000000001','military'],
-        ['USA-245 (KH-11)',  '1 39232U 13043A   25055.50000000  .00001200  00000-0  28000-4 0  9993','2 39232  97.8500 200.0000 0006000 120.0000 240.0000 14.82000000000002','military'],
-        ['LACROSSE 5',       '1 28646U 05016A   25055.50000000  .00001000  00000-0  22000-4 0  9992','2 28646  57.0000  80.0000 0008000  45.0000 315.0000 14.90000000000001','military'],
-        ['SBIRS GEO-1',      '1 37496U 11013A   25055.50000000 -.00000200  00000-0  00000+0 0  9999','2 37496   0.3000 155.0000 0001500  80.0000 280.0000  1.00272000000001','military'],
-        ['SBIRS GEO-4',      '1 43647U 18033A   25055.50000000 -.00000200  00000-0  00000+0 0  9996','2 43647   0.1000 110.0000 0000800  70.0000 290.0000  1.00272000000002','military'],
-        ['WGS-11',           '1 46114U 20057A   25055.50000000 -.00000300  00000-0  00000+0 0  9995','2 46114   0.0500 280.0000 0000300 120.0000 240.0000  1.00271000000002','military'],
-        ['MUOS-5',           '1 41622U 16001A   25055.50000000 -.00000300  00000-0  00000+0 0  9997','2 41622   2.0000 175.0000 0001200  60.0000 300.0000  1.00272000000001','military'],
-        ['AEHF-6',           '1 50286U 21054A   25055.50000000 -.00000300  00000-0  00000+0 0  9997','2 50286   3.2000 350.0000 0002000  45.0000 315.0000  1.00271000000003','military'],
-        ['MILSTAR-6',        '1 27169U 02001A   25055.50000000 -.00000200  00000-0  00000+0 0  9998','2 27169   0.1200 295.0000 0000400  70.0000 290.0000  1.00272000000002','military'],
-        // Weather
-        ['GOES-18',          '1 51850U 22021A   25055.50000000 -.00000300  00000-0  00000+0 0  9993','2 51850   0.1000 105.0000 0001000  60.0000 300.0000  1.00272000000001','weather'],
-        ['GOES-16',          '1 41866U 16071A   25055.50000000 -.00000300  00000-0  00000+0 0  9991','2 41866   0.0800  75.0000 0000800  80.0000 280.0000  1.00272000000002','weather'],
-        ['NOAA 19',          '1 33591U 09005A   25055.50000000  .00000900  00000-0  63000-4 0  9997','2 33591  98.7000  90.0000 0013000  60.0000 300.0000 14.12000000000001','weather'],
-        ['Meteosat-11',      '1 41732U 16040A   25055.50000000 -.00000200  00000-0  00000+0 0  9994','2 41732   0.1100  40.0000 0000900  90.0000 270.0000  1.00272000000001','weather'],
-        // GNSS
-        ['GLONASS-M 751',    '1 32276U 07065B   25055.50000000 -.00000100  00000-0  00000+0 0  9992','2 32276  64.8000  80.0000 0010000  30.0000 330.0000  2.13103000000001','gnss'],
-        ['GALILEO-12',       '1 40890U 15017A   25055.50000000  .00000000  00000-0  00000+0 0  9993','2 40890  56.2000 100.0000 0001500  60.0000 300.0000  1.70474000000002','gnss'],
-        ['BEIDOU G7',        '1 41434U 16037A   25055.50000000 -.00000200  00000-0  00000+0 0  9995','2 41434   1.4000 140.0000 0003000  90.0000 270.0000  1.00269000000001','gnss'],
-        ['BEIDOU IGSO-3',    '1 38250U 12018A   25055.50000000 -.00000100  00000-0  00000+0 0  9994','2 38250  55.2000 160.0000 0018000  80.0000 280.0000  1.00270000000002','gnss'],
-        // Science
-        ['HUBBLE',           '1 20580U 90037B   25055.50000000  .00002600  00000-0  44000-4 0  9992','2 20580  28.4700 135.0000 0002500  90.0000 270.0000 15.09000000000001','science'],
-        ['TERRA',            '1 25994U 99068A   25055.50000000  .00000800  00000-0  22000-4 0  9990','2 25994  98.2000  90.0000 0001000  60.0000 300.0000 14.58000000000002','science'],
-        ['AQUA',             '1 27424U 02022A   25055.50000000  .00000900  00000-0  25000-4 0  9993','2 27424  98.2200 110.0000 0001200  80.0000 280.0000 14.58000000000001','science'],
-        ['SENTINEL-2A',      '1 40697U 15028A   25055.50000000  .00001000  00000-0  28000-4 0  9990','2 40697  98.5600  80.0000 0000900  70.0000 290.0000 14.31000000000002','science'],
-        ['SENTINEL-1A',      '1 39634U 14016A   25055.50000000  .00001100  00000-0  30000-4 0  9991','2 39634  98.1800  95.0000 0001100  55.0000 305.0000 14.59000000000001','science'],
-        // Commercial
-        ['WORLDVIEW-3',      '1 40115U 14048A   25055.50000000  .00003500  00000-0  56000-4 0  9994','2 40115  97.9200 120.0000 0001300  65.0000 295.0000 14.84000000000001','commercial'],
-        ['GEOEYE-1',         '1 33331U 08042A   25055.50000000  .00003000  00000-0  48000-4 0  9990','2 33331  98.1000 145.0000 0002000  75.0000 285.0000 14.69000000000001','commercial'],
-        ['PLANET LABS FM1',  '1 40012U 14033S   25055.50000000  .00004000  00000-0  62000-4 0  9995','2 40012  98.0000  75.0000 0010000  85.0000 275.0000 14.90000000000002','commercial'],
-        // Starlink samples
-        ['STARLINK-1007',    '1 44713U 19074B   25055.50000000  .00000200  00000-0  22000-4 0  9997','2 44713  53.0500 100.0000 0001000  60.0000 300.0000 15.06000000000003','starlink'],
-        ['STARLINK-1130',    '1 44914U 19074AB  25055.50000000  .00000180  00000-0  20000-4 0  9992','2 44914  53.0400 120.0000 0001200  80.0000 280.0000 15.06000000000001','starlink'],
-        ['STARLINK-2027',    '1 46372U 20070H   25055.50000000  .00000160  00000-0  18000-4 0  9990','2 46372  53.0300 140.0000 0000800  70.0000 290.0000 15.07000000000002','starlink'],
-        ['STARLINK-3010',    '1 47777U 21013P   25055.50000000  .00000150  00000-0  16000-4 0  9993','2 47777  53.0200 160.0000 0000600  90.0000 270.0000 15.06000000000004','starlink'],
-        ['STARLINK-4080',    '1 49140U 21082R   25055.50000000  .00000140  00000-0  15000-4 0  9991','2 49140  53.0600  60.0000 0001100  50.0000 310.0000 15.05000000000003','starlink'],
-        // Chinese/Russian military
-        ['YAOGAN-30G',       '1 43722U 18082A   25055.50000000  .00001200  00000-0  28000-4 0  9994','2 43722  35.0000  90.0000 0009000  85.0000 275.0000 15.00000000000001','military'],
-        ['COSMOS 2545',      '1 44521U 19047A   25055.50000000  .00001500  00000-0  35000-4 0  9990','2 44521  97.6000  85.0000 0003500  75.0000 285.0000 14.82000000000001','military'],
-        ['COSMOS 2576',      '1 57166U 23091A   25055.50000000  .00001800  00000-0  40000-4 0  9993','2 57166  97.7500  70.0000 0004000  80.0000 280.0000 14.80000000000002','military'],
-        ['GLONASS-K1',       '1 39620U 14012A   25055.50000000 -.00000100  00000-0  00000+0 0  9990','2 39620  64.8500  60.0000 0008000  45.0000 315.0000  2.13105000000002','gnss'],
-        // DPRK/Iran
-        ['NOUR-3',           '1 57475U 23090A   25055.50000000  .00002000  00000-0  45000-4 0  9994','2 57475  58.4000 200.0000 0015000 100.0000 260.0000 14.72000000000001','military'],
-        ['KWANGMYONGSONG-4', '1 41332U 16009A   25055.50000000  .00001400  00000-0  32000-4 0  9991','2 41332  97.4000 170.0000 0011000  90.0000 270.0000 14.91000000000002','military'],
-      ];
-      F.forEach(([name,tle1,tle2,groupId])=>{
-        try{
-          const satrec=satellite.twoline2satrec(tle1,tle2);
-          const parts=tle2.trim().split(/\s+/);
-          const meanMotion=parseFloat(parts[7])||14.5;
-          const altKm=Math.round(Math.pow(398600/Math.pow(meanMotion*2*Math.PI/1440,2),1/3)-6371);
-          const incl=parseFloat(parts[2])||0;
-          satData.push({name,tle1,tle2,satrec,noradId:parts[1]||'?',groupId,basePos:null,lat:null,lon:null,altKm,
-            info:{incl:incl.toFixed(1),period:Math.round(1440/meanMotion),altKm,meanMotion:meanMotion.toFixed(4)}});
-        }catch(e){}
-      });
-      document.getElementById('sat-status').style.display='';
-      renderSatMarkers(); updateSatListPanel();
-    }
-
-    function updateSatPositions(){
-      const now=new Date();
-      satData.forEach(sat=>{
-        try{
-          const pv=satellite.propagate(sat.satrec,now);
-          if(!pv||!pv.position) return;
-          const {x,y,z}=pv.position;
-          if(!isFinite(x)||!isFinite(y)||!isFinite(z)) return;
-          const gmst=satellite.gstime(now);
-          const geo=satellite.eciToGeodetic(pv.position,gmst);
-          const lat=satellite.degreesLat(geo.latitude);
-          const lon=satellite.degreesLong(geo.longitude);
-          const altKm=geo.height;
-          if(!isFinite(lat)||!isFinite(lon)||!isFinite(altKm)) return;
-          if(Math.abs(lat)>90||Math.abs(lon)>180) return;
-          sat.lat=lat; sat.lon=lon; sat.altKm=altKm;
-          const r=1.015+Math.min(Math.max(altKm,200),25000)*0.000055;
-          sat.basePos=latLonToVec3(lat,lon,r);
-          sat.speed=pv.velocity?Math.sqrt(pv.velocity.x**2+pv.velocity.y**2+pv.velocity.z**2)*3600:0;
-        }catch(e){sat.basePos=null;}
-      });
-      satMeshes.forEach(({mesh,ring,sat})=>{
-        if(sat.basePos&&isFinite(sat.basePos.x)){
-          mesh.userData.basePos=sat.basePos.clone();
-          if(ring) ring.userData.basePos=sat.basePos.clone();
-        }
-      });
-    }
-
-    function renderSatMarkers(){
-      satMeshes.forEach(({mesh,ring})=>{
-        scene.remove(mesh); mesh.material.dispose();
-        if(ring){scene.remove(ring); ring.material.dispose();}
-      });
-      satMeshes.length=0;
-      if(!showSats){rebuildRayTargets();return;}
-      updateSatPositions();
-      const visible=satData.filter(s=>s.basePos&&isFinite(s.basePos.x)&&isFinite(s.basePos.y)).slice(0,150);
-      visible.forEach(sat=>{
-        const col=sat.groupId==='military'?new THREE.Color(0xFF4400):
-                  sat.groupId==='starlink'?new THREE.Color(0x88AAFF):
-                  sat.groupId==='gps'||sat.groupId==='gnss'?new THREE.Color(0x00FF88):
-                  sat.groupId==='weather'?new THREE.Color(0xFFCC00):
+      function renderSatMarkers() {
+        satMeshes.forEach(({ mesh, ring }) => {
+          scene.remove(mesh); mesh.material.dispose();
+          if (ring) { scene.remove(ring); ring.material.dispose(); }
+        });
+        satMeshes.length = 0;
+        if (!showSats) { rebuildRayTargets(); return; }
+        updateSatPositions();
+        const visible = satData.filter(s => s.basePos && isFinite(s.basePos.x) && isFinite(s.basePos.y)).slice(0, 150);
+        visible.forEach(sat => {
+          const col = sat.groupId === 'military' ? new THREE.Color(0xFF4400) :
+            sat.groupId === 'starlink' ? new THREE.Color(0x88AAFF) :
+              sat.groupId === 'gps' || sat.groupId === 'gnss' ? new THREE.Color(0x00FF88) :
+                sat.groupId === 'weather' ? new THREE.Color(0xFFCC00) :
                   new THREE.Color(0x00FFFF);
-        const mesh=new THREE.Mesh(satGeo,new THREE.MeshBasicMaterial({color:col}));
-        mesh.position.copy(sat.basePos);
-        mesh.userData={type:'satellite',sat,basePos:sat.basePos.clone()};
-        const ring=new THREE.Mesh(satRingGeo,new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.35,side:THREE.DoubleSide}));
-        ring.position.copy(sat.basePos);
-        ring.userData={phase:Math.random()*Math.PI*2,basePos:sat.basePos.clone()};
-        scene.add(mesh); scene.add(ring);
-        satMeshes.push({mesh,ring,sat,basePos:sat.basePos.clone()});
-      });
-      document.getElementById('badge-sats').textContent=`◉ SATS: ${visible.length}`;
-      document.getElementById('badge-sats').classList.add('active');
-      rebuildRayTargets();
-    }
+          const mesh = new THREE.Mesh(satGeo, new THREE.MeshBasicMaterial({ color: col }));
+          mesh.position.copy(sat.basePos);
+          mesh.userData = { type: 'satellite', sat, basePos: sat.basePos.clone() };
+          const ring = new THREE.Mesh(satRingGeo, new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.35, side: THREE.DoubleSide }));
+          ring.position.copy(sat.basePos);
+          ring.userData = { phase: Math.random() * Math.PI * 2, basePos: sat.basePos.clone() };
+          scene.add(mesh); scene.add(ring);
+          satMeshes.push({ mesh, ring, sat, basePos: sat.basePos.clone() });
+        });
+        document.getElementById('badge-sats').textContent = `◉ SATS: ${visible.length}`;
+        document.getElementById('badge-sats').classList.add('active');
+        rebuildRayTargets();
+      }
 
-    function updateSatListPanel(){
-      const items=document.getElementById('sat-items');
-      const count=document.getElementById('sat-count');
-      count.textContent=`(${satData.length})`;
-      items.innerHTML=satData.slice(0,40).map((s,i)=>`
+      function updateSatListPanel() {
+        const items = document.getElementById('sat-items');
+        const count = document.getElementById('sat-count');
+        count.textContent = `(${satData.length})`;
+        items.innerHTML = satData.slice(0, 40).map((s, i) => `
         <div class="satpi" onclick="focusSat(${i})">
           <div class="satpn">${s.name}</div>
-          <div class="satps">ALT: ${s.altKm?Math.round(s.altKm)+'KM':'—'} · ${s.groupId.toUpperCase()}</div>
+          <div class="satps">ALT: ${s.altKm ? Math.round(s.altKm) + 'KM' : '—'} · ${s.groupId.toUpperCase()}</div>
         </div>`).join('');
-    }
-
-    window.focusSat=function(idx){
-      const sat=satData[idx];
-      if(!sat||!sat.lat) return;
-      flyTo(sat.lat,sat.lon);
-      const W=canvas.clientWidth||CW, H=canvas.clientHeight||CH;
-      setTimeout(()=>showSatCard(sat,W*0.3,H*0.3),600);
-    };
-
-    // ============================================================
-    //  MILITARY FLIGHT TRACKING MODULE
-    // ============================================================
-    let flightData=[];
-    let showFlights=false;
-    let satUpdateInterval=null;
-    let fltUpdateInterval=null;
-
-    const isMilHex=hex=>hex&&/^(ae|43c|43d|43e|43f|440|441|442)/i.test(hex);
-    const MIL_CALLSIGN=/^(REACH|RCH|SPAR|ARMY|NAVY|PAT|SAM|GOLD|HAWK|VIPER|IRON|STEEL|WOLF|RANGER|BEAR|EAGLE|FALCON|COBRA|RAPTOR|GHOST|PHANTOM|SHADOW|REAPER|PREDATOR|SENTINEL|WARRIOR|CNV|MAGIC|BOXER|BUCK|DUKE|KING|ATLAS|RRR|MARAUDER|HAVOC|DRAGON|SKULL|JOLLY)/i;
-
-    async function fetchMilitaryFlights(){
-      let flights=[];
-
-      // 1) ADS-B Exchange (requires API key)
-      if(typeof ADSBX_API_KEY!=='undefined'&&ADSBX_API_KEY){
-        try{
-          const ctrl=new AbortController(); setTimeout(()=>ctrl.abort(),8000);
-          const r=await fetch('https://adsbexchange-com1.p.rapidapi.com/v2/mil/',{
-            signal:ctrl.signal,
-            headers:{'X-RapidAPI-Key':ADSBX_API_KEY,'X-RapidAPI-Host':'adsbexchange-com1.p.rapidapi.com'}
-          });
-          if(r.ok){
-            const data=await r.json();
-            flights=(data.ac||[]).filter(a=>a.lat&&a.lon&&!a.gnd).map(a=>({
-              callsign:(a.flight||a.r||'UNKNOWN').trim(),
-              lat:parseFloat(a.lat),lon:parseFloat(a.lon),
-              alt:Math.round(parseFloat(a.alt_baro)||0),
-              speed:Math.round(parseFloat(a.gs)||0),
-              heading:parseFloat(a.track)||0,
-              hex:a.hex||'',country:'USA',type:a.t||'MIL',reg:a.r||''
-            }));
-          }
-        }catch(e){}
       }
 
-      // 2) adsb.fi military endpoint — no key needed, good global coverage
-      if(flights.length===0){
-        try{
-          const ctrl=new AbortController(); setTimeout(()=>ctrl.abort(),10000);
-          const r=await fetch('https://api.adsb.fi/v1/mil',{signal:ctrl.signal});
-          if(r.ok){
-            const data=await r.json();
-            flights=(data.aircraft||data.ac||[])
-              .filter(a=>a.lat!=null&&a.lon!=null&&a.alt_baro!=='ground')
-              .slice(0,300)
-              .map(a=>({
-                callsign:(a.flight||a.r||a.hex||'MIL').trim(),
-                lat:parseFloat(a.lat),lon:parseFloat(a.lon),
-                alt:Math.round(parseFloat(a.alt_baro)||0),
-                speed:Math.round(parseFloat(a.gs)||0),
-                heading:parseFloat(a.track)||0,
-                hex:a.hex||'',country:'MIL',type:a.t||'MIL',reg:a.r||''
-              }))
-              .filter(f=>isFinite(f.lat)&&isFinite(f.lon));
-          }
-        }catch(e){}
-      }
+      window.focusSat = function (idx) {
+        const sat = satData[idx];
+        if (!sat || !sat.lat) return;
+        flyTo(sat.lat, sat.lon);
+        const W = canvas.clientWidth || CW, H = canvas.clientHeight || CH;
+        setTimeout(() => showSatCard(sat, W * 0.3, H * 0.3), 600);
+      };
 
-      // 3) OpenSky fallback
-      if(flights.length===0){
-        try{
-          const ctrl=new AbortController(); setTimeout(()=>ctrl.abort(),12000);
-          const r=await fetch('https://opensky-network.org/api/states/all',{signal:ctrl.signal});
-          if(r.ok){
-            const data=await r.json();
-            flights=(data.states||[])
-              .filter(s=>s[5]!=null&&s[6]!=null&&s[8]===false&&
-                (isMilHex(s[0])||MIL_CALLSIGN.test((s[1]||''))))
-              .slice(0,300)
-              .map(s=>({
-                callsign:(s[1]||s[0]||'MIL').trim(),
-                lat:parseFloat(s[6]),lon:parseFloat(s[5]),
-                alt:Math.round((s[7]||0)*3.281),
-                speed:Math.round((s[9]||0)*1.944),
-                heading:parseFloat(s[10])||0,
-                hex:s[0],country:s[2]||'?',type:'MIL',reg:''
-              }))
-              .filter(f=>isFinite(f.lat)&&isFinite(f.lon));
-          }
-        }catch(e){}
-      }
+      // ============================================================
+      //  MILITARY FLIGHT TRACKING MODULE
+      // ============================================================
+      let flightData = [];
+      let showFlights = false;
+      let satUpdateInterval = null;
+      let fltUpdateInterval = null;
 
-      flightData=flights;
-      renderFlightMarkers();
-    }
+      const isMilHex = hex => hex && /^(ae|43c|43d|43e|43f|440|441|442)/i.test(hex);
+      const MIL_CALLSIGN = /^(REACH|RCH|SPAR|ARMY|NAVY|PAT|SAM|GOLD|HAWK|VIPER|IRON|STEEL|WOLF|RANGER|BEAR|EAGLE|FALCON|COBRA|RAPTOR|GHOST|PHANTOM|SHADOW|REAPER|PREDATOR|SENTINEL|WARRIOR|CNV|MAGIC|BOXER|BUCK|DUKE|KING|ATLAS|RRR|MARAUDER|HAVOC|DRAGON|SKULL|JOLLY)/i;
 
-    function renderFlightMarkers(){
-      flightMeshes.forEach(({mesh})=>{scene.remove(mesh); mesh.material.dispose();});
-      flightMeshes.length=0;
-      if(!showFlights||flightData.length===0){
-        document.getElementById('badge-flt').textContent='✈ MIL-AIR: OFF';
-        document.getElementById('badge-flt').classList.remove('flt-active');
-        rebuildRayTargets(); return;
-      }
-      flightData.forEach(flight=>{
-        if(!isFinite(flight.lat)||!isFinite(flight.lon)) return;
-        if(flight.lat<-90||flight.lat>90||flight.lon<-180||flight.lon>180) return;
-        const mesh=new THREE.Mesh(fltGeo,new THREE.MeshBasicMaterial({color:new THREE.Color(0xFFDD00)}));
-        const pos=latLonToVec3(flight.lat,flight.lon,1.016);
-        if(!isFinite(pos.x)||!isFinite(pos.y)||!isFinite(pos.z)) return;
-        mesh.position.copy(pos);
-        const up=pos.clone().normalize();
-        mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),up);
-        const rot=new THREE.Quaternion();
-        rot.setFromAxisAngle(up,(flight.heading||0)*Math.PI/180);
-        mesh.quaternion.premultiply(rot);
-        mesh.userData={type:'flight',flight,basePos:pos.clone()};
-        scene.add(mesh);
-        flightMeshes.push({mesh,flight,basePos:pos.clone()});
-      });
-      document.getElementById('badge-flt').textContent=`✈ MIL-AIR: ${flightMeshes.length}`;
-      document.getElementById('badge-flt').classList.add('flt-active');
-      document.getElementById('flt-status').style.display='';
-      rebuildRayTargets();
-    }
+      async function fetchMilitaryFlights() {
+        let flights = [];
 
-
-    // ============================================================
-    //  TRACK VISUALIZATION MODULE
-    // ============================================================
-    let trackingObj=null;     // {type:'sat'|'flight', data:satObj|flightObj}
-    let trackLatLons=[];      // [{lat,lon}] stored in geo coords
-    let trackLine=null;       // THREE.Line
-    let trackUpdateInt=null;
-
-    function startTracking(type,obj){
-      stopTracking();
-      trackingObj={type,obj};
-      const bar=document.getElementById('trackbar');
-      const label=document.getElementById('trackbar-label');
-      bar.style.display='block';
-
-      if(type==='sat'){
-        bar.className=''; // cyan
-        label.textContent='◉ TRACKING: '+obj.name;
-        computeOrbitTrack(obj);
-        trackUpdateInt=setInterval(()=>computeOrbitTrack(obj),30000);
-      } else {
-        bar.className='flt';
-        label.textContent='✈ TRACKING: '+(obj.callsign||obj.hex);
-        computeFlightPath(obj);
-        trackUpdateInt=setInterval(()=>fetchMilitaryFlights().then(()=>{
-          const updated=flightData.find(f=>f.hex===obj.hex);
-          if(updated) computeFlightPath(updated);
-        }),30000);
-      }
-    }
-
-    function stopTracking(){
-      if(trackLine){scene.remove(trackLine); trackLine=null;}
-      if(trackUpdateInt){clearInterval(trackUpdateInt); trackUpdateInt=null;}
-      trackingObj=null; trackLatLons=[];
-      document.getElementById('trackbar').style.display='none';
-    }
-
-    function computeOrbitTrack(sat){
-      // Ground track: propagate 90 minutes ahead at 2-min steps
-      trackLatLons=[];
-      const now=new Date();
-      for(let m=0;m<=90;m+=2){
-        const t=new Date(now.getTime()+m*60000);
-        try{
-          const pv=satellite.propagate(sat.satrec,t);
-          if(!pv.position) continue;
-          const gmst=satellite.gstime(t);
-          const geo=satellite.eciToGeodetic(pv.position,gmst);
-          trackLatLons.push({lat:satellite.degreesLat(geo.latitude),lon:satellite.degreesLong(geo.longitude)});
-        }catch(e){}
-      }
-      buildTrackLine(new THREE.Color(0x00FFFF));
-    }
-
-    function computeFlightPath(flight){
-      // Project forward 30 min at current heading/speed
-      trackLatLons=[];
-      const R=6371; // Earth radius km
-      const speedKmh=flight.speed*1.852; // knots to km/h
-      const distKm30=speedKmh*0.5; // 30 minutes
-      // Add a few past positions (we only have current pos, so just show future)
-      for(let m=-5;m<=30;m+=2){
-        const dist=speedKmh*(m/60);
-        const d=dist/R;
-        const hdg=flight.heading*Math.PI/180;
-        const lat1=flight.lat*Math.PI/180;
-        const lon1=flight.lon*Math.PI/180;
-        const lat2=Math.asin(Math.sin(lat1)*Math.cos(d)+Math.cos(lat1)*Math.sin(d)*Math.cos(hdg));
-        const lon2=lon1+Math.atan2(Math.sin(hdg)*Math.sin(d)*Math.cos(lat1),Math.cos(d)-Math.sin(lat1)*Math.sin(lat2));
-        trackLatLons.push({lat:lat2*180/Math.PI,lon:lon2*180/Math.PI});
-      }
-      buildTrackLine(new THREE.Color(0xFFDD00));
-    }
-
-    const _tmpV=new THREE.Vector3();
-    function buildTrackLine(color){
-      if(trackLine){scene.remove(trackLine); trackLine=null;}
-      if(trackLatLons.length<2) return;
-
-      // Split at antimeridian crossings (lon jump >180°)
-      const segments=[];
-      let current=[trackLatLons[0]];
-      for(let i=1;i<trackLatLons.length;i++){
-        const dLon=Math.abs(trackLatLons[i].lon-trackLatLons[i-1].lon);
-        if(dLon>180){segments.push(current); current=[trackLatLons[i]];}
-        else{current.push(trackLatLons[i]);}
-      }
-      segments.push(current);
-
-      // Build geometry from all segments (broken by NaN gaps)
-      const allPts=[];
-      segments.forEach((seg,si)=>{
-        seg.forEach(({lat,lon})=>{
-          const v=latLonToVec3(lat,lon,1.025);
-          allPts.push(v.x,v.y,v.z);
-        });
-        if(si<segments.length-1) allPts.push(NaN,NaN,NaN);
-      });
-
-      const geo=new THREE.BufferGeometry();
-      geo.setAttribute('position',new THREE.Float32BufferAttribute(allPts,3));
-      trackLine=new THREE.Line(geo,new THREE.LineBasicMaterial({color,transparent:true,opacity:0.75,linewidth:2}));
-      scene.add(trackLine);
-    }
-
-    // Recompute track line positions after globe rotation (applied in animate)
-    let _lastTrackLat=null;
-    function updateTrackLineForRotation(quat){
-      if(!trackLine||trackLatLons.length===0) return;
-      const pts=trackLine.geometry.attributes.position;
-      const arr=pts.array;
-      let j=0,segIdx=0;
-      // Rebuild positions applying globe quaternion
-      const segments=[];
-      let cur=[];
-      trackLatLons.forEach((ll,i)=>{
-        cur.push(ll);
-        if(i<trackLatLons.length-1){
-          const dLon=Math.abs(trackLatLons[i+1].lon-ll.lon);
-          if(dLon>180){segments.push(cur);cur=[];}
+        // 1) ADS-B Exchange (requires API key)
+        if (typeof ADSBX_API_KEY !== 'undefined' && ADSBX_API_KEY) {
+          try {
+            const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 8000);
+            const r = await fetch('https://adsbexchange-com1.p.rapidapi.com/v2/mil/', {
+              signal: ctrl.signal,
+              headers: { 'X-RapidAPI-Key': ADSBX_API_KEY, 'X-RapidAPI-Host': 'adsbexchange-com1.p.rapidapi.com' }
+            });
+            if (r.ok) {
+              const data = await r.json();
+              flights = (data.ac || []).filter(a => a.lat && a.lon && !a.gnd).map(a => ({
+                callsign: (a.flight || a.r || 'UNKNOWN').trim(),
+                lat: parseFloat(a.lat), lon: parseFloat(a.lon),
+                alt: Math.round(parseFloat(a.alt_baro) || 0),
+                speed: Math.round(parseFloat(a.gs) || 0),
+                heading: parseFloat(a.track) || 0,
+                hex: a.hex || '', country: 'USA', type: a.t || 'MIL', reg: a.r || ''
+              }));
+            }
+          } catch (e) { }
         }
-      });
-      segments.push(cur);
 
-      let pos=0;
-      segments.forEach((seg,si)=>{
-        seg.forEach(({lat,lon})=>{
-          const v=latLonToVec3(lat,lon,1.025).applyQuaternion(quat);
-          arr[pos++]=v.x; arr[pos++]=v.y; arr[pos++]=v.z;
-        });
-        if(si<segments.length-1){arr[pos++]=NaN;arr[pos++]=NaN;arr[pos++]=NaN;}
-      });
-      pts.needsUpdate=true;
-    }
-
-    // ── CURRENT OBJECT BEING SHOWN IN CARD (for track button)
-    let currentCardObj=null;
-
-    window.startTrackingFromCard=function(){
-      if(!currentCardObj) return;
-      startTracking(currentCardObj.type,currentCardObj.data);
-      closeCard();
-    };
-
-    // ── INTERACTION
-    const raycaster=new THREE.Raycaster();
-    raycaster.params.Mesh={backfaceCulling:false};
-    const mouse=new THREE.Vector2();
-
-    function getCanvasXY(e){const r=canvas.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top,cx:e.clientX,cy:e.clientY};}
-    function canvasToNDC(x,y){const W=canvas.clientWidth||CW,H=canvas.clientHeight||CH;return{x:(x/W)*2-1,y:-(y/H)*2+1};}
-
-    canvas.addEventListener('mousedown',e=>{dragging=true;isDrag=false;dragDist=0;autoRotate=false;const p=getCanvasXY(e);prevX=p.x;prevY=p.y;});
-    canvas.addEventListener('mouseup',()=>{dragging=false;});
-
-    let lastHover=0;
-    canvas.addEventListener('mousemove',e=>{
-      const p=getCanvasXY(e);
-      if(dragging){
-        const dx=p.x-prevX,dy=p.y-prevY;
-        dragDist+=Math.abs(dx)+Math.abs(dy);
-        if(dragDist>5)isDrag=true;
-        targetRotY+=dx*0.005; targetRotX+=dy*0.004;
-        targetRotX=Math.max(-Math.PI/2.1,Math.min(Math.PI/2.1,targetRotX));
-        prevX=p.x;prevY=p.y; return;
-      }
-      const now=performance.now();
-      if(now-lastHover<60)return;
-      lastHover=now;
-      const ndc=canvasToNDC(p.x,p.y);
-      mouse.x=ndc.x;mouse.y=ndc.y;
-      raycaster.setFromCamera(mouse,camera);
-      const hits=raycaster.intersectObjects(rayTargets);
-      const tt=document.getElementById('tt');
-      if(hits.length&&hits[0].object.userData.type){
-        const ud=hits[0].object.userData;
-        tt.style.display='block';
-        tt.style.left=(p.x+14)+'px'; tt.style.top=(p.y-6)+'px';
-        if(ud.type==='hotspot'){
-          tt.className=''; tt.textContent=ud.hotspot.label+' — '+ud.hotspot.sev.toUpperCase();
-        } else if(ud.type==='satellite'){
-          tt.className='sat'; tt.textContent='◉ '+ud.sat.name+(ud.sat.altKm?' — '+Math.round(ud.sat.altKm)+'KM':'');
-        } else if(ud.type==='flight'){
-          tt.className='flt'; tt.textContent='✈ '+(ud.flight.callsign||ud.flight.hex)+' — '+ud.flight.alt+'FT';
-        } else if(ud.type==='vessel'){
-          tt.className=''; tt.style.borderColor='#4488FF';
-          tt.textContent='🚢 '+(ud.vessel.name||'VESSEL')+' — '+ud.vessel.speed.toFixed(0)+'KTS';
+        // 2) adsb.fi military endpoint — no key needed, good global coverage
+        if (flights.length === 0) {
+          try {
+            const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 10000);
+            const r = await fetch('https://api.adsb.fi/v1/mil', { signal: ctrl.signal });
+            if (r.ok) {
+              const data = await r.json();
+              flights = (data.aircraft || data.ac || [])
+                .filter(a => a.lat != null && a.lon != null && a.alt_baro !== 'ground')
+                .slice(0, 300)
+                .map(a => ({
+                  callsign: (a.flight || a.r || a.hex || 'MIL').trim(),
+                  lat: parseFloat(a.lat), lon: parseFloat(a.lon),
+                  alt: Math.round(parseFloat(a.alt_baro) || 0),
+                  speed: Math.round(parseFloat(a.gs) || 0),
+                  heading: parseFloat(a.track) || 0,
+                  hex: a.hex || '', country: 'MIL', type: a.t || 'MIL', reg: a.r || ''
+                }))
+                .filter(f => isFinite(f.lat) && isFinite(f.lon));
+            }
+          } catch (e) { }
         }
-        canvas.style.cursor='pointer';
-      } else {tt.style.display='none';canvas.style.cursor='default';}
-    });
 
-    canvas.addEventListener('click',e=>{
-      if(isDrag)return;
-      const p=getCanvasXY(e);
-      const ndc=canvasToNDC(p.x,p.y);
-      mouse.x=ndc.x;mouse.y=ndc.y;
-      raycaster.setFromCamera(mouse,camera);
-      const hits=raycaster.intersectObjects(rayTargets);
-      if(hits.length&&hits[0].object.userData.type){
-        const ud=hits[0].object.userData;
-        if(ud.type==='hotspot') showHotspotCard(ud.hotspot,p.x,p.y);
-        else if(ud.type==='satellite') showSatCard(ud.sat,p.x,p.y);
-        else if(ud.type==='flight') showFlightCard(ud.flight,p.x,p.y);
-        else if(ud.type==='vessel') showVesselCard(ud.vessel,p.x,p.y);
-      } else {closeCard();}
-    });
+        // 3) OpenSky fallback
+        if (flights.length === 0) {
+          try {
+            const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 12000);
+            const r = await fetch('https://opensky-network.org/api/states/all', { signal: ctrl.signal });
+            if (r.ok) {
+              const data = await r.json();
+              flights = (data.states || [])
+                .filter(s => s[5] != null && s[6] != null && s[8] === false &&
+                  (isMilHex(s[0]) || MIL_CALLSIGN.test((s[1] || ''))))
+                .slice(0, 300)
+                .map(s => ({
+                  callsign: (s[1] || s[0] || 'MIL').trim(),
+                  lat: parseFloat(s[6]), lon: parseFloat(s[5]),
+                  alt: Math.round((s[7] || 0) * 3.281),
+                  speed: Math.round((s[9] || 0) * 1.944),
+                  heading: parseFloat(s[10]) || 0,
+                  hex: s[0], country: s[2] || '?', type: 'MIL', reg: ''
+                }))
+                .filter(f => isFinite(f.lat) && isFinite(f.lon));
+            }
+          } catch (e) { }
+        }
 
-    canvas.addEventListener('wheel',e=>{
-      e.preventDefault();
-      camera.position.z=Math.max(1.4,Math.min(5.0,camera.position.z+e.deltaY*0.001));
-    },{passive:false});
-
-    function closeCard(){
-      const ic=document.getElementById('ic');
-      ic.style.display='none'; ic.className='';
-      currentCardObj=null;
-      document.getElementById('ic-track-btn').style.display='none';
-    }
-    window.closeCard=closeCard;
-
-    function positionCard(px,py){
-      const ic=document.getElementById('ic');
-      const W=canvas.clientWidth||CW,H=canvas.clientHeight||CH;
-      const IW=300,IH=260;
-      let x=px+16,y=py-20;
-      if(x+IW>W-10)x=px-IW-10;
-      if(y+IH>H-10)y=H-IH-10;
-      if(y<50)y=50; if(x<10)x=10;
-      ic.style.left=x+'px'; ic.style.top=y+'px'; ic.style.display='block';
-    }
-
-    function showHotspotCard(h,px,py){
-      currentCardObj=null;
-      const ic=document.getElementById('ic');
-      document.getElementById('ic-sev').textContent=h.sev.toUpperCase()+' — '+h.type.toUpperCase();
-      document.getElementById('ic-ttl').textContent=h.title||h.label;
-      document.getElementById('ic-body').textContent=h.body||'';
-      document.getElementById('ic-mkt').textContent=h.mkt?'📊 MARKET: '+h.mkt:'';
-      document.getElementById('ic-tags').innerHTML=(h.tags||[]).map(t=>`<span class="ictag">${t}</span>`).join('');
-      document.getElementById('ic-date').textContent='UPDATED: LIVE';
-      document.getElementById('ic-track-btn').style.display='none';
-      ic.className='show '+(h.sev||'elevated');
-      positionCard(px,py);
-    }
-
-    function showSatCard(sat,px,py){
-      currentCardObj={type:'sat',data:sat};
-      const ic=document.getElementById('ic');
-      document.getElementById('ic-sev').textContent='SATELLITE — '+sat.groupId.toUpperCase();
-      document.getElementById('ic-ttl').textContent=sat.name;
-      const alt=sat.altKm?Math.round(sat.altKm)+'KM':'N/A';
-      const spd=sat.speed?Math.round(sat.speed)+' KM/H':'N/A';
-      document.getElementById('ic-body').textContent=
-        `ALTITUDE: ${alt}\nPERIOD: ${sat.info.period} MIN\nINCLINATION: ${sat.info.incl}°\nSPEED: ${spd}\nNORAD ID: ${sat.noradId||'—'}`;
-      document.getElementById('ic-mkt').textContent='';
-      document.getElementById('ic-tags').innerHTML=`<span class="ictag">${sat.groupId.toUpperCase()}</span><span class="ictag">NORAD ${sat.noradId||'?'}</span>`;
-      document.getElementById('ic-date').textContent='POSITION: LIVE PROPAGATED';
-      const btn=document.getElementById('ic-track-btn');
-      btn.textContent='◉ TRACK ORBIT'; btn.className=''; btn.style.display='block';
-      ic.className='show satellite';
-      positionCard(px,py);
-    }
-
-    function showFlightCard(flight,px,py){
-      currentCardObj={type:'flight',data:flight};
-      const ic=document.getElementById('ic');
-      document.getElementById('ic-sev').textContent='MILITARY AIRCRAFT — '+flight.country;
-      document.getElementById('ic-ttl').textContent=(flight.callsign||flight.hex)||'UNKNOWN';
-      // Body with photo
-      let bodyText=
-        `ALTITUDE: ${flight.alt.toLocaleString()} FT\nSPEED: ${flight.speed} KTS\nHEADING: ${Math.round(flight.heading)}°\nICAO24: ${flight.hex||'—'}\nTYPE: ${flight.type||'MILITARY'}\nREG: ${flight.reg||'—'}`;
-      document.getElementById('ic-body').textContent=bodyText;
-      // Add aircraft photo from planespotters.net
-      let photoHtml='';
-      if(flight.hex){
-        photoHtml=`<div style="margin-top:6px"><img src="https://api.planespotters.net/pub/photos/hex/${flight.hex}" style="width:100%;max-width:260px;border-radius:3px;border:1px solid #222" onerror="this.style.display='none'"/></div>`;
-      }
-      document.getElementById('ic-mkt').innerHTML=photoHtml;
-      document.getElementById('ic-tags').innerHTML=`<span class="ictag">MIL</span><span class="ictag">${flight.country}</span><span class="ictag">${flight.type||'UNKN'}</span>`;
-      document.getElementById('ic-date').textContent='POSITION: LIVE ADS-B';
-      const btn=document.getElementById('ic-track-btn');
-      btn.textContent='✈ TRACK FLIGHT PATH'; btn.className='flt'; btn.style.display='block';
-      ic.className='show flight';
-      positionCard(px,py);
-    }
-
-    function showVesselCard(vessel,px,py){
-      currentCardObj=null;
-      const ic=document.getElementById('ic');
-      document.getElementById('ic-sev').textContent='MARITIME VESSEL — '+vessel.type.toUpperCase();
-      document.getElementById('ic-ttl').textContent=vessel.name||'UNKNOWN VESSEL';
-      document.getElementById('ic-body').textContent=
-        `MMSI: ${vessel.mmsi||'—'}\nSPEED: ${vessel.speed.toFixed(1)} KTS\nHEADING: ${Math.round(vessel.heading)}°\nTYPE: ${vessel.type||'—'}\nPOS: ${vessel.lat.toFixed(3)}°, ${vessel.lon.toFixed(3)}°`;
-      document.getElementById('ic-mkt').textContent='';
-      document.getElementById('ic-tags').innerHTML=`<span class="ictag">AIS</span><span class="ictag">${vessel.type.toUpperCase()}</span><span class="ictag">MMSI ${vessel.mmsi||'?'}</span>`;
-      document.getElementById('ic-date').textContent='POSITION: AIS LIVE';
-      document.getElementById('ic-track-btn').style.display='none';
-      ic.className='show elevated';
-      positionCard(px,py);
-    }
-
-    // ── LAYER TOGGLES
-    window.toggleSatLayer=function(btn){
-      showSats=!showSats;
-      if(showSats){
-        btn.classList.add('sat-on');
-        document.getElementById('satpanel').style.display='block';
-        document.getElementById('tp').style.display='none';
-        fetchSatTLEs(); // renderSatMarkers() is called inside fetchSatTLEs on completion
-        if(satUpdateInterval) clearInterval(satUpdateInterval);
-        satUpdateInterval = setInterval(updateSatPositions,30000);
-      } else {
-        btn.classList.remove('sat-on');
-        document.getElementById('satpanel').style.display='none';
-        document.getElementById('tp').style.display='block';
-        document.getElementById('badge-sats').textContent='◉ SATS: OFF';
-        document.getElementById('badge-sats').classList.remove('active');
-        if(satUpdateInterval){ clearInterval(satUpdateInterval); satUpdateInterval=null; }
-        if(trackingObj?.type==='sat') stopTracking();
-        renderSatMarkers();
-      }
-    };
-
-    window.toggleFlightLayer=function(btn){
-      showFlights=!showFlights;
-      if(showFlights){
-        btn.classList.add('flt-on');
-        fetchMilitaryFlights();
-        if(fltUpdateInterval) clearInterval(fltUpdateInterval);
-        fltUpdateInterval = setInterval(fetchMilitaryFlights,60000);
-      } else {
-        btn.classList.remove('flt-on');
-        if(fltUpdateInterval){ clearInterval(fltUpdateInterval); fltUpdateInterval=null; }
-        if(trackingObj?.type==='flight') stopTracking();
+        flightData = flights;
         renderFlightMarkers();
       }
-    };
 
-    // ── FLY TO
-    function flyTo(lat,lon){
-      targetRotY=-(90+lon)*Math.PI/180;
-      targetRotX=lat*Math.PI/180*0.5;
-      autoRotate=false; camera.position.z=2.3;
-    }
-
-    function flyToTheater(lat,lon,label){
-      flyTo(lat,lon);
-      const h=HOTSPOTS.find(h=>Math.abs(h.lat-lat)<3&&Math.abs(h.lon-lon)<6);
-      if(h){const W=canvas.clientWidth||CW,H=canvas.clientHeight||CH;setTimeout(()=>showHotspotCard(h,W*0.25,H*0.3),700);}
-    }
-    window.flyTo=flyTo; window.flyToTheater=flyToTheater;
-
-    function setFilter(f,btn){
-      activeFilter=f;
-      document.querySelectorAll('.fbtn:not(#sat-btn):not(#flt-btn)').forEach(b=>b.classList.remove('on'));
-      if(btn)btn.classList.add('on');
-      renderMarkers();
-    }
-    window.setFilter=setFilter;
-
-    function addCustomEvent(){
-      const title=document.getElementById('ae-title').value;
-      const lat=parseFloat(document.getElementById('ae-lat').value);
-      const lon=parseFloat(document.getElementById('ae-lon').value);
-      if(!title||isNaN(lat)||isNaN(lon))return;
-      customEvents.push({lat,lon,label:title,sev:document.getElementById('ae-sev').value,type:'custom',title,body:document.getElementById('ae-desc').value,mkt:document.getElementById('ae-mkt').value,tags:['CUSTOM']});
-      document.getElementById('adddlg').classList.remove('show');
-      renderMarkers();
-    }
-    window.addCustomEvent=addCustomEvent;
-    window.stopTracking=stopTracking;
-
-    // ── ANIMATION LOOP
-    let lastT=0;
-    const _quat=new THREE.Quaternion();
-    const _euler=new THREE.Euler();
-    const _rp=new THREE.Vector3();
-    const _camDir=new THREE.Vector3();
-    const _norm=new THREE.Vector3();
-    let frameCount=0;
-
-    function animate(t){
-      if (!isAnimating) return;   // paused — IntersectionObserver will restart us
-      requestAnimationFrame(animate);
-      try{
-      const dt=Math.min((t-lastT)/1000,0.05); lastT=t; frameCount++;
-      if(autoRotate) targetRotY+=dt*0.065;
-      rotX+=(targetRotX-rotX)*0.08;
-      rotY+=(targetRotY-rotY)*0.08;
-      if(globeMesh){globeMesh.rotation.x=rotX;globeMesh.rotation.y=rotY;}
-
-      _euler.set(rotX,rotY,0,'XYZ');
-      _quat.setFromEuler(_euler);
-
-      // Hotspot markers
-      markers.forEach(({mesh,ring,glow,basePos})=>{
-        _rp.copy(basePos).applyQuaternion(_quat);
-        mesh.position.copy(_rp); ring.position.copy(_rp); glow.position.copy(_rp);
-        ring.quaternion.copy(camera.quaternion);
-        ring.userData.phase=(ring.userData.phase||0)+dt*2.1;
-        const sinP=Math.sin(ring.userData.phase);
-        ring.material.opacity=0.18+0.38*sinP;
-        const s=1+0.22*sinP;
-        ring.scale.set(s,s,1);
-        glow.material.opacity=0.03+0.1*Math.abs(Math.sin(ring.userData.phase*.6));
-        _camDir.copy(camera.position).sub(_rp).normalize();
-        _norm.copy(_rp).normalize();
-        const vis=_camDir.dot(_norm)>0.06;
-        mesh.visible=ring.visible=glow.visible=vis;
-      });
-
-      // Satellite markers
-      satMeshes.forEach(({mesh,ring,sat})=>{
-        if(!sat.basePos) return;
-        _rp.copy(sat.basePos).applyQuaternion(_quat);
-        mesh.position.copy(_rp);
-        if(ring){
-          ring.position.copy(_rp);
-          ring.quaternion.copy(camera.quaternion);
-          ring.userData.phase=(ring.userData.phase||0)+dt*1.5;
-          ring.material.opacity=0.15+0.25*Math.abs(Math.sin(ring.userData.phase));
+      function renderFlightMarkers() {
+        flightMeshes.forEach(({ mesh }) => { scene.remove(mesh); mesh.material.dispose(); });
+        flightMeshes.length = 0;
+        if (!showFlights || flightData.length === 0) {
+          document.getElementById('badge-flt').textContent = '✈ MIL-AIR: OFF';
+          document.getElementById('badge-flt').classList.remove('flt-active');
+          rebuildRayTargets(); return;
         }
-      });
+        flightData.forEach(flight => {
+          if (!isFinite(flight.lat) || !isFinite(flight.lon)) return;
+          if (flight.lat < -90 || flight.lat > 90 || flight.lon < -180 || flight.lon > 180) return;
+          const mesh = new THREE.Mesh(fltGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xFFDD00) }));
+          const pos = latLonToVec3(flight.lat, flight.lon, 1.016);
+          if (!isFinite(pos.x) || !isFinite(pos.y) || !isFinite(pos.z)) return;
+          mesh.position.copy(pos);
+          const up = pos.clone().normalize();
+          mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
+          const rot = new THREE.Quaternion();
+          rot.setFromAxisAngle(up, (flight.heading || 0) * Math.PI / 180);
+          mesh.quaternion.premultiply(rot);
+          mesh.userData = { type: 'flight', flight, basePos: pos.clone() };
+          scene.add(mesh);
+          flightMeshes.push({ mesh, flight, basePos: pos.clone() });
+        });
+        document.getElementById('badge-flt').textContent = `✈ MIL-AIR: ${flightMeshes.length}`;
+        document.getElementById('badge-flt').classList.add('flt-active');
+        document.getElementById('flt-status').style.display = '';
+        rebuildRayTargets();
+      }
 
-      // Flight markers — NaN-safe orientation
-      flightMeshes.forEach(({mesh,flight,basePos})=>{
-        _rp.copy(basePos).applyQuaternion(_quat);
-        mesh.position.copy(_rp);
-        const len=_rp.length();
-        if(len < 0.001) return;
-        const up=_rp.clone().divideScalar(len);
-        const dot=up.dot(new THREE.Vector3(0,1,0));
-        if(Math.abs(dot) > 0.9999){
-          mesh.quaternion.setFromAxisAngle(new THREE.Vector3(1,0,0), dot > 0 ? 0 : Math.PI);
+
+      // ============================================================
+      //  TRACK VISUALIZATION MODULE
+      // ============================================================
+      let trackingObj = null;     // {type:'sat'|'flight', data:satObj|flightObj}
+      let trackLatLons = [];      // [{lat,lon}] stored in geo coords
+      let trackLine = null;       // THREE.Line
+      let trackUpdateInt = null;
+
+      function startTracking(type, obj) {
+        stopTracking();
+        trackingObj = { type, obj };
+        const bar = document.getElementById('trackbar');
+        const label = document.getElementById('trackbar-label');
+        bar.style.display = 'block';
+
+        if (type === 'sat') {
+          bar.className = ''; // cyan
+          label.textContent = '◉ TRACKING: ' + obj.name;
+          computeOrbitTrack(obj);
+          trackUpdateInt = setInterval(() => computeOrbitTrack(obj), 30000);
         } else {
-          mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),up);
+          bar.className = 'flt';
+          label.textContent = '✈ TRACKING: ' + (obj.callsign || obj.hex);
+          computeFlightPath(obj);
+          trackUpdateInt = setInterval(() => fetchMilitaryFlights().then(() => {
+            const updated = flightData.find(f => f.hex === obj.hex);
+            if (updated) computeFlightPath(updated);
+          }), 30000);
         }
-        const rot2=new THREE.Quaternion();
-        rot2.setFromAxisAngle(up,flight.heading*Math.PI/180);
-        mesh.quaternion.premultiply(rot2);
-      });
-
-      // Vessel markers
-      vesselMeshes.forEach(({mesh,ring,vessel,basePos})=>{
-        _rp.copy(basePos).applyQuaternion(_quat);
-        mesh.position.copy(_rp);
-        if(ring){
-          ring.position.copy(_rp);
-          ring.quaternion.copy(camera.quaternion);
-          ring.userData.phase=(ring.userData.phase||0)+dt*1.8;
-          ring.material.opacity=0.15+0.22*Math.abs(Math.sin(ring.userData.phase));
-        }
-        _camDir.copy(camera.position).sub(_rp).normalize();
-        _norm.copy(_rp).normalize();
-        const vis=_camDir.dot(_norm)>0.04;
-        mesh.visible=vis;
-        if(ring) ring.visible=vis;
-      });
-
-      // Infrastructure lines rotation
-      infraLines.forEach(line=>{
-        line.quaternion.copy(_quat);
-      });
-
-      // Track line rotation (every 2 frames for performance)
-      if(trackLine&&trackLatLons.length>0&&frameCount%2===0){
-        updateTrackLineForRotation(_quat);
       }
 
-      renderer.render(scene,camera);
-      }catch(err){ /* prevent single bad frame from killing rAF loop */ }
-    }
-    // Pause/resume the rAF loop based on canvas visibility.
-    // When the user navigates to another Streamlit tab, CSS sets display:none,
-    // IntersectionObserver fires, we stop calling rAF — GPU/battery savings.
-    let isAnimating = false;
-    const _visObserver = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting) {
-        if (!isAnimating) { isAnimating = true; animate(performance.now()); }
-      } else {
-        isAnimating = false;
+      function stopTracking() {
+        if (trackLine) { scene.remove(trackLine); trackLine = null; }
+        if (trackUpdateInt) { clearInterval(trackUpdateInt); trackUpdateInt = null; }
+        trackingObj = null; trackLatLons = [];
+        document.getElementById('trackbar').style.display = 'none';
       }
-    }, { threshold: 0 });
-    _visObserver.observe(canvas);
 
-    // Resize — ResizeObserver catches iframe reflows that window.resize misses
-    const _ro = new ResizeObserver(() => {
-      const {w,h} = _getDims();
-      if(w>50 && h>50){ CW=w; CH=h; camera.aspect=w/h; camera.updateProjectionMatrix(); renderer.setSize(w,h); }
-    });
-    _ro.observe(canvas);
-    window.addEventListener('resize',()=>{
-      const {w,h} = _getDims();
-      CW=w; CH=h;
-      camera.aspect=w/h; camera.updateProjectionMatrix(); renderer.setSize(w,h);
-    });
+      function computeOrbitTrack(sat) {
+        // Full orbit track: compute orbital period from mean motion, then
+        // propagate backward 1/4 period and forward 3/4 period at 1-min steps
+        trackLatLons = [];
+        const now = new Date();
+        let periodMin = 90; // default LEO ~90 min
+        try {
+          // Mean motion (rev/day) → period in minutes
+          if (sat.satrec && sat.satrec.no) {
+            const revPerDay = sat.satrec.no * 1440 / (2 * Math.PI); // rad/min → rev/day
+            if (revPerDay > 0) periodMin = 1440 / revPerDay;
+          }
+        } catch (e) { }
+        periodMin = Math.max(85, Math.min(periodMin, 200)); // clamp to reasonable range
+        const backMin = Math.round(periodMin * 0.25);
+        const fwdMin = Math.round(periodMin * 0.75);
+        for (let m = -backMin; m <= fwdMin; m += 1) {
+          const t = new Date(now.getTime() + m * 60000);
+          try {
+            const pv = satellite.propagate(sat.satrec, t);
+            if (!pv.position) continue;
+            const gmst = satellite.gstime(t);
+            const geo = satellite.eciToGeodetic(pv.position, gmst);
+            trackLatLons.push({ lat: satellite.degreesLat(geo.latitude), lon: satellite.degreesLong(geo.longitude) });
+          } catch (e) { }
+        }
+        buildTrackLine(new THREE.Color(0x00FFFF));
+      }
+
+      function computeFlightPath(flight) {
+        // Project forward 30 min at current heading/speed
+        trackLatLons = [];
+        const R = 6371; // Earth radius km
+        const speedKmh = flight.speed * 1.852; // knots to km/h
+        const distKm30 = speedKmh * 0.5; // 30 minutes
+        // Add a few past positions (we only have current pos, so just show future)
+        for (let m = -5; m <= 30; m += 2) {
+          const dist = speedKmh * (m / 60);
+          const d = dist / R;
+          const hdg = flight.heading * Math.PI / 180;
+          const lat1 = flight.lat * Math.PI / 180;
+          const lon1 = flight.lon * Math.PI / 180;
+          const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(hdg));
+          const lon2 = lon1 + Math.atan2(Math.sin(hdg) * Math.sin(d) * Math.cos(lat1), Math.cos(d) - Math.sin(lat1) * Math.sin(lat2));
+          trackLatLons.push({ lat: lat2 * 180 / Math.PI, lon: lon2 * 180 / Math.PI });
+        }
+        buildTrackLine(new THREE.Color(0xFFDD00));
+      }
+
+      const _tmpV = new THREE.Vector3();
+      function buildTrackLine(color) {
+        if (trackLine) { scene.remove(trackLine); trackLine = null; }
+        if (trackLatLons.length < 2) return;
+
+        // Split at antimeridian crossings (lon jump >180°)
+        const segments = [];
+        let current = [trackLatLons[0]];
+        for (let i = 1; i < trackLatLons.length; i++) {
+          const dLon = Math.abs(trackLatLons[i].lon - trackLatLons[i - 1].lon);
+          if (dLon > 180) { segments.push(current); current = [trackLatLons[i]]; }
+          else { current.push(trackLatLons[i]); }
+        }
+        segments.push(current);
+
+        // Build geometry from all segments (broken by NaN gaps)
+        const allPts = [];
+        segments.forEach((seg, si) => {
+          seg.forEach(({ lat, lon }) => {
+            const v = latLonToVec3(lat, lon, 1.025);
+            allPts.push(v.x, v.y, v.z);
+          });
+          if (si < segments.length - 1) allPts.push(NaN, NaN, NaN);
+        });
+
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(allPts, 3));
+        trackLine = new THREE.Line(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.75, linewidth: 2 }));
+        scene.add(trackLine);
+      }
+
+      // Recompute track line positions after globe rotation (applied in animate)
+      let _lastTrackLat = null;
+      function updateTrackLineForRotation(quat) {
+        if (!trackLine || trackLatLons.length === 0) return;
+        const pts = trackLine.geometry.attributes.position;
+        const arr = pts.array;
+        let j = 0, segIdx = 0;
+        // Rebuild positions applying globe quaternion
+        const segments = [];
+        let cur = [];
+        trackLatLons.forEach((ll, i) => {
+          cur.push(ll);
+          if (i < trackLatLons.length - 1) {
+            const dLon = Math.abs(trackLatLons[i + 1].lon - ll.lon);
+            if (dLon > 180) { segments.push(cur); cur = []; }
+          }
+        });
+        segments.push(cur);
+
+        let pos = 0;
+        segments.forEach((seg, si) => {
+          seg.forEach(({ lat, lon }) => {
+            const v = latLonToVec3(lat, lon, 1.025).applyQuaternion(quat);
+            arr[pos++] = v.x; arr[pos++] = v.y; arr[pos++] = v.z;
+          });
+          if (si < segments.length - 1) { arr[pos++] = NaN; arr[pos++] = NaN; arr[pos++] = NaN; }
+        });
+        pts.needsUpdate = true;
+      }
+
+      // ── CURRENT OBJECT BEING SHOWN IN CARD (for track button)
+      let currentCardObj = null;
+
+      window.startTrackingFromCard = function () {
+        if (!currentCardObj) return;
+        startTracking(currentCardObj.type, currentCardObj.data);
+        closeCard();
+      };
+
+      // ── INTERACTION
+      const raycaster = new THREE.Raycaster();
+      raycaster.params.Mesh = { backfaceCulling: false };
+      const mouse = new THREE.Vector2();
+
+      function getCanvasXY(e) { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top, cx: e.clientX, cy: e.clientY }; }
+      function canvasToNDC(x, y) { const W = canvas.clientWidth || CW, H = canvas.clientHeight || CH; return { x: (x / W) * 2 - 1, y: -(y / H) * 2 + 1 }; }
+
+      canvas.addEventListener('mousedown', e => { dragging = true; isDrag = false; dragDist = 0; autoRotate = false; const p = getCanvasXY(e); prevX = p.x; prevY = p.y; });
+      canvas.addEventListener('mouseup', () => { dragging = false; });
+
+      let lastHover = 0;
+      canvas.addEventListener('mousemove', e => {
+        const p = getCanvasXY(e);
+        if (dragging) {
+          const dx = p.x - prevX, dy = p.y - prevY;
+          dragDist += Math.abs(dx) + Math.abs(dy);
+          if (dragDist > 5) isDrag = true;
+          targetRotY += dx * 0.005; targetRotX += dy * 0.004;
+          targetRotX = Math.max(-Math.PI / 2.1, Math.min(Math.PI / 2.1, targetRotX));
+          prevX = p.x; prevY = p.y; return;
+        }
+        const now = performance.now();
+        if (now - lastHover < 60) return;
+        lastHover = now;
+        const ndc = canvasToNDC(p.x, p.y);
+        mouse.x = ndc.x; mouse.y = ndc.y;
+        raycaster.setFromCamera(mouse, camera);
+        const hits = raycaster.intersectObjects(rayTargets);
+        const tt = document.getElementById('tt');
+        if (hits.length && hits[0].object.userData.type) {
+          const ud = hits[0].object.userData;
+          tt.style.display = 'block';
+          tt.style.left = (p.x + 14) + 'px'; tt.style.top = (p.y - 6) + 'px';
+          if (ud.type === 'hotspot') {
+            tt.className = ''; tt.textContent = ud.hotspot.label + ' — ' + ud.hotspot.sev.toUpperCase();
+          } else if (ud.type === 'satellite') {
+            tt.className = 'sat'; tt.textContent = '◉ ' + ud.sat.name + (ud.sat.altKm ? ' — ' + Math.round(ud.sat.altKm) + 'KM' : '');
+          } else if (ud.type === 'flight') {
+            tt.className = 'flt'; tt.textContent = '✈ ' + (ud.flight.callsign || ud.flight.hex) + ' — ' + ud.flight.alt + 'FT';
+          } else if (ud.type === 'vessel') {
+            tt.className = ''; tt.style.borderColor = '#4488FF';
+            tt.textContent = '🚢 ' + (ud.vessel.name || 'VESSEL') + ' — ' + ud.vessel.speed.toFixed(0) + 'KTS';
+          }
+          canvas.style.cursor = 'pointer';
+        } else { tt.style.display = 'none'; canvas.style.cursor = 'default'; }
+      });
+
+      canvas.addEventListener('click', e => {
+        if (isDrag) return;
+        const p = getCanvasXY(e);
+        const ndc = canvasToNDC(p.x, p.y);
+        mouse.x = ndc.x; mouse.y = ndc.y;
+        raycaster.setFromCamera(mouse, camera);
+        const hits = raycaster.intersectObjects(rayTargets);
+        if (hits.length && hits[0].object.userData.type) {
+          const ud = hits[0].object.userData;
+          if (ud.type === 'hotspot') showHotspotCard(ud.hotspot, p.x, p.y);
+          else if (ud.type === 'satellite') showSatCard(ud.sat, p.x, p.y);
+          else if (ud.type === 'flight') showFlightCard(ud.flight, p.x, p.y);
+          else if (ud.type === 'vessel') showVesselCard(ud.vessel, p.x, p.y);
+        } else { closeCard(); }
+      });
+
+      canvas.addEventListener('wheel', e => {
+        e.preventDefault();
+        camera.position.z = Math.max(1.4, Math.min(5.0, camera.position.z + e.deltaY * 0.001));
+      }, { passive: false });
+
+      function closeCard() {
+        const ic = document.getElementById('ic');
+        ic.style.display = 'none'; ic.className = '';
+        currentCardObj = null;
+        document.getElementById('ic-track-btn').style.display = 'none';
+      }
+      window.closeCard = closeCard;
+
+      function positionCard(px, py) {
+        const ic = document.getElementById('ic');
+        const W = canvas.clientWidth || CW, H = canvas.clientHeight || CH;
+        const IW = 300, IH = 260;
+        let x = px + 16, y = py - 20;
+        if (x + IW > W - 10) x = px - IW - 10;
+        if (y + IH > H - 10) y = H - IH - 10;
+        if (y < 50) y = 50; if (x < 10) x = 10;
+        ic.style.left = x + 'px'; ic.style.top = y + 'px'; ic.style.display = 'block';
+      }
+
+      function showHotspotCard(h, px, py) {
+        currentCardObj = null;
+        const ic = document.getElementById('ic');
+        document.getElementById('ic-sev').textContent = h.sev.toUpperCase() + ' — ' + h.type.toUpperCase();
+        document.getElementById('ic-ttl').textContent = h.title || h.label;
+        document.getElementById('ic-body').textContent = h.body || '';
+        document.getElementById('ic-mkt').textContent = h.mkt ? '📊 MARKET: ' + h.mkt : '';
+        document.getElementById('ic-tags').innerHTML = (h.tags || []).map(t => `<span class="ictag">${t}</span>`).join('');
+        document.getElementById('ic-date').textContent = 'UPDATED: LIVE';
+        document.getElementById('ic-track-btn').style.display = 'none';
+        ic.className = 'show ' + (h.sev || 'elevated');
+        positionCard(px, py);
+      }
+
+      function showSatCard(sat, px, py) {
+        currentCardObj = { type: 'sat', data: sat };
+        const ic = document.getElementById('ic');
+        document.getElementById('ic-sev').textContent = 'SATELLITE — ' + sat.groupId.toUpperCase();
+        document.getElementById('ic-ttl').textContent = sat.name;
+        const alt = sat.altKm ? Math.round(sat.altKm) + 'KM' : 'N/A';
+        const spd = sat.speed ? Math.round(sat.speed) + ' KM/H' : 'N/A';
+        document.getElementById('ic-body').textContent =
+          `ALTITUDE: ${alt}\nPERIOD: ${sat.info.period} MIN\nINCLINATION: ${sat.info.incl}°\nSPEED: ${spd}\nNORAD ID: ${sat.noradId || '—'}`;
+        document.getElementById('ic-mkt').textContent = '';
+        document.getElementById('ic-tags').innerHTML = `<span class="ictag">${sat.groupId.toUpperCase()}</span><span class="ictag">NORAD ${sat.noradId || '?'}</span>`;
+        document.getElementById('ic-date').textContent = 'POSITION: LIVE PROPAGATED';
+        const btn = document.getElementById('ic-track-btn');
+        btn.textContent = '◉ TRACK ORBIT'; btn.className = ''; btn.style.display = 'block';
+        ic.className = 'show satellite';
+        positionCard(px, py);
+      }
+
+      function showFlightCard(flight, px, py) {
+        currentCardObj = { type: 'flight', data: flight };
+        const ic = document.getElementById('ic');
+        document.getElementById('ic-sev').textContent = 'MILITARY AIRCRAFT — ' + flight.country;
+        document.getElementById('ic-ttl').textContent = (flight.callsign || flight.hex) || 'UNKNOWN';
+        // Body with photo
+        let bodyText =
+          `ALTITUDE: ${flight.alt.toLocaleString()} FT\nSPEED: ${flight.speed} KTS\nHEADING: ${Math.round(flight.heading)}°\nICAO24: ${flight.hex || '—'}\nTYPE: ${flight.type || 'MILITARY'}\nREG: ${flight.reg || '—'}`;
+        document.getElementById('ic-body').textContent = bodyText;
+        // Fetch aircraft photo from planespotters.net API (returns JSON)
+        document.getElementById('ic-mkt').innerHTML = '';
+        if (flight.hex) {
+          const photoContainer = document.getElementById('ic-mkt');
+          photoContainer.innerHTML = '<div style="color:#333;font-size:9px;margin-top:4px">Loading photo…</div>';
+          fetch(`https://api.planespotters.net/pub/photos/hex/${flight.hex}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+              if (data && data.photos && data.photos.length > 0) {
+                const url = data.photos[0].thumbnail_large?.src || data.photos[0].thumbnail?.src || '';
+                if (url) photoContainer.innerHTML = `<div style="margin-top:6px"><img src="${url}" style="width:100%;max-width:260px;border-radius:3px;border:1px solid #222" onerror="this.parentElement.style.display='none'"/></div>`;
+                else photoContainer.innerHTML = '';
+              } else { photoContainer.innerHTML = ''; }
+            })
+            .catch(() => { photoContainer.innerHTML = ''; });
+        }
+        document.getElementById('ic-tags').innerHTML = `<span class="ictag">MIL</span><span class="ictag">${flight.country}</span><span class="ictag">${flight.type || 'UNKN'}</span>`;
+        document.getElementById('ic-date').textContent = 'POSITION: LIVE ADS-B';
+        const btn = document.getElementById('ic-track-btn');
+        btn.textContent = '✈ TRACK FLIGHT PATH'; btn.className = 'flt'; btn.style.display = 'block';
+        ic.className = 'show flight';
+        positionCard(px, py);
+      }
+
+      function showVesselCard(vessel, px, py) {
+        currentCardObj = null;
+        const ic = document.getElementById('ic');
+        document.getElementById('ic-sev').textContent = 'MARITIME VESSEL — ' + vessel.type.toUpperCase();
+        document.getElementById('ic-ttl').textContent = vessel.name || 'UNKNOWN VESSEL';
+        document.getElementById('ic-body').textContent =
+          `MMSI: ${vessel.mmsi || '—'}\nSPEED: ${vessel.speed.toFixed(1)} KTS\nHEADING: ${Math.round(vessel.heading)}°\nTYPE: ${vessel.type || '—'}\nPOS: ${vessel.lat.toFixed(3)}°, ${vessel.lon.toFixed(3)}°`;
+        document.getElementById('ic-mkt').textContent = '';
+        document.getElementById('ic-tags').innerHTML = `<span class="ictag">AIS</span><span class="ictag">${vessel.type.toUpperCase()}</span><span class="ictag">MMSI ${vessel.mmsi || '?'}</span>`;
+        document.getElementById('ic-date').textContent = 'POSITION: AIS LIVE';
+        document.getElementById('ic-track-btn').style.display = 'none';
+        ic.className = 'show elevated';
+        positionCard(px, py);
+      }
+
+      // ── LAYER TOGGLES
+      window.toggleSatLayer = function (btn) {
+        showSats = !showSats;
+        if (showSats) {
+          btn.classList.add('sat-on');
+          document.getElementById('satpanel').style.display = 'block';
+          document.getElementById('tp').style.display = 'none';
+          fetchSatTLEs(); // renderSatMarkers() is called inside fetchSatTLEs on completion
+          if (satUpdateInterval) clearInterval(satUpdateInterval);
+          satUpdateInterval = setInterval(updateSatPositions, 30000);
+        } else {
+          btn.classList.remove('sat-on');
+          document.getElementById('satpanel').style.display = 'none';
+          document.getElementById('tp').style.display = 'block';
+          document.getElementById('badge-sats').textContent = '◉ SATS: OFF';
+          document.getElementById('badge-sats').classList.remove('active');
+          if (satUpdateInterval) { clearInterval(satUpdateInterval); satUpdateInterval = null; }
+          if (trackingObj?.type === 'sat') stopTracking();
+          renderSatMarkers();
+        }
+      };
+
+      window.toggleFlightLayer = function (btn) {
+        showFlights = !showFlights;
+        if (showFlights) {
+          btn.classList.add('flt-on');
+          fetchMilitaryFlights();
+          if (fltUpdateInterval) clearInterval(fltUpdateInterval);
+          fltUpdateInterval = setInterval(fetchMilitaryFlights, 60000);
+        } else {
+          btn.classList.remove('flt-on');
+          if (fltUpdateInterval) { clearInterval(fltUpdateInterval); fltUpdateInterval = null; }
+          if (trackingObj?.type === 'flight') stopTracking();
+          renderFlightMarkers();
+        }
+      };
+
+      // ── FLY TO
+      function flyTo(lat, lon) {
+        targetRotY = -(90 + lon) * Math.PI / 180;
+        targetRotX = lat * Math.PI / 180 * 0.5;
+        autoRotate = false; camera.position.z = 2.3;
+      }
+
+      function flyToTheater(lat, lon, label) {
+        flyTo(lat, lon);
+        const h = HOTSPOTS.find(h => Math.abs(h.lat - lat) < 3 && Math.abs(h.lon - lon) < 6);
+        if (h) { const W = canvas.clientWidth || CW, H = canvas.clientHeight || CH; setTimeout(() => showHotspotCard(h, W * 0.25, H * 0.3), 700); }
+      }
+      window.flyTo = flyTo; window.flyToTheater = flyToTheater;
+
+      function setFilter(f, btn) {
+        activeFilter = f;
+        document.querySelectorAll('.fbtn:not(#sat-btn):not(#flt-btn)').forEach(b => b.classList.remove('on'));
+        if (btn) btn.classList.add('on');
+        renderMarkers();
+      }
+      window.setFilter = setFilter;
+
+      function addCustomEvent() {
+        const title = document.getElementById('ae-title').value;
+        const lat = parseFloat(document.getElementById('ae-lat').value);
+        const lon = parseFloat(document.getElementById('ae-lon').value);
+        if (!title || isNaN(lat) || isNaN(lon)) return;
+        customEvents.push({ lat, lon, label: title, sev: document.getElementById('ae-sev').value, type: 'custom', title, body: document.getElementById('ae-desc').value, mkt: document.getElementById('ae-mkt').value, tags: ['CUSTOM'] });
+        document.getElementById('adddlg').classList.remove('show');
+        renderMarkers();
+      }
+      window.addCustomEvent = addCustomEvent;
+      window.stopTracking = stopTracking;
+
+      // ── ANIMATION LOOP
+      let lastT = 0;
+      const _quat = new THREE.Quaternion();
+      const _euler = new THREE.Euler();
+      const _rp = new THREE.Vector3();
+      const _camDir = new THREE.Vector3();
+      const _norm = new THREE.Vector3();
+      let frameCount = 0;
+
+      function animate(t) {
+        if (!isAnimating) return;   // paused — IntersectionObserver will restart us
+        requestAnimationFrame(animate);
+        try {
+          const dt = Math.min((t - lastT) / 1000, 0.05); lastT = t; frameCount++;
+          if (autoRotate) targetRotY += dt * 0.065;
+          rotX += (targetRotX - rotX) * 0.08;
+          rotY += (targetRotY - rotY) * 0.08;
+          if (globeMesh) { globeMesh.rotation.x = rotX; globeMesh.rotation.y = rotY; }
+
+          _euler.set(rotX, rotY, 0, 'XYZ');
+          _quat.setFromEuler(_euler);
+
+          // Hotspot markers
+          markers.forEach(({ mesh, ring, glow, basePos }) => {
+            _rp.copy(basePos).applyQuaternion(_quat);
+            mesh.position.copy(_rp); ring.position.copy(_rp); glow.position.copy(_rp);
+            ring.quaternion.copy(camera.quaternion);
+            ring.userData.phase = (ring.userData.phase || 0) + dt * 2.1;
+            const sinP = Math.sin(ring.userData.phase);
+            ring.material.opacity = 0.18 + 0.38 * sinP;
+            const s = 1 + 0.22 * sinP;
+            ring.scale.set(s, s, 1);
+            glow.material.opacity = 0.03 + 0.1 * Math.abs(Math.sin(ring.userData.phase * .6));
+            _camDir.copy(camera.position).sub(_rp).normalize();
+            _norm.copy(_rp).normalize();
+            const vis = _camDir.dot(_norm) > 0.06;
+            mesh.visible = ring.visible = glow.visible = vis;
+          });
+
+          // Satellite markers
+          satMeshes.forEach(({ mesh, ring, sat }) => {
+            if (!sat.basePos) return;
+            _rp.copy(sat.basePos).applyQuaternion(_quat);
+            mesh.position.copy(_rp);
+            if (ring) {
+              ring.position.copy(_rp);
+              ring.quaternion.copy(camera.quaternion);
+              ring.userData.phase = (ring.userData.phase || 0) + dt * 1.5;
+              ring.material.opacity = 0.15 + 0.25 * Math.abs(Math.sin(ring.userData.phase));
+            }
+          });
+
+          // Flight markers — NaN-safe orientation
+          flightMeshes.forEach(({ mesh, flight, basePos }) => {
+            _rp.copy(basePos).applyQuaternion(_quat);
+            mesh.position.copy(_rp);
+            const len = _rp.length();
+            if (len < 0.001) return;
+            const up = _rp.clone().divideScalar(len);
+            const dot = up.dot(new THREE.Vector3(0, 1, 0));
+            if (Math.abs(dot) > 0.9999) {
+              mesh.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), dot > 0 ? 0 : Math.PI);
+            } else {
+              mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
+            }
+            const rot2 = new THREE.Quaternion();
+            rot2.setFromAxisAngle(up, flight.heading * Math.PI / 180);
+            mesh.quaternion.premultiply(rot2);
+          });
+
+          // Vessel markers
+          vesselMeshes.forEach(({ mesh, ring, vessel, basePos }) => {
+            _rp.copy(basePos).applyQuaternion(_quat);
+            mesh.position.copy(_rp);
+            if (ring) {
+              ring.position.copy(_rp);
+              ring.quaternion.copy(camera.quaternion);
+              ring.userData.phase = (ring.userData.phase || 0) + dt * 1.8;
+              ring.material.opacity = 0.15 + 0.22 * Math.abs(Math.sin(ring.userData.phase));
+            }
+            _camDir.copy(camera.position).sub(_rp).normalize();
+            _norm.copy(_rp).normalize();
+            const vis = _camDir.dot(_norm) > 0.04;
+            mesh.visible = vis;
+            if (ring) ring.visible = vis;
+          });
+
+          // Infrastructure lines rotation
+          infraLines.forEach(line => {
+            line.quaternion.copy(_quat);
+          });
+
+          // Track line rotation (every 2 frames for performance)
+          if (trackLine && trackLatLons.length > 0 && frameCount % 2 === 0) {
+            updateTrackLineForRotation(_quat);
+          }
+
+          renderer.render(scene, camera);
+        } catch (err) { /* prevent single bad frame from killing rAF loop */ }
+      }
+      // Pause/resume the rAF loop based on canvas visibility.
+      // When the user navigates to another Streamlit tab, CSS sets display:none,
+      // IntersectionObserver fires, we stop calling rAF — GPU/battery savings.
+      let isAnimating = false;
+      const _visObserver = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+          if (!isAnimating) { isAnimating = true; animate(performance.now()); }
+        } else {
+          isAnimating = false;
+        }
+      }, { threshold: 0 });
+      _visObserver.observe(canvas);
+
+      // Resize — ResizeObserver catches iframe reflows that window.resize misses
+      const _ro = new ResizeObserver(() => {
+        const { w, h } = _getDims();
+        if (w > 50 && h > 50) { CW = w; CH = h; camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setSize(w, h); }
+      });
+      _ro.observe(canvas);
+      window.addEventListener('resize', () => {
+        const { w, h } = _getDims();
+        CW = w; CH = h;
+        camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setSize(w, h);
+      });
 
     } // end _initThree()
 
     // ── LIVE GDELT NEWS FEED
-    async function fetchGDELTNews(){
-      const nf=document.getElementById('nf-items');
-      // Try GDELT DOC 2.0 API with correct format
-      const URLS=[
-        'https://api.gdeltproject.org/api/v2/doc/doc?query=geopolitical+conflict+war+sourcelang:english&mode=ArtList&maxrecords=5&format=json&timespan=12h',
-        'https://api.gdeltproject.org/api/v2/doc/doc?query=war+conflict+sourcelang:english&mode=ArtList&maxrecords=5&format=json&timespan=24h',
+    async function fetchGDELTNews() {
+      const nf = document.getElementById('nf-items');
+      // GDELT DOC 2.0 API — multiple query variants for resilience
+      const URLS = [
+        'https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict OR war OR strike OR attack OR military)%20sourcelang:english&mode=ArtList&maxrecords=8&format=json&timespan=24h&sort=DateDesc',
+        'https://api.gdeltproject.org/api/v2/doc/doc?query=(geopolitical OR sanctions OR military)%20sourcelang:english&mode=ArtList&maxrecords=8&format=json&timespan=48h&sort=DateDesc',
+        'https://api.gdeltproject.org/api/v2/doc/doc?query=conflict%20sourcelang:english&mode=ArtList&maxrecords=5&format=json&timespan=72h',
       ];
-      for(const url of URLS){
-        try{
-          const ctrl=new AbortController();
-          setTimeout(()=>ctrl.abort(),8000);
-          const r=await fetch(url,{signal:ctrl.signal});
-          if(!r.ok) continue;
-          const data=await r.json();
-          const arts=(data.articles||[]).filter(a=>(a.title||'').length>20&&(a.title.charCodeAt(0)<128));
-          if(arts.length===0) continue;
-          const seen=new Set(); const dedup=[];
-          for(const a of arts){const k=(a.title||'').toLowerCase().trim();if(!seen.has(k)){seen.add(k);dedup.push(a);} if(dedup.length>=3)break;}
-          nf.innerHTML=dedup.map(a=>{
-            const dom=a.domain||'GDELT';
-            const sd=a.seendate||'';
-            const d=sd.length>=8?`${sd.slice(0,4)}-${sd.slice(4,6)}-${sd.slice(6,8)}`:'';
+      for (const url of URLS) {
+        try {
+          const ctrl = new AbortController();
+          setTimeout(() => ctrl.abort(), 10000);
+          const r = await fetch(url, { signal: ctrl.signal });
+          if (!r.ok) continue;
+          const text = await r.text();
+          if (!text || text.length < 10) continue;
+          let data;
+          try { data = JSON.parse(text); } catch (e) { continue; }
+          const arts = (data.articles || []).filter(a => {
+            const t = a.title || '';
+            return t.length > 20 && t.charCodeAt(0) < 128 && !t.includes('cookie') && !t.includes('subscribe');
+          });
+          if (arts.length === 0) continue;
+          const seen = new Set(); const dedup = [];
+          for (const a of arts) { const k = (a.title || '').toLowerCase().trim().substring(0, 50); if (!seen.has(k)) { seen.add(k); dedup.push(a); } if (dedup.length >= 4) break; }
+          nf.innerHTML = dedup.map(a => {
+            const dom = (a.domain || 'GDELT').replace('www.', '');
+            const sd = a.seendate || '';
+            const d = sd.length >= 8 ? `${sd.slice(0, 4)}-${sd.slice(4, 6)}-${sd.slice(6, 8)}` : '';
             return `<div style="background:rgba(0,0,0,.85);border-left:3px solid #FF6600;padding:6px 10px;margin:3px 0">
-              <a href="${a.url}" target="_blank" style="color:#DDD;text-decoration:none;font-size:13px;font-weight:600;line-height:1.4">${(a.title||'').substring(0,95)}</a>
-              <div style="color:#555;font-size:10px;margin-top:3px">${dom} · ${d}</div></div>`;
+              <a href="${a.url}" target="_blank" style="color:#DDD;text-decoration:none;font-size:12px;font-weight:600;line-height:1.4">${(a.title || '').substring(0, 100)}</a>
+              <div style="color:#555;font-size:9px;margin-top:3px">${dom} · ${d}</div></div>`;
           }).join('');
           return;
-        }catch(e){continue;}
+        } catch (e) { continue; }
       }
-      nf.innerHTML='<div style="color:#444;font-size:11px;font-family:monospace">GDELT API unavailable — check network</div>';
+      nf.innerHTML = '<div style="color:#444;font-size:11px;font-family:monospace">GDELT API unavailable — retrying in 5m</div>';
     }
     fetchGDELTNews();
-    setInterval(fetchGDELTNews,300000);
+    setInterval(fetchGDELTNews, 300000);
 
     // ── THEATER STATUS
-    const THEATERS=[
-      {name:'MIDDLE EAST',query:'gaza israel hamas hezbollah',lat:31.5,lon:34.8,base:'critical'},
-      {name:'UKRAINE',query:'ukraine russia war frontline',lat:49,lon:31,base:'critical'},
-      {name:'RED SEA',query:'houthi red sea shipping attack',lat:14,lon:43,base:'critical'},
-      {name:'HORMUZ',query:'strait hormuz iran tanker',lat:26.5,lon:56,base:'elevated'},
-      {name:'SAHEL',query:'sahel mali niger coup',lat:14,lon:2,base:'elevated'},
-      {name:'TAIWAN',query:'taiwan china PLA military strait',lat:25,lon:121,base:'watch'},
-      {name:'S. CHINA SEA',query:'south china sea philippines',lat:12,lon:115,base:'watch'},
+    const THEATERS = [
+      { name: 'MIDDLE EAST', query: 'gaza israel hamas hezbollah', lat: 31.5, lon: 34.8, base: 'critical' },
+      { name: 'UKRAINE', query: 'ukraine russia war frontline', lat: 49, lon: 31, base: 'critical' },
+      { name: 'RED SEA', query: 'houthi red sea shipping attack', lat: 14, lon: 43, base: 'critical' },
+      { name: 'HORMUZ', query: 'strait hormuz iran tanker', lat: 26.5, lon: 56, base: 'elevated' },
+      { name: 'SAHEL', query: 'sahel mali niger coup', lat: 14, lon: 2, base: 'elevated' },
+      { name: 'TAIWAN', query: 'taiwan china PLA military strait', lat: 25, lon: 121, base: 'watch' },
+      { name: 'S. CHINA SEA', query: 'south china sea philippines', lat: 12, lon: 115, base: 'watch' },
     ];
 
-    function statusFromCount(count,base){
-      if(count>=50||base==='critical')return{label:'CRITICAL',cls:'tc'};
-      if(count>=25)return{label:'ACTIVE',cls:'tc'};
-      if(count>=10||base==='elevated')return{label:'ELEVATED',cls:'te'};
-      return{label:'MONITORING',cls:'tw'};
+    function statusFromCount(count, base) {
+      if (count >= 50 || base === 'critical') return { label: 'CRITICAL', cls: 'tc' };
+      if (count >= 25) return { label: 'ACTIVE', cls: 'tc' };
+      if (count >= 10 || base === 'elevated') return { label: 'ELEVATED', cls: 'te' };
+      return { label: 'MONITORING', cls: 'tw' };
     }
 
-    async function fetchTheaterStatus(){
-      const container=document.getElementById('tp-items');
-      let html='';
-      for(const t of THEATERS){
-        const s=statusFromCount(0,t.base);
-        html+=`<div class="tpi" onclick="flyToTheater(${t.lat},${t.lon},'${t.name}')"><div class="tpn">${t.name}</div><div class="tps ${s.cls}">● ${s.label}</div></div>`;
+    async function fetchTheaterStatus() {
+      const container = document.getElementById('tp-items');
+      let html = '';
+      for (const t of THEATERS) {
+        const s = statusFromCount(0, t.base);
+        html += `<div class="tpi" onclick="flyToTheater(${t.lat},${t.lon},'${t.name}')"><div class="tpn">${t.name}</div><div class="tps ${s.cls}">● ${s.label}</div></div>`;
       }
-      container.innerHTML=html;
-      const promises=THEATERS.map(t=>fetch(`https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(t.query)}%20sourcelang:english&mode=ArtList&maxrecords=1&format=json&timespan=24h`).then(r=>r.json()).catch(()=>null));
-      const results=await Promise.allSettled(promises);
-      results.forEach((res,i)=>{
-        if(res.status!=='fulfilled'||!res.value)return;
-        const count=(res.value.articles||[]).length;
-        const s=statusFromCount(count>0?(count===1?30:10):5,THEATERS[i].base);
-        const items=container.querySelectorAll('.tpi');
-        if(items[i]){items[i].querySelector('.tps').className='tps '+s.cls;items[i].querySelector('.tps').textContent='● '+s.label;}
+      container.innerHTML = html;
+      const promises = THEATERS.map(t => fetch(`https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(t.query)}%20sourcelang:english&mode=ArtList&maxrecords=1&format=json&timespan=24h`).then(r => r.json()).catch(() => null));
+      const results = await Promise.allSettled(promises);
+      results.forEach((res, i) => {
+        if (res.status !== 'fulfilled' || !res.value) return;
+        const count = (res.value.articles || []).length;
+        const s = statusFromCount(count > 0 ? (count === 1 ? 30 : 10) : 5, THEATERS[i].base);
+        const items = container.querySelectorAll('.tpi');
+        if (items[i]) { items[i].querySelector('.tps').className = 'tps ' + s.cls; items[i].querySelector('.tps').textContent = '● ' + s.label; }
       });
-      document.getElementById('tp-update').textContent='UPDATED '+new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+      document.getElementById('tp-update').textContent = 'UPDATED ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     }
     fetchTheaterStatus();
-    setInterval(fetchTheaterStatus,600000);
+    setInterval(fetchTheaterStatus, 600000);
   </script>
 </body>
+
 </html>
