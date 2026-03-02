@@ -1158,11 +1158,11 @@ def render_crypto_etf_chart(df, height=420, is_estimated=False):
     return fig
 
 
-@st.fragment(run_every="10m")
 def render_geo_tab():
     """
-    Full Geo Tab — @st.fragment so it auto-refreshes every 10 min without
-    triggering a full-app rerun.
+    Full Geo Tab — renders on-demand when the user visits the GEO tab.
+    Data is fetched fresh each time the tab is opened (cache TTLs on
+    individual fetchers prevent hammering APIs on rapid tab switches).
 
     Sections:
       1. 3D Globe (globe.html — military air / satellites / conflict events / infra)
@@ -1180,7 +1180,7 @@ def render_geo_tab():
     )
     st.markdown(
         '<div style="color:#555;font-family:monospace;font-size:10px;margin-bottom:6px">'
-        'Auto-refresh every 10 minutes · Toggle networks and webcam regions below'
+        'Refreshes on tab visit · Data cached 5 min · Toggle networks and webcam regions below'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -1375,80 +1375,3 @@ def render_geo_tab():
                 unsafe_allow_html=True,
             )
 
-
-# ════════════════════════════════════════════════════════════════════
-# TWITTER/X NOTIFICATION FEED
-# ════════════════════════════════════════════════════════════════════
-
-def render_twitter_notifications(tweets, max_items=10):
-    """Render a dark-themed notification feed of financial tweets.
-
-    Args:
-        tweets: list of tweet dicts from fetch_twitter_feed()
-        max_items: max number to display
-    """
-    if not tweets:
-        st.markdown(
-            '<div style="background:#060606;border:1px solid #1A1A1A;border-radius:4px;'
-            'padding:12px;font-family:monospace;font-size:10px;color:#555;text-align:center">'
-            '📡 No tweets loaded.<br>'
-            '<span style="color:#333;font-size:9px">'
-            'Add TWITTER_BEARER_TOKEN to secrets.toml for live feed,<br>'
-            'or Nitter/RSS bridges will be tried automatically.</span></div>',
-            unsafe_allow_html=True,
-        )
-        return
-
-    html_parts = []
-    for tw in tweets[:max_items]:
-        label = tw.get("label", tw.get("author", "X"))
-        color = tw.get("color", "#FF6600")
-        text = (tw.get("text", "")
-                .replace("<", "&lt;").replace(">", "&gt;")
-                .replace("\n", " "))
-        url = tw.get("url", "#")
-        ts = tw.get("timestamp", "")
-        # Format timestamp — try to make it short
-        ts_display = ""
-        if ts:
-            try:
-                from datetime import datetime
-                for fmt in [
-                    "%Y-%m-%dT%H:%M:%S.%fZ",
-                    "%Y-%m-%dT%H:%M:%SZ",
-                    "%a, %d %b %Y %H:%M:%S %z",
-                    "%a, %d %b %Y %H:%M:%S GMT",
-                ]:
-                    try:
-                        dt = datetime.strptime(ts.strip(), fmt)
-                        ts_display = dt.strftime("%H:%M")
-                        break
-                    except ValueError:
-                        continue
-                if not ts_display:
-                    ts_display = ts[:16]
-            except Exception:
-                ts_display = ts[:16]
-
-        source_icon = "𝕏" if tw.get("source") == "x_api" else "📡"
-
-        html_parts.append(
-            f'<a href="{url}" target="_blank" style="text-decoration:none;display:block;'
-            f'padding:7px 10px;border-bottom:1px solid #111;transition:background .15s"'
-            f' onmouseover="this.style.background=\'rgba(255,102,0,.06)\'"'
-            f' onmouseout="this.style.background=\'transparent\'">'
-            f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">'
-            f'<span style="font-size:8px;letter-spacing:1px;color:{color};font-weight:700">'
-            f'{source_icon} {label}</span>'
-            f'<span style="font-size:8px;color:#333">{ts_display}</span></div>'
-            f'<div style="font-size:11px;color:#BBB;line-height:1.45">{text[:200]}</div>'
-            f'</a>'
-        )
-
-    feed_html = (
-        '<div style="background:#030303;border:1px solid #1A1A1A;border-radius:4px;'
-        'max-height:380px;overflow-y:auto;font-family:\'IBM Plex Mono\',monospace">'
-        + "".join(html_parts)
-        + '</div>'
-    )
-    st.markdown(feed_html, unsafe_allow_html=True)
