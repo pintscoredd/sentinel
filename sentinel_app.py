@@ -438,6 +438,8 @@ with st.sidebar:
         ("Finnhub",       bool(st.session_state.finnhub_key), "FINNHUB_API_KEY"),
         ("NewsAPI",       bool(st.session_state.newsapi_key), "NEWSAPI_KEY"),
         ("Gemini AI",     bool(st.session_state.gemini_key), "GEMINI_API_KEY"),
+        ("AISstream",     bool(_get_secret("AISSTREAM_API_KEY")), "AISSTREAM_API_KEY"),
+        ("Marinesia",     bool(_get_secret("MARINESIA_API_KEY")), "MARINESIA_API_KEY"),
     ]
     for api, ok, secret_name in _keys_status:
         dot = "🟢" if ok else "🔴"
