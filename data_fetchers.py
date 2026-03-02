@@ -2633,8 +2633,10 @@ def fetch_ais_vessels():
 
     Priority:
       1. AISstream.io REST (if AISSTREAM_API_KEY in st.secrets)
-      2. Finnish Digitraffic public AIS (no key, Baltic/North Sea coverage)
-      3. Static fallback — major chokepoint markers
+      2. Marinesia.com area search (if MARINESIA_API_KEY in st.secrets)
+      3. Finnish Digitraffic public AIS (no key, Baltic/North Sea coverage)
+      4. Danish Maritime Authority public AIS (no key)
+      5. Static fallback — major chokepoint markers
 
     Returns list of dicts: {mmsi, lat, lon, speed, heading, name, type}
     """
@@ -2677,7 +2679,58 @@ def fetch_ais_vessels():
         except Exception:
             pass
 
-    # ── 2. Finnish Digitraffic — free public AIS ────────────────────
+    # ── 2. Marinesia API — area search across key chokepoints ────────
+    try:
+        mar_key = st.secrets.get("MARINESIA_API_KEY", "") or ""
+    except Exception:
+        mar_key = ""
+
+    if mar_key:
+        import time as _time
+        # Query strategic bounding boxes to get real vessel data
+        _CHOKEPOINT_BOXES = [
+            ("suez",     29.0, 30.5,  32.0,  33.5),   # Suez Canal
+            ("hormuz",   25.5, 27.5,  55.0,  57.0),   # Strait of Hormuz
+            ("mandeb",   12.0, 13.5,  42.5,  44.0),   # Bab el-Mandeb
+            ("malacca",   0.5,  2.5, 103.0, 104.5),   # Malacca Strait
+            ("taiwan",   23.5, 25.5, 118.5, 120.5),   # Taiwan Strait
+            ("gibraltar", 35.5, 36.5,  -6.0,  -5.0),  # Gibraltar
+        ]
+        for name, lat_min, lat_max, lon_min, lon_max in _CHOKEPOINT_BOXES:
+            try:
+                r = requests.get(
+                    "https://api.marinesia.com/api/v2/vessel/area",
+                    params={
+                        "lat_min": lat_min, "lat_max": lat_max,
+                        "long_min": lon_min, "long_max": lon_max,
+                        "key": mar_key,
+                    },
+                    timeout=10,
+                    headers={"User-Agent": "SENTINEL/3.0"},
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    if not data.get("error") and data.get("data"):
+                        for s in data["data"][:30]:
+                            lat = s.get("lat")
+                            lng = s.get("lng")
+                            if lat is None or lng is None:
+                                continue
+                            vessels.append({
+                                "mmsi":    str(s.get("mmsi", "")),
+                                "lat":     float(lat),
+                                "lon":     float(lng),
+                                "speed":   float(s.get("sog", 0) or 0),
+                                "heading": float(s.get("cog", s.get("hdt", 0)) or 0),
+                                "name":    str(s.get("name", f"MMSI-{s.get('mmsi','')}")).strip()[:30],
+                                "type":    str(s.get("type", "cargo")).lower(),
+                            })
+                _time.sleep(1.0)  # Rate gate between calls
+            except Exception:
+                continue
+        if vessels:
+            return vessels
+    # ── 3. Finnish Digitraffic — free public AIS ────────────────────
     try:
         r = requests.get(
             "https://meri.digitraffic.fi/api/ais/v1/locations",
@@ -2706,7 +2759,7 @@ def fetch_ais_vessels():
     except Exception:
         pass
 
-    # ── 3. Danish Maritime Authority — free AIS (DMADK) ─────────────
+    # ── 4. Danish Maritime Authority — free AIS (DMADK) ─────────────
     try:
         r = requests.get(
             "https://ais.dma.dk/ais-api/getAisData",
@@ -2735,7 +2788,7 @@ def fetch_ais_vessels():
     except Exception:
         pass
 
-    # ── 4. Static fallback — key chokepoint and port vessel markers ──
+    # ── 5. Static fallback — key chokepoint and port vessel markers ──
     return [
         # Major chokepoints
         {"mmsi": "STATIC-001", "lat": 29.95, "lon": 32.55, "speed": 8,  "heading": 160, "name": "SUEZ CANAL TRANSIT",     "type": "tanker"},
@@ -2962,207 +3015,3 @@ def fetch_btc_etf_flows_fallback():
 
     return None
 
-
-# ════════════════════════════════════════════════════════════════════
-# TWITTER/X — FINANCIAL NEWS FEED (@FinancialJuice, @WalterBloomberg)
-# ════════════════════════════════════════════════════════════════════
-
-_TWITTER_ACCOUNTS = [
-    {"handle": "FinancialJuice", "label": "FINANCIAL JUICE", "color": "#FF6600"},
-    {"handle": "WalterBloomworx", "label": "WALTER BLOOMBERG", "color": "#00CCFF"},
-]
-
-_TWITTER_UA = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/122.0.0.0 Safari/537.36"
-)
-
-
-def _fetch_x_api_v2(bearer_token, handles, max_results=15):
-    """Fetch recent tweets via X API v2 search/recent.
-
-    Requires Basic tier ($100/mo) or higher.
-    Returns list of tweet dicts or empty list.
-    """
-    from datetime import datetime as _dt, timezone as _tz
-    query = " OR ".join(f"from:{h}" for h in handles)
-    url = "https://api.twitter.com/2/tweets/search/recent"
-    params = {
-        "query": query,
-        "max_results": min(max_results, 100),
-        "tweet.fields": "created_at,author_id,text",
-        "expansions": "author_id",
-        "user.fields": "username,name",
-    }
-    try:
-        r = requests.get(
-            url, params=params, timeout=10,
-            headers={"Authorization": f"Bearer {bearer_token}"},
-        )
-        if r.status_code != 200:
-            return []
-        data = r.json()
-        tweets = data.get("data", [])
-        # Build author lookup
-        users = {}
-        for u in data.get("includes", {}).get("users", []):
-            users[u["id"]] = u.get("username", "")
-        result = []
-        for tw in tweets:
-            author = users.get(tw.get("author_id", ""), "unknown")
-            created = tw.get("created_at", "")
-            result.append({
-                "text": tw.get("text", ""),
-                "author": author,
-                "timestamp": created,
-                "url": f"https://x.com/{author}/status/{tw['id']}",
-                "source": "x_api",
-            })
-        return result
-    except Exception:
-        return []
-
-
-def _fetch_nitter_rss(handle, max_items=8):
-    """Fetch tweets via Nitter RSS (multiple instance fallback).
-
-    Returns list of tweet dicts or empty list.
-    """
-    import xml.etree.ElementTree as _ET
-    from datetime import datetime as _dt
-
-    NITTER_INSTANCES = [
-        f"https://nitter.poast.org/{handle}/rss",
-        f"https://nitter.privacydev.net/{handle}/rss",
-        f"https://nitter.cz/{handle}/rss",
-        f"https://nitter.net/{handle}/rss",
-    ]
-
-    for rss_url in NITTER_INSTANCES:
-        try:
-            r = requests.get(
-                rss_url, timeout=8,
-                headers={"User-Agent": _TWITTER_UA},
-            )
-            if r.status_code != 200:
-                continue
-            root = _ET.fromstring(r.text)
-            items = root.findall(".//item")
-            if not items:
-                continue
-            tweets = []
-            for item in items[:max_items]:
-                title = item.findtext("title", "")
-                link = item.findtext("link", "")
-                pubdate = item.findtext("pubDate", "")
-                desc = item.findtext("description", "")
-                # Clean HTML from description
-                import re as _re
-                clean_text = _re.sub(r"<[^>]+>", "", desc).strip() if desc else title
-                tweets.append({
-                    "text": clean_text[:280],
-                    "author": handle,
-                    "timestamp": pubdate,
-                    "url": link or f"https://x.com/{handle}",
-                    "source": "nitter",
-                })
-            if tweets:
-                return tweets
-        except Exception:
-            continue
-    return []
-
-
-def _fetch_rss_bridge(handle, max_items=8):
-    """Fetch tweets via public RSS bridge services.
-
-    Returns list of tweet dicts or empty list.
-    """
-    import xml.etree.ElementTree as _ET
-
-    BRIDGES = [
-        f"https://rsshub.app/twitter/user/{handle}",
-        f"https://rss.app/feeds/twitter/{handle}",
-    ]
-
-    for url in BRIDGES:
-        try:
-            r = requests.get(
-                url, timeout=8,
-                headers={"User-Agent": _TWITTER_UA},
-            )
-            if r.status_code != 200:
-                continue
-            root = _ET.fromstring(r.text)
-            items = root.findall(".//item")
-            if not items:
-                continue
-            tweets = []
-            for item in items[:max_items]:
-                title = item.findtext("title", "")
-                link = item.findtext("link", "")
-                pubdate = item.findtext("pubDate", "")
-                import re as _re
-                clean = _re.sub(r"<[^>]+>", "", item.findtext("description", "") or title).strip()
-                tweets.append({
-                    "text": clean[:280],
-                    "author": handle,
-                    "timestamp": pubdate,
-                    "url": link or f"https://x.com/{handle}",
-                    "source": "rss_bridge",
-                })
-            if tweets:
-                return tweets
-        except Exception:
-            continue
-    return []
-
-
-@st.cache_data(ttl=120)
-def fetch_twitter_feed():
-    """Fetch recent tweets from @FinancialJuice and @WalterBloomberg.
-
-    Priority:
-      1. X API v2 (requires TWITTER_BEARER_TOKEN in st.secrets)
-      2. Nitter RSS (free, multiple instances)
-      3. RSS bridge services (free)
-
-    Returns list of dicts: {text, author, timestamp, url, source, label, color}
-    sorted by recency (newest first). Empty list on total failure.
-    """
-    all_tweets = []
-
-    # Try X API v2 first
-    try:
-        bearer = st.secrets.get("TWITTER_BEARER_TOKEN", "") or ""
-    except Exception:
-        bearer = ""
-
-    if bearer:
-        handles = [a["handle"] for a in _TWITTER_ACCOUNTS]
-        api_tweets = _fetch_x_api_v2(bearer, handles, max_results=20)
-        if api_tweets:
-            # Tag with label/color
-            for tw in api_tweets:
-                acct = next(
-                    (a for a in _TWITTER_ACCOUNTS
-                     if a["handle"].lower() == tw["author"].lower()),
-                    _TWITTER_ACCOUNTS[0],
-                )
-                tw["label"] = acct["label"]
-                tw["color"] = acct["color"]
-            return sorted(api_tweets, key=lambda x: x.get("timestamp", ""), reverse=True)[:15]
-
-    # Fallback: Nitter + RSS bridge per account
-    for acct in _TWITTER_ACCOUNTS:
-        handle = acct["handle"]
-        tweets = _fetch_nitter_rss(handle) or _fetch_rss_bridge(handle) or []
-        for tw in tweets:
-            tw["label"] = acct["label"]
-            tw["color"] = acct["color"]
-        all_tweets.extend(tweets)
-
-    # Sort by timestamp (best effort — pubDate formats vary)
-    all_tweets.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-    return all_tweets[:15]
