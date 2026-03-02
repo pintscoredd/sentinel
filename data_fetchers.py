@@ -2810,15 +2810,14 @@ def fetch_btc_etf_flows():
 
             # Convert string values like "100.5" or "(50.2)" or "-" to float
             for col in df.columns:
-                df[col] = (
-                    df[col]
-                    .astype(str)
-                    .str.replace(r"[,$]", "", regex=True)
-                    .str.replace(r"\(([\d.]+)\)", r"-\1", regex=True)
-                    .str.replace("-", "0", regex=False)
-                    .str.strip()
-                )
-                df[col] = _pd.to_numeric(df[col], errors="coerce").fillna(0)
+                s = df[col].astype(str).str.strip()
+                # Replace standalone dashes (no-data) with 0 BEFORE touching negatives
+                s = s.replace({"-": "0", "—": "0", "": "0"})
+                # Strip $ and commas
+                s = s.str.replace(r"[,$]", "", regex=True)
+                # Parenthesized negatives: (50.2) → -50.2
+                s = s.str.replace(r"\(([\d.]+)\)", r"-\1", regex=True)
+                df[col] = _pd.to_numeric(s, errors="coerce").fillna(0)
 
             # Keep last 60 trading days
             df = df.tail(60)
