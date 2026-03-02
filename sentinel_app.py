@@ -623,11 +623,23 @@ with tabs[0]:
         if poly:
             active_poly = [e for e in poly if poly_status(e)[0]=="ACTIVE"]
             closed_poly = [e for e in poly if poly_status(e)[0] in ("RESOLVED","CLOSED","EXPIRED (pending resolve)")]
+            # Filter: only show markets closed within the last 2 months
+            _cutoff = datetime.now(pytz.utc) - timedelta(days=60)
+            _recent_closed = []
+            for e in closed_poly:
+                end = e.get("endDate","") or e.get("resolvedAt","") or ""
+                if end:
+                    try:
+                        ed = datetime.fromisoformat(end.replace("Z","+00:00"))
+                        if ed >= _cutoff:
+                            _recent_closed.append(e)
+                    except Exception:
+                        pass
             for e in active_poly[:5]:
                 st.markdown(render_poly_card(e), unsafe_allow_html=True)
-            if closed_poly:
+            if _recent_closed:
                 st.markdown('<div style="color:#FF6600;font-size:10px;letter-spacing:1px;margin:8px 0 4px">RECENTLY CLOSED</div>', unsafe_allow_html=True)
-                for e in closed_poly[:3]:
+                for e in _recent_closed[:3]:
                     st.markdown(render_poly_card(e), unsafe_allow_html=True)
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Could not reach Polymarket API. Check network connectivity.</p>', unsafe_allow_html=True)
