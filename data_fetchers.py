@@ -2706,16 +2706,63 @@ def fetch_ais_vessels():
     except Exception:
         pass
 
-    # ── 3. Static fallback — key chokepoint vessel markers ──────────
+    # ── 3. Danish Maritime Authority — free AIS (DMADK) ─────────────
+    try:
+        r = requests.get(
+            "https://ais.dma.dk/ais-api/getAisData",
+            timeout=12,
+            headers={"User-Agent": "SENTINEL/3.0", "Accept": "application/json"},
+        )
+        if r.status_code == 200:
+            data = r.json()
+            ships = data if isinstance(data, list) else data.get("aisData", data.get("ships", []))
+            for s in (ships or [])[:200]:
+                lat = s.get("lat", s.get("latitude"))
+                lon = s.get("lon", s.get("longitude"))
+                if lat is None or lon is None:
+                    continue
+                vessels.append({
+                    "mmsi":    str(s.get("mmsi", "")),
+                    "lat":     float(lat),
+                    "lon":     float(lon),
+                    "speed":   float(s.get("sog", s.get("speed", 0)) or 0),
+                    "heading": float(s.get("cog", s.get("heading", 0)) or 0),
+                    "name":    str(s.get("name", f"MMSI-{s.get('mmsi','UNKN')}")).strip()[:30],
+                    "type":    str(s.get("shipType", "cargo")),
+                })
+            if vessels:
+                return vessels
+    except Exception:
+        pass
+
+    # ── 4. Static fallback — key chokepoint and port vessel markers ──
     return [
+        # Major chokepoints
         {"mmsi": "STATIC-001", "lat": 29.95, "lon": 32.55, "speed": 8,  "heading": 160, "name": "SUEZ CANAL TRANSIT",     "type": "tanker"},
         {"mmsi": "STATIC-002", "lat": 26.55, "lon": 56.25, "speed": 10, "heading": 310, "name": "HORMUZ TRANSIT",          "type": "tanker"},
         {"mmsi": "STATIC-003", "lat": 12.60, "lon": 43.20, "speed": 12, "heading": 340, "name": "BAB EL-MANDEB TRANSIT",   "type": "cargo"},
         {"mmsi": "STATIC-004", "lat":  1.28, "lon":103.85, "speed": 9,  "heading": 45,  "name": "MALACCA STRAIT TRANSIT",  "type": "container"},
         {"mmsi": "STATIC-005", "lat":-34.20, "lon": 18.50, "speed": 14, "heading": 90,  "name": "CAPE GOOD HOPE TRANSIT",  "type": "tanker"},
-        {"mmsi": "STATIC-006", "lat":  9.10, "lon": 79.70, "speed": 11, "heading": 270, "name": "PANAMA CANAL TRANSIT",    "type": "container"},
+        {"mmsi": "STATIC-006", "lat":  9.10, "lon":-79.70, "speed": 11, "heading": 270, "name": "PANAMA CANAL TRANSIT",    "type": "container"},
         {"mmsi": "STATIC-007", "lat": 35.00, "lon":136.00, "speed": 10, "heading": 200, "name": "JAPAN STRAIT TRANSIT",    "type": "cargo"},
         {"mmsi": "STATIC-008", "lat": 51.00, "lon":  1.50, "speed": 8,  "heading": 220, "name": "ENGLISH CHANNEL TRANSIT", "type": "container"},
+        # Red Sea / Gulf of Aden (contested)
+        {"mmsi": "STATIC-009", "lat": 13.50, "lon": 48.00, "speed": 14, "heading":  30, "name": "GULF OF ADEN CONVOY",     "type": "tanker"},
+        {"mmsi": "STATIC-010", "lat": 15.80, "lon": 41.80, "speed": 10, "heading": 350, "name": "RED SEA NORTHBOUND",      "type": "cargo"},
+        # South China Sea (contested)
+        {"mmsi": "STATIC-011", "lat": 10.50, "lon":114.00, "speed": 12, "heading": 30,  "name": "SCS PARACEL ROUTE",       "type": "container"},
+        {"mmsi": "STATIC-012", "lat":  7.50, "lon":116.50, "speed": 11, "heading": 315, "name": "SCS SPRATLY ROUTE",       "type": "tanker"},
+        # Taiwan Strait
+        {"mmsi": "STATIC-013", "lat": 24.50, "lon":119.50, "speed": 13, "heading": 20,  "name": "TAIWAN STRAIT TRANSIT",   "type": "cargo"},
+        # High-traffic ports
+        {"mmsi": "STATIC-014", "lat": 31.35, "lon":121.50, "speed": 5,  "heading": 90,  "name": "SHANGHAI APPROACH",       "type": "container"},
+        {"mmsi": "STATIC-015", "lat": 22.30, "lon":114.15, "speed": 6,  "heading": 180, "name": "HONG KONG APPROACH",      "type": "container"},
+        {"mmsi": "STATIC-016", "lat": 40.67, "lon":-74.05, "speed": 7,  "heading":  0,  "name": "NEW YORK APPROACH",       "type": "tanker"},
+        {"mmsi": "STATIC-017", "lat": 51.90, "lon":  4.50, "speed": 6,  "heading": 90,  "name": "ROTTERDAM APPROACH",      "type": "container"},
+        {"mmsi": "STATIC-018", "lat": 35.50, "lon":139.80, "speed": 5,  "heading": 270, "name": "TOKYO BAY APPROACH",      "type": "cargo"},
+        # Black Sea / Mediterranean
+        {"mmsi": "STATIC-019", "lat": 41.20, "lon": 29.00, "speed": 9,  "heading": 210, "name": "BOSPHORUS TRANSIT",       "type": "tanker"},
+        {"mmsi": "STATIC-020", "lat": 36.00, "lon": -5.40, "speed": 11, "heading": 90,  "name": "GIBRALTAR TRANSIT",       "type": "cargo"},
     ]
 
 
