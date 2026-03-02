@@ -1092,7 +1092,7 @@ def render_crypto_etf_chart(df, height=420, is_estimated=False):
             marker_color=color,
             marker_line_width=0,
             opacity=0.9,
-            hovertemplate=f"<b>{ticker}</b><br>%{{x|%b %d}}<br>${{y:,.1f}}M<extra></extra>",
+            hovertemplate=f"<b>{ticker}</b><br>%{{x|%b %d}}<br>$%{{y:,.1f}}M<extra></extra>",
         ))
 
     # Cumulative trendline
@@ -1154,7 +1154,7 @@ def render_crypto_etf_chart(df, height=420, is_estimated=False):
             orientation="h",
             x=0, y=1.08,
         ),
-        hovermode="x unified",
+        hovermode="closest",
         hoverlabel=dict(
             bgcolor="#111111",
             font=dict(size=11, color="#FF8C00", family="IBM Plex Mono"),
