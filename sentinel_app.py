@@ -1953,12 +1953,37 @@ Higher = more asymmetric<br><br>
 </div>""", unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════
-# ════════════════════════════════════════════════════════════════════
-# TAB 6 — GEO (PyDeck live map + surveillance matrix)
+# TAB 6 — GEO (lazy-loaded: only fetches data when user clicks in)
 # ════════════════════════════════════════════════════════════════════
 with tabs[6]:
-    render_geo_tab()
+    if "geo_tab_active" not in st.session_state:
+        st.session_state.geo_tab_active = False
 
+    _geo_col_a, _geo_col_b = st.columns([4, 1])
+    with _geo_col_a:
+        if not st.session_state.geo_tab_active:
+            st.markdown(
+                '<div class="bb-ph">🌍 GEOPOLITICAL INTELLIGENCE</div>',
+                unsafe_allow_html=True,
+            )
+    with _geo_col_b:
+        if st.session_state.geo_tab_active:
+            if st.button("🔄 REFRESH DATA", key="geo_refresh", use_container_width=True):
+                # Clear cached geo data to force fresh fetch
+                from data_fetchers import (
+                    fetch_conflict_events_json, fetch_military_aircraft_json,
+                    fetch_satellite_positions_json, fetch_ais_vessels,
+                )
+                for fn in [fetch_conflict_events_json, fetch_military_aircraft_json,
+                           fetch_satellite_positions_json, fetch_ais_vessels]:
+                    fn.clear()
+        else:
+            if st.button("▶ LOAD GEO INTEL", key="geo_load", use_container_width=True):
+                st.session_state.geo_tab_active = True
+                st.rerun()
+
+    if st.session_state.geo_tab_active:
+        render_geo_tab()
 # ════════════════════════════════════════════════════════════════════
 # TAB 7 — EARNINGS TRACKER
 # ════════════════════════════════════════════════════════════════════
