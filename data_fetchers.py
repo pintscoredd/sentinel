@@ -2629,14 +2629,18 @@ def fetch_satellite_positions_json():
 
 @st.cache_data(ttl=300)
 def fetch_ais_vessels():
-    """Fetch real-time AIS vessel positions from multiple sources.
+    """Fetch real-time AIS vessel positions from ALL available sources.
 
-    Priority:
+    Merges data from every reachable source, deduplicates by MMSI
+    (preferring named entries over generic MMSI-xxx), and always
+    includes static chokepoint markers for uncovered areas.
+
+    Sources tried (all attempted, results merged):
       1. AISstream.io REST (if AISSTREAM_API_KEY in st.secrets)
       2. Marinesia.com area search (if MARINESIA_API_KEY in st.secrets)
-      3. Finnish Digitraffic public AIS (no key, Baltic/North Sea coverage)
+      3. Finnish Digitraffic public AIS (no key, Baltic/North Sea)
       4. Danish Maritime Authority public AIS (no key)
-      5. Static fallback — major chokepoint markers
+      5. Static markers (always appended for gaps)
 
     Returns list of dicts: {mmsi, lat, lon, speed, heading, name, type}
     """
@@ -2674,8 +2678,6 @@ def fetch_ais_vessels():
                         "name":    str(s.get("name", s.get("shipName", "VESSEL"))).strip()[:30],
                         "type":    str(s.get("shipType", s.get("type", "cargo"))),
                     })
-                if vessels:
-                    return vessels
         except Exception:
             pass
 
@@ -2687,14 +2689,13 @@ def fetch_ais_vessels():
 
     if mar_key:
         import time as _time
-        # Query strategic bounding boxes to get real vessel data
         _CHOKEPOINT_BOXES = [
-            ("suez",     29.0, 30.5,  32.0,  33.5),   # Suez Canal
-            ("hormuz",   25.5, 27.5,  55.0,  57.0),   # Strait of Hormuz
-            ("mandeb",   12.0, 13.5,  42.5,  44.0),   # Bab el-Mandeb
-            ("malacca",   0.5,  2.5, 103.0, 104.5),   # Malacca Strait
-            ("taiwan",   23.5, 25.5, 118.5, 120.5),   # Taiwan Strait
-            ("gibraltar", 35.5, 36.5,  -6.0,  -5.0),  # Gibraltar
+            ("suez",     29.0, 30.5,  32.0,  33.5),
+            ("hormuz",   25.5, 27.5,  55.0,  57.0),
+            ("mandeb",   12.0, 13.5,  42.5,  44.0),
+            ("malacca",   0.5,  2.5, 103.0, 104.5),
+            ("taiwan",   23.5, 25.5, 118.5, 120.5),
+            ("gibraltar", 35.5, 36.5,  -6.0,  -5.0),
         ]
         for name, lat_min, lat_max, lon_min, lon_max in _CHOKEPOINT_BOXES:
             try:
@@ -2725,11 +2726,10 @@ def fetch_ais_vessels():
                                 "name":    str(s.get("name", f"MMSI-{s.get('mmsi','')}")).strip()[:30],
                                 "type":    str(s.get("type", "cargo")).lower(),
                             })
-                _time.sleep(1.0)  # Rate gate between calls
+                _time.sleep(1.0)
             except Exception:
                 continue
-        if vessels:
-            return vessels
+
     # ── 3. Finnish Digitraffic — free public AIS ────────────────────
     try:
         r = requests.get(
@@ -2754,8 +2754,6 @@ def fetch_ais_vessels():
                     "name":    f"MMSI-{props.get('mmsi', 'UNKN')}",
                     "type":    "cargo",
                 })
-            if vessels:
-                return vessels
     except Exception:
         pass
 
@@ -2783,14 +2781,11 @@ def fetch_ais_vessels():
                     "name":    str(s.get("name", f"MMSI-{s.get('mmsi','UNKN')}")).strip()[:30],
                     "type":    str(s.get("shipType", "cargo")),
                 })
-            if vessels:
-                return vessels
     except Exception:
         pass
 
-    # ── 5. Static fallback — key chokepoint and port vessel markers ──
-    return [
-        # Major chokepoints
+    # ── 5. Static chokepoint markers (always added for coverage) ─────
+    _STATIC = [
         {"mmsi": "STATIC-001", "lat": 29.95, "lon": 32.55, "speed": 8,  "heading": 160, "name": "SUEZ CANAL TRANSIT",     "type": "tanker"},
         {"mmsi": "STATIC-002", "lat": 26.55, "lon": 56.25, "speed": 10, "heading": 310, "name": "HORMUZ TRANSIT",          "type": "tanker"},
         {"mmsi": "STATIC-003", "lat": 12.60, "lon": 43.20, "speed": 12, "heading": 340, "name": "BAB EL-MANDEB TRANSIT",   "type": "cargo"},
@@ -2799,24 +2794,39 @@ def fetch_ais_vessels():
         {"mmsi": "STATIC-006", "lat":  9.10, "lon":-79.70, "speed": 11, "heading": 270, "name": "PANAMA CANAL TRANSIT",    "type": "container"},
         {"mmsi": "STATIC-007", "lat": 35.00, "lon":136.00, "speed": 10, "heading": 200, "name": "JAPAN STRAIT TRANSIT",    "type": "cargo"},
         {"mmsi": "STATIC-008", "lat": 51.00, "lon":  1.50, "speed": 8,  "heading": 220, "name": "ENGLISH CHANNEL TRANSIT", "type": "container"},
-        # Red Sea / Gulf of Aden (contested)
         {"mmsi": "STATIC-009", "lat": 13.50, "lon": 48.00, "speed": 14, "heading":  30, "name": "GULF OF ADEN CONVOY",     "type": "tanker"},
         {"mmsi": "STATIC-010", "lat": 15.80, "lon": 41.80, "speed": 10, "heading": 350, "name": "RED SEA NORTHBOUND",      "type": "cargo"},
-        # South China Sea (contested)
         {"mmsi": "STATIC-011", "lat": 10.50, "lon":114.00, "speed": 12, "heading": 30,  "name": "SCS PARACEL ROUTE",       "type": "container"},
         {"mmsi": "STATIC-012", "lat":  7.50, "lon":116.50, "speed": 11, "heading": 315, "name": "SCS SPRATLY ROUTE",       "type": "tanker"},
-        # Taiwan Strait
         {"mmsi": "STATIC-013", "lat": 24.50, "lon":119.50, "speed": 13, "heading": 20,  "name": "TAIWAN STRAIT TRANSIT",   "type": "cargo"},
-        # High-traffic ports
         {"mmsi": "STATIC-014", "lat": 31.35, "lon":121.50, "speed": 5,  "heading": 90,  "name": "SHANGHAI APPROACH",       "type": "container"},
         {"mmsi": "STATIC-015", "lat": 22.30, "lon":114.15, "speed": 6,  "heading": 180, "name": "HONG KONG APPROACH",      "type": "container"},
         {"mmsi": "STATIC-016", "lat": 40.67, "lon":-74.05, "speed": 7,  "heading":  0,  "name": "NEW YORK APPROACH",       "type": "tanker"},
         {"mmsi": "STATIC-017", "lat": 51.90, "lon":  4.50, "speed": 6,  "heading": 90,  "name": "ROTTERDAM APPROACH",      "type": "container"},
         {"mmsi": "STATIC-018", "lat": 35.50, "lon":139.80, "speed": 5,  "heading": 270, "name": "TOKYO BAY APPROACH",      "type": "cargo"},
-        # Black Sea / Mediterranean
         {"mmsi": "STATIC-019", "lat": 41.20, "lon": 29.00, "speed": 9,  "heading": 210, "name": "BOSPHORUS TRANSIT",       "type": "tanker"},
         {"mmsi": "STATIC-020", "lat": 36.00, "lon": -5.40, "speed": 11, "heading": 90,  "name": "GIBRALTAR TRANSIT",       "type": "cargo"},
     ]
+    vessels.extend(_STATIC)
+
+    # ── Deduplicate by MMSI — prefer named vessels over MMSI-xxx ─────
+    seen = {}
+    for v in vessels:
+        mmsi = v.get("mmsi", "")
+        if not mmsi:
+            continue
+        existing = seen.get(mmsi)
+        if existing is None:
+            seen[mmsi] = v
+        else:
+            # Prefer the entry with an actual name
+            new_name = v.get("name", "")
+            old_name = existing.get("name", "")
+            if (old_name.startswith("MMSI-") or old_name == "VESSEL") and \
+               not new_name.startswith("MMSI-") and new_name != "VESSEL":
+                seen[mmsi] = v
+
+    return list(seen.values())
 
 
 # ════════════════════════════════════════════════════════════════════
