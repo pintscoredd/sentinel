@@ -1330,33 +1330,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
 # TAB 4 — CRYPTO
 # ════════════════════════════════════════════════════════════════════
 with tabs[4]:
-    # ── Institutional BTC ETF Flows (new section) ─────────────────────────
-    st.markdown('<div class="bb-ph">📊 INSTITUTIONAL BTC ETF FLOWS — DAILY NET</div>', unsafe_allow_html=True)
-    with st.spinner("Loading ETF flow data…"):
-        _etf_df = fetch_btc_etf_flows()
-        _etf_estimated = False
-        if _etf_df is None or _etf_df.empty:
-            _etf_df = fetch_btc_etf_flows_fallback()
-            _etf_estimated = True
-    if _etf_df is not None and not _etf_df.empty:
-        _etf_fig = render_crypto_etf_chart(_etf_df, is_estimated=_etf_estimated)
-        if _etf_fig:
-            st.plotly_chart(_etf_fig, use_container_width=True, config={'displayModeBar': False})
-        if _etf_estimated:
-            st.markdown(
-                '<div style="background:#0A0500;border-left:3px solid #FF8C00;padding:8px 12px;'
-                'font-family:monospace;font-size:10px;color:#FF8C00">⚠️ Data estimated from yfinance '
-                'volume × price action. Actual fund flow data from Farside Investors was unavailable.</div>',
-                unsafe_allow_html=True
-            )
-    else:
-        st.markdown(
-            '<p style="color:#555;font-family:monospace;font-size:11px">'
-            'ETF flow data unavailable. Both Farside and yfinance sources failed.</p>',
-            unsafe_allow_html=True
-        )
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
     st.markdown('<div class="bb-ph">💰 CRYPTO — COINGECKO + TRADINGVIEW</div>', unsafe_allow_html=True)
 
     with st.spinner("Loading crypto globals…"):
@@ -1416,6 +1389,32 @@ with tabs[4]:
     st.markdown('<div class="bb-ph">📈 ETH/USD — TRADINGVIEW</div>', unsafe_allow_html=True)
     components.html(tv_chart("COINBASE:ETHUSD", 320), height=325, scrolling=False)
 
+    # ── Institutional BTC ETF Flows ───────────────────────────────────
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+    st.markdown('<div class="bb-ph">📊 INSTITUTIONAL BTC ETF FLOWS — DAILY NET</div>', unsafe_allow_html=True)
+    with st.spinner("Loading ETF flow data…"):
+        _etf_df = fetch_btc_etf_flows()
+        _etf_estimated = False
+        if _etf_df is None or _etf_df.empty:
+            _etf_df = fetch_btc_etf_flows_fallback()
+            _etf_estimated = True
+    if _etf_df is not None and not _etf_df.empty:
+        _etf_fig = render_crypto_etf_chart(_etf_df, is_estimated=_etf_estimated)
+        if _etf_fig:
+            st.plotly_chart(_etf_fig, use_container_width=True, config={'displayModeBar': False})
+        if _etf_estimated:
+            st.markdown(
+                '<div style="background:#0A0500;border-left:3px solid #FF8C00;padding:8px 12px;'
+                'font-family:monospace;font-size:10px;color:#FF8C00">⚠️ Data estimated from yfinance '
+                'volume × price action. Actual fund flow data from Farside Investors was unavailable.</div>',
+                unsafe_allow_html=True
+            )
+    else:
+        st.markdown(
+            '<p style="color:#555;font-family:monospace;font-size:11px">'
+            'ETF flow data unavailable. Both Farside and yfinance sources failed.</p>',
+            unsafe_allow_html=True
+        )
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
     st.markdown('<div class="bb-ph">🐋 WHALE FLOWS — LARGE TRADES (≥$500K) + EXCHANGE NETFLOW</div>', unsafe_allow_html=True)
 
