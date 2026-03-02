@@ -2720,123 +2720,151 @@ def fetch_ais_vessels():
 
 
 # ════════════════════════════════════════════════════════════════════
-# CRYPTO — INSTITUTIONAL BTC ETF FLOWS
+# CRYPTO — INSTITUTIONAL BTC ETF FLOWS (Yahoo Finance v8 chart method)
 # ════════════════════════════════════════════════════════════════════
 
-_FARSIDE_UA = (
+_ETF_TICKERS = [
+    "IBIT", "FBTC", "ARKB", "BITB", "GBTC",
+    "HODL", "BRRR", "EZBC", "BTCO", "BTCW",
+]
+
+_ETF_COLORS = {
+    "IBIT": "#00CC44",   # BlackRock
+    "FBTC": "#00AA88",   # Fidelity
+    "ARKB": "#44BB66",   # Ark
+    "BITB": "#66CC88",   # Bitwise
+    "GBTC": "#FF4444",   # Grayscale
+    "HODL": "#55DD99",   # VanEck
+    "BRRR": "#33CC77",   # Valkyrie
+    "EZBC": "#77DDAA",   # Franklin
+    "BTCO": "#88CCBB",   # Invesco
+    "BTCW": "#99BBAA",   # WisdomTree
+}
+
+_YAHOO_CHART_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/122.0.0.0 Safari/537.36"
 )
 
-_ETF_TICKERS = ["IBIT", "FBTC", "ARKB", "BITB", "GBTC"]
 
-_ETF_COLORS = {
-    "IBIT": "#00CC44",   # BlackRock — green (inflow)
-    "FBTC": "#00AA88",   # Fidelity — teal-green (inflow)
-    "ARKB": "#44BB66",   # Ark — lighter green (inflow)
-    "BITB": "#66CC88",   # Bitwise — pale green (inflow)
-    "GBTC": "#FF4444",   # Grayscale — red (outflow)
-}
+def _fetch_yahoo_v8_chart(ticker, range_str="5d", interval="1d"):
+    """Fetch Yahoo Finance v8 chart JSON for a single ticker.
+
+    Returns list of dicts [{timestamp, close, volume}, ...] or empty list.
+    """
+    import requests as _req
+    url = (
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+        f"?range={range_str}&interval={interval}"
+    )
+    try:
+        r = _req.get(url, headers={"User-Agent": _YAHOO_CHART_UA}, timeout=8)
+        if r.status_code != 200:
+            return []
+        data = r.json()
+        result = data.get("chart", {}).get("result", [])
+        if not result:
+            return []
+        meta = result[0]
+        timestamps = meta.get("timestamp", [])
+        indicators = meta.get("indicators", {}).get("quote", [{}])[0]
+        closes = indicators.get("close", [])
+        volumes = indicators.get("volume", [])
+        if not timestamps or not closes:
+            return []
+
+        rows = []
+        for i, ts in enumerate(timestamps):
+            c = closes[i] if i < len(closes) else None
+            v = volumes[i] if i < len(volumes) else None
+            if c is None or v is None:
+                continue
+            rows.append({
+                "timestamp": ts,
+                "close": float(c),
+                "volume": int(v),
+            })
+        return rows
+    except Exception:
+        return []
 
 
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=600)
 def fetch_btc_etf_flows():
-    """Scrape daily BTC Spot ETF flow data from Farside Investors.
+    """Estimate BTC spot ETF flows using Yahoo Finance v8 chart API.
+
+    Method (worldmonitor heuristic):
+    - Price change: daily close vs previous close -> direction
+    - Estimated flow: volume x price x direction_sign x 0.10 -> $M
 
     Returns pd.DataFrame with date index, columns = ETF tickers + 'Total',
     values in $M (float). Returns None on failure.
     """
     import pandas as _pd
+    import time as _time
 
-    URLS = [
-        "https://farside.co.uk/bitcoin-etf-flow-all-data/",
-        "https://farside.co.uk/?p=997",
-    ]
+    all_flows = {}
+    missed = 0
 
-    for url in URLS:
+    for ticker in _ETF_TICKERS:
         try:
-            tables = _pd.read_html(
-                url,
-                header=0,
-                attrs={"class": "etf"},
-                storage_options={"User-Agent": _FARSIDE_UA},
-            )
-            if not tables:
-                # Fallback: try without class filter
-                tables = _pd.read_html(
-                    url,
-                    header=0,
-                    storage_options={"User-Agent": _FARSIDE_UA},
-                )
-            if not tables:
+            rows = _fetch_yahoo_v8_chart(ticker, range_str="5d", interval="1d")
+            if len(rows) < 2:
+                missed += 1
                 continue
 
-            # Find the largest table (likely the flow data)
-            df = max(tables, key=len)
+            ticker_flows = {}
+            for i in range(1, len(rows)):
+                prev_close = rows[i - 1]["close"]
+                curr_close = rows[i]["close"]
+                volume = rows[i]["volume"]
+                ts = rows[i]["timestamp"]
 
-            # Normalize column names — strip whitespace and parenthesized tickers
-            df.columns = [str(c).strip().split("(")[0].strip().upper() for c in df.columns]
+                if prev_close <= 0 or curr_close <= 0:
+                    continue
 
-            # Identify date column
-            date_col = None
-            for candidate in ["DATE", "DAY", ""]:
-                if candidate in df.columns:
-                    date_col = candidate
-                    break
-            if date_col is None:
-                date_col = df.columns[0]
+                # Direction: positive price change = inflow, negative = outflow
+                price_change = curr_close - prev_close
+                direction = 1.0 if price_change >= 0 else -1.0
 
-            df = df.rename(columns={date_col: "Date"})
+                # Estimated flow in $M: volume x price x direction x 0.10
+                est_flow = (volume * curr_close * direction * 0.10) / 1e6
 
-            # Parse dates — drop rows without parseable dates
-            df["Date"] = _pd.to_datetime(df["Date"], errors="coerce")
-            df = df.dropna(subset=["Date"])
-            df = df.set_index("Date").sort_index()
+                date = _pd.Timestamp.fromtimestamp(ts).normalize()
+                ticker_flows[date] = round(est_flow, 2)
 
-            # Keep only ETF columns that exist + Total
-            keep = [c for c in _ETF_TICKERS if c in df.columns]
-            if "TOTAL" in df.columns:
-                keep.append("TOTAL")
-                df = df.rename(columns={"TOTAL": "Total"})
-                keep[-1] = "Total"
-            elif "Total" in df.columns:
-                keep.append("Total")
+            if ticker_flows:
+                all_flows[ticker] = ticker_flows
 
-            if not keep:
-                continue
-
-            df = df[keep]
-
-            # Convert string values like "100.5" or "(50.2)" or "-" to float
-            for col in df.columns:
-                s = df[col].astype(str).str.strip()
-                # Replace standalone dashes (no-data) with 0 BEFORE touching negatives
-                s = s.replace({"-": "0", "—": "0", "": "0"})
-                # Strip $ and commas
-                s = s.str.replace(r"[,$]", "", regex=True)
-                # Parenthesized negatives: (50.2) → -50.2
-                s = s.str.replace(r"\(([\d.]+)\)", r"-\1", regex=True)
-                df[col] = _pd.to_numeric(s, errors="coerce").fillna(0)
-
-            # Keep last 60 trading days
-            df = df.tail(60)
-
-            if len(df) > 0:
-                return df
+            # Rate gate: 1s between Yahoo requests
+            _time.sleep(1.0)
 
         except Exception:
+            missed += 1
             continue
+
+    if not all_flows:
+        return None
+
+    df = _pd.DataFrame(all_flows)
+    df.index = _pd.to_datetime(df.index)
+    df = df.sort_index()
+    df = df.fillna(0)
+    df["Total"] = df[[c for c in df.columns if c in _ETF_TICKERS]].sum(axis=1)
+
+    if len(df) > 0:
+        return df
 
     return None
 
 
 @st.cache_data(ttl=1800)
 def fetch_btc_etf_flows_fallback():
-    """Fallback: estimate BTC ETF net flows from yfinance volume × price action.
+    """Fallback: estimate BTC ETF flows using yfinance library.
 
-    Uses daily close vs open × volume as a directional flow proxy.
-    NOT actual fund flow data — labeled as estimated.
+    Same formula (volume x price x direction x 0.10) but uses
+    the yfinance library instead of direct v8 API calls.
 
     Returns pd.DataFrame matching fetch_btc_etf_flows() format, or None.
     """
@@ -2851,20 +2879,22 @@ def fetch_btc_etf_flows_fallback():
             try:
                 t = yf.Ticker(ticker)
                 hist = t.history(period="60d")
-                if hist is None or hist.empty:
+                if hist is None or hist.empty or len(hist) < 2:
                     continue
-                # Proxy: sign(close - open) × volume × average_price / 1e6 → $M
-                hist["flow_proxy"] = (
-                    (hist["Close"] - hist["Open"]).apply(lambda x: 1 if x >= 0 else -1)
-                    * hist["Volume"]
-                    * ((hist["Close"] + hist["Open"]) / 2)
-                    / 1e6
-                )
-                # Scale GBTC flows to be predominantly negative (outflow bias)
-                if ticker == "GBTC":
-                    hist["flow_proxy"] = hist["flow_proxy"] * -0.5
 
-                all_data[ticker] = hist["flow_proxy"]
+                # Direction from close vs previous close
+                prev_close = hist["Close"].shift(1)
+                direction = (hist["Close"] - prev_close).apply(
+                    lambda x: 1.0 if x >= 0 else -1.0
+                )
+                # Same formula: volume x price x direction x 0.10 -> $M
+                est_flow = (
+                    hist["Volume"] * hist["Close"] * direction * 0.10
+                ) / 1e6
+
+                # Drop first row (no prev_close)
+                all_data[ticker] = est_flow.iloc[1:]
+
             except Exception:
                 continue
 
@@ -2874,7 +2904,7 @@ def fetch_btc_etf_flows_fallback():
         df = _pd.DataFrame(all_data)
         df.index = _pd.to_datetime(df.index).tz_localize(None)
         df = df.fillna(0)
-        df["Total"] = df.sum(axis=1)
+        df["Total"] = df[[c for c in df.columns if c in _ETF_TICKERS]].sum(axis=1)
         df = df.tail(30)
 
         if len(df) > 0:
@@ -2884,3 +2914,4 @@ def fetch_btc_etf_flows_fallback():
         pass
 
     return None
+
