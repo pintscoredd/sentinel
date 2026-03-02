@@ -2962,3 +2962,207 @@ def fetch_btc_etf_flows_fallback():
 
     return None
 
+
+# ════════════════════════════════════════════════════════════════════
+# TWITTER/X — FINANCIAL NEWS FEED (@FinancialJuice, @WalterBloomberg)
+# ════════════════════════════════════════════════════════════════════
+
+_TWITTER_ACCOUNTS = [
+    {"handle": "FinancialJuice", "label": "FINANCIAL JUICE", "color": "#FF6600"},
+    {"handle": "WalterBloomworx", "label": "WALTER BLOOMBERG", "color": "#00CCFF"},
+]
+
+_TWITTER_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36"
+)
+
+
+def _fetch_x_api_v2(bearer_token, handles, max_results=15):
+    """Fetch recent tweets via X API v2 search/recent.
+
+    Requires Basic tier ($100/mo) or higher.
+    Returns list of tweet dicts or empty list.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    query = " OR ".join(f"from:{h}" for h in handles)
+    url = "https://api.twitter.com/2/tweets/search/recent"
+    params = {
+        "query": query,
+        "max_results": min(max_results, 100),
+        "tweet.fields": "created_at,author_id,text",
+        "expansions": "author_id",
+        "user.fields": "username,name",
+    }
+    try:
+        r = requests.get(
+            url, params=params, timeout=10,
+            headers={"Authorization": f"Bearer {bearer_token}"},
+        )
+        if r.status_code != 200:
+            return []
+        data = r.json()
+        tweets = data.get("data", [])
+        # Build author lookup
+        users = {}
+        for u in data.get("includes", {}).get("users", []):
+            users[u["id"]] = u.get("username", "")
+        result = []
+        for tw in tweets:
+            author = users.get(tw.get("author_id", ""), "unknown")
+            created = tw.get("created_at", "")
+            result.append({
+                "text": tw.get("text", ""),
+                "author": author,
+                "timestamp": created,
+                "url": f"https://x.com/{author}/status/{tw['id']}",
+                "source": "x_api",
+            })
+        return result
+    except Exception:
+        return []
+
+
+def _fetch_nitter_rss(handle, max_items=8):
+    """Fetch tweets via Nitter RSS (multiple instance fallback).
+
+    Returns list of tweet dicts or empty list.
+    """
+    import xml.etree.ElementTree as _ET
+    from datetime import datetime as _dt
+
+    NITTER_INSTANCES = [
+        f"https://nitter.poast.org/{handle}/rss",
+        f"https://nitter.privacydev.net/{handle}/rss",
+        f"https://nitter.cz/{handle}/rss",
+        f"https://nitter.net/{handle}/rss",
+    ]
+
+    for rss_url in NITTER_INSTANCES:
+        try:
+            r = requests.get(
+                rss_url, timeout=8,
+                headers={"User-Agent": _TWITTER_UA},
+            )
+            if r.status_code != 200:
+                continue
+            root = _ET.fromstring(r.text)
+            items = root.findall(".//item")
+            if not items:
+                continue
+            tweets = []
+            for item in items[:max_items]:
+                title = item.findtext("title", "")
+                link = item.findtext("link", "")
+                pubdate = item.findtext("pubDate", "")
+                desc = item.findtext("description", "")
+                # Clean HTML from description
+                import re as _re
+                clean_text = _re.sub(r"<[^>]+>", "", desc).strip() if desc else title
+                tweets.append({
+                    "text": clean_text[:280],
+                    "author": handle,
+                    "timestamp": pubdate,
+                    "url": link or f"https://x.com/{handle}",
+                    "source": "nitter",
+                })
+            if tweets:
+                return tweets
+        except Exception:
+            continue
+    return []
+
+
+def _fetch_rss_bridge(handle, max_items=8):
+    """Fetch tweets via public RSS bridge services.
+
+    Returns list of tweet dicts or empty list.
+    """
+    import xml.etree.ElementTree as _ET
+
+    BRIDGES = [
+        f"https://rsshub.app/twitter/user/{handle}",
+        f"https://rss.app/feeds/twitter/{handle}",
+    ]
+
+    for url in BRIDGES:
+        try:
+            r = requests.get(
+                url, timeout=8,
+                headers={"User-Agent": _TWITTER_UA},
+            )
+            if r.status_code != 200:
+                continue
+            root = _ET.fromstring(r.text)
+            items = root.findall(".//item")
+            if not items:
+                continue
+            tweets = []
+            for item in items[:max_items]:
+                title = item.findtext("title", "")
+                link = item.findtext("link", "")
+                pubdate = item.findtext("pubDate", "")
+                import re as _re
+                clean = _re.sub(r"<[^>]+>", "", item.findtext("description", "") or title).strip()
+                tweets.append({
+                    "text": clean[:280],
+                    "author": handle,
+                    "timestamp": pubdate,
+                    "url": link or f"https://x.com/{handle}",
+                    "source": "rss_bridge",
+                })
+            if tweets:
+                return tweets
+        except Exception:
+            continue
+    return []
+
+
+@st.cache_data(ttl=120)
+def fetch_twitter_feed():
+    """Fetch recent tweets from @FinancialJuice and @WalterBloomberg.
+
+    Priority:
+      1. X API v2 (requires TWITTER_BEARER_TOKEN in st.secrets)
+      2. Nitter RSS (free, multiple instances)
+      3. RSS bridge services (free)
+
+    Returns list of dicts: {text, author, timestamp, url, source, label, color}
+    sorted by recency (newest first). Empty list on total failure.
+    """
+    all_tweets = []
+
+    # Try X API v2 first
+    try:
+        bearer = st.secrets.get("TWITTER_BEARER_TOKEN", "") or ""
+    except Exception:
+        bearer = ""
+
+    if bearer:
+        handles = [a["handle"] for a in _TWITTER_ACCOUNTS]
+        api_tweets = _fetch_x_api_v2(bearer, handles, max_results=20)
+        if api_tweets:
+            # Tag with label/color
+            for tw in api_tweets:
+                acct = next(
+                    (a for a in _TWITTER_ACCOUNTS
+                     if a["handle"].lower() == tw["author"].lower()),
+                    _TWITTER_ACCOUNTS[0],
+                )
+                tw["label"] = acct["label"]
+                tw["color"] = acct["color"]
+            return sorted(api_tweets, key=lambda x: x.get("timestamp", ""), reverse=True)[:15]
+
+    # Fallback: Nitter + RSS bridge per account
+    for acct in _TWITTER_ACCOUNTS:
+        handle = acct["handle"]
+        tweets = _fetch_nitter_rss(handle) or _fetch_rss_bridge(handle) or []
+        for tw in tweets:
+            tw["label"] = acct["label"]
+            tw["color"] = acct["color"]
+        all_tweets.extend(tweets)
+
+    # Sort by timestamp (best effort — pubDate formats vary)
+    all_tweets.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    return all_tweets[:15]
