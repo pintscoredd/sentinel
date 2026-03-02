@@ -1131,8 +1131,7 @@ def render_crypto_etf_chart(df, height=420, is_estimated=False):
             tickfont=dict(size=9, color="#888"),
         ),
         yaxis=dict(
-            title="Daily Net Flow ($M)",
-            titlefont=dict(size=9, color="#666"),
+            title=dict(text="Daily Net Flow ($M)", font=dict(size=9, color="#666")),
             gridcolor="#111111",
             color="#555555",
             showgrid=True,
@@ -1142,8 +1141,7 @@ def render_crypto_etf_chart(df, height=420, is_estimated=False):
             zerolinewidth=1,
         ),
         yaxis2=dict(
-            title="Cumulative ($M)",
-            titlefont=dict(size=9, color="#888"),
+            title=dict(text="Cumulative ($M)", font=dict(size=9, color="#888")),
             overlaying="y",
             side="right",
             showgrid=False,
