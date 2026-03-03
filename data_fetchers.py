@@ -99,6 +99,25 @@ def _fetch_robust_json(url, params=None, headers=None, timeout=10):
     return json.loads(r.content)
 
 
+def _fetch_fast_json(url, params=None, headers=None, timeout=6):
+    """Single-attempt, short-timeout fetcher for non-critical / high-latency feeds.
+    Used for GDELT and live aircraft APIs where a slow response should be skipped,
+    not retried (retrying a slow public API just blocks the thread for minutes).
+    Returns None on any error so the caller can fall through gracefully.
+    """
+    try:
+        _hdrs = {"User-Agent": "SENTINEL/3.0", **(headers or {})}
+        r = requests.get(url, params=params, headers=_hdrs, timeout=timeout)
+        r.raise_for_status()
+        text = r.text.strip()
+        if not text or len(text) < 10:
+            return None
+        return json.loads(text.encode() if hasattr(json, "loads") and callable(getattr(json, "loads")) else text)
+    except Exception as exc:
+        logger.warning("_fetch_fast_json %s → %s", url, exc)
+        return None
+
+
 def run_async(coro):
     """Helper to safely run async tasks in Streamlit threads."""
     try:
@@ -447,27 +466,26 @@ def build_brief_context():
     )
 
     def _fetch_geo():
-        try:
-            r = requests.get(
-                "https://api.gdeltproject.org/api/v2/doc/doc",
-                params={"query": GEO_QUERY + " sourcelang:english", "mode": "artlist",
-                        "maxrecords": 20, "format": "json", "timespan": "72h"},
-                timeout=8,
-            )
-            if r.status_code != 200: return []
-            arts = [a for a in r.json().get("articles", []) if _is_english(a.get("title", ""))]
-            lines, seen = [], set()
-            for a in arts:
-                title = a.get("title", "").strip()
-                if not title or title in seen: continue
-                seen.add(title)
-                domain = a.get("domain", "")
-                sd = a.get("seendate", "")
-                date_str = f"{sd[:4]}-{sd[4:6]}-{sd[6:8]}" if sd and len(sd) >= 8 else ""
-                lines.append(f"  • [{date_str}] {title} ({domain})")
-            return lines
-        except Exception:
+        data = _fetch_fast_json(
+            "https://api.gdeltproject.org/api/v2/doc/doc",
+            params={"query": GEO_QUERY + " sourcelang:english", "mode": "artlist",
+                    "maxrecords": 20, "format": "json", "timespan": "72h"},
+            timeout=6,
+        )
+        if not data:
             return []
+        arts = [a for a in data.get("articles", []) if _is_english(a.get("title", ""))]
+        lines, seen = [], set()
+        for a in arts:
+            title = a.get("title", "").strip()
+            if not title or title in seen:
+                continue
+            seen.add(title)
+            domain = a.get("domain", "")
+            sd = a.get("seendate", "")
+            date_str = f"{sd[:4]}-{sd[4:6]}-{sd[6:8]}" if sd and len(sd) >= 8 else ""
+            lines.append(f"  • [{date_str}] {title} ({domain})")
+        return lines
 
     # Simple sequential wait since we got rid of ThreadPoolExecutor entirely
     base = market_snapshot_str()
@@ -589,21 +607,23 @@ def crypto_global():
 
 @st.cache_data(ttl=600)
 def gdelt_news(query, max_rec=15):
-    endpoints = [
-        {"url": "https://api.gdeltproject.org/api/v2/doc/doc",
-         "params": {"query": query + " sourcelang:english", "mode": "artlist", "maxrecords": max_rec, "format": "json", "timespan": "72h"}},
-        {"url": "https://api.gdeltproject.org/api/v2/doc/doc",
-         "params": {"query": query + " sourcelang:english", "mode": "artlist", "maxrecords": max_rec, "format": "json", "timespan": "168h"}},
-    ]
-    for ep in endpoints:
-        try:
-            data = _fetch_robust_json(ep["url"], params=ep["params"], timeout=18)
-            arts = data.get("articles", [])
-            if arts:
-                filtered = [a for a in arts if _is_english(a.get("title", ""))][:max_rec]
-                if filtered: return filtered
-        except Exception:
+    """Fetch GDELT articles. Uses _fetch_fast_json (single attempt, 6s timeout) to avoid
+    the retry+backoff chain that previously blocked Streamlit spinners for up to 2 minutes.
+    Falls back through three timespan windows before returning an empty list.
+    """
+    GDELT_BASE = "https://api.gdeltproject.org/api/v2/doc/doc"
+    for ts in ["72h", "168h", "720h"]:
+        data = _fetch_fast_json(
+            GDELT_BASE,
+            params={"query": query + " sourcelang:english", "mode": "artlist",
+                    "maxrecords": max_rec, "format": "json", "timespan": ts},
+            timeout=6,
+        )
+        if not data:
             continue
+        filtered = [a for a in data.get("articles", []) if _is_english(a.get("title", ""))][:max_rec]
+        if filtered:
+            return filtered
     return []
 
 @st.cache_data(ttl=300)
@@ -1680,26 +1700,32 @@ GEO_IMPACT_TICKERS = {
 
 def fetch_military_aircraft() -> "pd.DataFrame":
     import pandas as _pd
-    try:
-        data = _fetch_robust_json("https://api.airplanes.live/v2/military", timeout=15, headers={"User-Agent": "SENTINEL/3.0"})
-        ac_list = data.get("ac", [])
-        rows = []
-        for ac in ac_list:
-            lat, lon = ac.get("lat"), ac.get("lon")
-            if lat is None or lon is None: continue
-            rows.append({
-                "hex": ac.get("hex", ""), "lat": float(lat), "lon": float(lon),
-                "alt_baro": int(ac.get("alt_baro") or 0), "gs": int(ac.get("gs") or 0),
-                "flight": str(ac.get("flight") or ac.get("hex", "UNKN")).strip(),
-                "track": float(ac.get("track") or 0), "size": 48,
-            })
-        df = _pd.DataFrame(rows)
-        if not df.empty:
-            df["photo_url"] = df["hex"].apply(lambda h: f"https://api.planespotters.net/pub/photos/hex/{h}")
-        return df
-    except Exception as e:
-        logger.error({"error": str(e)}, "Military Flight Fetch Error")
+    # Use _fetch_fast_json (single attempt, 8s) rather than _fetch_robust_json so that
+    # a slow/down airplanes.live does NOT block the Streamlit geo-spinner for 50+ seconds.
+    data = _fetch_fast_json(
+        "https://api.airplanes.live/v2/military",
+        timeout=8,
+        headers={"User-Agent": "SENTINEL/3.0"},
+    )
+    if not data:
+        logger.warning("fetch_military_aircraft: airplanes.live returned no data")
         return _pd.DataFrame()
+    ac_list = data.get("ac", [])
+    rows = []
+    for ac in ac_list:
+        lat, lon = ac.get("lat"), ac.get("lon")
+        if lat is None or lon is None:
+            continue
+        rows.append({
+            "hex": ac.get("hex", ""), "lat": float(lat), "lon": float(lon),
+            "alt_baro": int(ac.get("alt_baro") or 0), "gs": int(ac.get("gs") or 0),
+            "flight": str(ac.get("flight") or ac.get("hex", "UNKN")).strip(),
+            "track": float(ac.get("track") or 0), "size": 48,
+        })
+    df = _pd.DataFrame(rows)
+    if not df.empty:
+        df["photo_url"] = df["hex"].apply(lambda h: f"https://api.planespotters.net/pub/photos/hex/{h}")
+    return df
 
 
 @st.cache_data(ttl=300)
@@ -1760,19 +1786,19 @@ def fetch_satellite_positions():
 @st.cache_data(ttl=300)
 def fetch_conflict_events() -> "pd.DataFrame":
     import pandas as _pd
-    try:
-        url = "https://api.gdeltproject.org/api/v2/geo/geo?query=(strike%20OR%20attack%20OR%20bombing%20OR%20explosion)&mode=pointdata&format=geojson&timespan=1h"
-        data = _fetch_robust_json(url, timeout=12, headers={"User-Agent": "SENTINEL/3.0"})
-        features = data.get("features", [])
-        rows = []
-        for f in features:
-            coords = f.get("geometry", {}).get("coordinates", [])
-            props  = f.get("properties", {})
-            if len(coords) < 2: continue
-            rows.append({"lon": float(coords[0]), "lat": float(coords[1]), "name": props.get("name", "Event"), "url": props.get("url", "")})
-        return _pd.DataFrame(rows)
-    except Exception:
+    url = "https://api.gdeltproject.org/api/v2/geo/geo?query=(strike%20OR%20attack%20OR%20bombing%20OR%20explosion)&mode=pointdata&format=geojson&timespan=1h"
+    data = _fetch_fast_json(url, timeout=6, headers={"User-Agent": "SENTINEL/3.0"})
+    if not data:
         return _pd.DataFrame()
+    rows = []
+    for f in data.get("features", []):
+        coords = f.get("geometry", {}).get("coordinates", [])
+        props  = f.get("properties", {})
+        if len(coords) < 2:
+            continue
+        rows.append({"lon": float(coords[0]), "lat": float(coords[1]),
+                     "name": props.get("name", "Event"), "url": props.get("url", "")})
+    return _pd.DataFrame(rows)
 
 @st.cache_data(ttl=300)
 def fetch_conflict_events_json():
