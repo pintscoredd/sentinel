@@ -140,29 +140,19 @@ def get_heatmap_data():
         "Materials": ["LIN", "APD", "ECL", "SHW", "NEM", "FCX", "NUE", "VMC", "ALB", "MOS"],
         "Real Estate": ["PLD", "AMT", "CCI", "EQIX", "PSA", "SPG", "WELL", "O", "DLR", "AVB"],
     }
-    all_tkrs = []
-    tkr_to_sector = {}
-    for sector, tickers in SECTOR_STOCKS.items():
-        for tkr in tickers:
-            all_tkrs.append(tkr)
-            tkr_to_sector[tkr] = sector
-
+    all_jobs = [(sector, tkr) for sector, tickers in SECTOR_STOCKS.items() for tkr in tickers]
     rows = []
-    try:
-        df = yf.download(" ".join(all_tkrs), period="5d", progress=False)
-        for tkr in all_tkrs:
-            sector = tkr_to_sector[tkr]
-            if "Close" in df.columns and tkr in df["Close"].columns:
-                closes = df["Close"][tkr].dropna()
-                if closes.empty: continue
-                price = float(closes.iloc[-1])
-                prev = float(closes.iloc[-2]) if len(closes) > 1 else price
-                chg = price - prev
-                pct = chg / prev * 100
-                rows.append({"ticker": tkr, "sector": sector, "pct": pct,
-                             "price": round(price, 2), "change": round(chg, 2)})
-    except Exception:
-        pass
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        futures = {pool.submit(yahoo_quote, tkr): (sector, tkr) for sector, tkr in all_jobs}
+        for f in as_completed(futures):
+            sector, tkr = futures[f]
+            try:
+                q = f.result()
+                if q:
+                    rows.append({"ticker": tkr, "sector": sector, "pct": q["pct"],
+                                 "price": q["price"], "change": q["change"]})
+            except Exception:
+                pass
     return rows
 
 @st.cache_data(ttl=300)
@@ -194,17 +184,17 @@ def options_chain(ticker, expiry=None):
         exp = expiry if expiry and expiry in exps else exps[0]
         chain = t.option_chain(exp)
         cols = ["strike", "lastPrice", "bid", "ask", "volume", "openInterest", "impliedVolatility"]
-        c = chain.calls[[x for x in cols if x in chain.calls.columns]].head(26)
-        p = chain.puts[[x for x in cols if x in chain.puts.columns]].head(26)
+        c = chain.calls[[x for x in cols if x in chain.calls.columns]]
+        p = chain.puts[[x for x in cols if x in chain.puts.columns]]
         return c, p, exp
-    except Exception:
+    except:
         return None, None, None
 
 
 def score_options_chain(calls_df, puts_df, current_price, vix=None):
     """Adaptive options scoring engine.
 
-    1. Trims 13 deep OTM/ITM strikes (furthest from current price).
+    1. Trims deep OTM/ITM strikes (furthest from current price).
     2. Scores each contract: S = (norm_VOI * w1) + (IV_pct * w2) - (|delta_proxy - 0.5| * w3)
     3. Adapts weights based on VIX regime.
     4. Returns dict with 'top_calls' (2), 'top_puts' (2), 'unusual' (single highest V/OI).
@@ -240,10 +230,10 @@ def score_options_chain(calls_df, puts_df, current_price, vix=None):
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-        # ── Trim deep OTM/ITM: keep strikes nearest to current_price ──
-        if current_price and "strike" in df.columns and len(df) > 13:
+        # ── Trim deep OTM/ITM: keep 30 strikes nearest to current_price ──
+        if current_price and "strike" in df.columns and len(df) > 30:
             df["_dist"] = (df["strike"] - current_price).abs()
-            df = df.nsmallest(len(df) - 13, "_dist").drop(columns=["_dist"])
+            df = df.nsmallest(30, "_dist").drop(columns=["_dist"])
 
         if df.empty:
             return []
@@ -373,28 +363,17 @@ def top_movers():
     seen = set()
     UNIVERSE = [x for x in UNIVERSE if not (x in seen or seen.add(x))]
 
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     results = []
-    try:
-        df = yf.download(" ".join(UNIVERSE), period="5d", progress=False)
-        for tkr in UNIVERSE:
-            if "Close" in df.columns and tkr in df["Close"].columns:
-                closes = df["Close"][tkr].dropna()
-                if closes.empty: continue
-                price = float(closes.iloc[-1])
-                prev = float(closes.iloc[-2]) if len(closes) > 1 else price
-                chg = price - prev
-                pct = chg / prev * 100
-                
-                vol = 0
-                if "Volume" in df.columns and tkr in df["Volume"].columns:
-                    vols = df["Volume"][tkr].dropna()
-                    if not vols.empty:
-                        vol = int(vols.iloc[-1])
-                        
-                results.append({"ticker": tkr, "price": round(price, 2), "change": round(chg, 2), "pct": round(pct, 2), "volume": vol})
-    except Exception:
-        pass
-        
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        futs = {pool.submit(yahoo_quote, tkr): tkr for tkr in UNIVERSE}
+        for f in as_completed(futs):
+            try:
+                q = f.result()
+                if q: results.append(q)
+            except Exception:
+                pass
+
     sorted_q = sorted(results, key=lambda x: x["pct"], reverse=True)
     return sorted_q[:10], sorted_q[-10:]
 
@@ -3045,4 +3024,3 @@ def fetch_btc_etf_flows_fallback():
         pass
 
     return None
-
