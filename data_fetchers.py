@@ -140,19 +140,29 @@ def get_heatmap_data():
         "Materials": ["LIN", "APD", "ECL", "SHW", "NEM", "FCX", "NUE", "VMC", "ALB", "MOS"],
         "Real Estate": ["PLD", "AMT", "CCI", "EQIX", "PSA", "SPG", "WELL", "O", "DLR", "AVB"],
     }
-    all_jobs = [(sector, tkr) for sector, tickers in SECTOR_STOCKS.items() for tkr in tickers]
+    all_tkrs = []
+    tkr_to_sector = {}
+    for sector, tickers in SECTOR_STOCKS.items():
+        for tkr in tickers:
+            all_tkrs.append(tkr)
+            tkr_to_sector[tkr] = sector
+
     rows = []
-    with ThreadPoolExecutor(max_workers=12) as pool:
-        futures = {pool.submit(yahoo_quote, tkr): (sector, tkr) for sector, tkr in all_jobs}
-        for f in as_completed(futures):
-            sector, tkr = futures[f]
-            try:
-                q = f.result()
-                if q:
-                    rows.append({"ticker": tkr, "sector": sector, "pct": q["pct"],
-                                 "price": q["price"], "change": q["change"]})
-            except Exception:
-                pass
+    try:
+        df = yf.download(" ".join(all_tkrs), period="5d", progress=False)
+        for tkr in all_tkrs:
+            sector = tkr_to_sector[tkr]
+            if "Close" in df.columns and tkr in df["Close"].columns:
+                closes = df["Close"][tkr].dropna()
+                if closes.empty: continue
+                price = float(closes.iloc[-1])
+                prev = float(closes.iloc[-2]) if len(closes) > 1 else price
+                chg = price - prev
+                pct = chg / prev * 100
+                rows.append({"ticker": tkr, "sector": sector, "pct": pct,
+                             "price": round(price, 2), "change": round(chg, 2)})
+    except Exception:
+        pass
     return rows
 
 @st.cache_data(ttl=300)
@@ -187,7 +197,7 @@ def options_chain(ticker, expiry=None):
         c = chain.calls[[x for x in cols if x in chain.calls.columns]].head(26)
         p = chain.puts[[x for x in cols if x in chain.puts.columns]].head(26)
         return c, p, exp
-    except:
+    except Exception:
         return None, None, None
 
 
@@ -363,17 +373,28 @@ def top_movers():
     seen = set()
     UNIVERSE = [x for x in UNIVERSE if not (x in seen or seen.add(x))]
 
-    from concurrent.futures import ThreadPoolExecutor, as_completed
     results = []
-    with ThreadPoolExecutor(max_workers=20) as pool:
-        futs = {pool.submit(yahoo_quote, tkr): tkr for tkr in UNIVERSE}
-        for f in as_completed(futs):
-            try:
-                q = f.result()
-                if q: results.append(q)
-            except Exception:
-                pass
-
+    try:
+        df = yf.download(" ".join(UNIVERSE), period="5d", progress=False)
+        for tkr in UNIVERSE:
+            if "Close" in df.columns and tkr in df["Close"].columns:
+                closes = df["Close"][tkr].dropna()
+                if closes.empty: continue
+                price = float(closes.iloc[-1])
+                prev = float(closes.iloc[-2]) if len(closes) > 1 else price
+                chg = price - prev
+                pct = chg / prev * 100
+                
+                vol = 0
+                if "Volume" in df.columns and tkr in df["Volume"].columns:
+                    vols = df["Volume"][tkr].dropna()
+                    if not vols.empty:
+                        vol = int(vols.iloc[-1])
+                        
+                results.append({"ticker": tkr, "price": round(price, 2), "change": round(chg, 2), "pct": round(pct, 2), "volume": vol})
+    except Exception:
+        pass
+        
     sorted_q = sorted(results, key=lambda x: x["pct"], reverse=True)
     return sorted_q[:10], sorted_q[-10:]
 
