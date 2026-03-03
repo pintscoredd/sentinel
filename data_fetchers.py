@@ -157,7 +157,7 @@ def is_market_open():
         else:
             return "CLOSED", "#FF4444", "Markets Closed"
     except Exception as e:
-        logger.error({"error": str(e)}, "is_market_open fallback")
+        logger.error("is_market_open fallback: %s", str(e))
         return "UNKNOWN", "#555555", "Status Unknown"
 
 def is_0dte_market_open():
@@ -240,7 +240,7 @@ def get_heatmap_data():
                 rows.append({"ticker": tkr, "sector": sector, "pct": q["pct"], "price": q["price"], "change": q["change"]})
         return rows
     except Exception as e:
-        logger.error({"error": str(e)}, "Heatmap Fetch Error")
+        logger.error("Heatmap Fetch Error: %s", str(e))
         return []
 
 @st.cache_data(ttl=300)
@@ -405,7 +405,7 @@ def top_movers():
         sorted_q = sorted(results, key=lambda x: x["pct"], reverse=True)
         return sorted_q[:10], sorted_q[-10:]
     except Exception as e:
-        logger.error({"error": str(e)}, "Top Movers Error")
+        logger.error("Top Movers Error: %s", str(e))
         return [], []
 
 
@@ -1700,15 +1700,22 @@ GEO_IMPACT_TICKERS = {
 
 def fetch_military_aircraft() -> "pd.DataFrame":
     import pandas as _pd
-    # Use _fetch_fast_json (single attempt, 8s) rather than _fetch_robust_json so that
-    # a slow/down airplanes.live does NOT block the Streamlit geo-spinner for 50+ seconds.
-    data = _fetch_fast_json(
-        "https://api.airplanes.live/v2/military",
-        timeout=8,
-        headers={"User-Agent": "SENTINEL/3.0"},
-    )
+    # airplanes.live /v2/military now returns HTTP 400 — use adsb.lol as primary,
+    # fall back to adsb.one, then airplanes.live as last resort.
+    # All attempts are single-shot with short timeouts so we never block the spinner.
+    _MIL_ENDPOINTS = [
+        ("https://api.adsb.lol/v2/mil",       {"User-Agent": "SENTINEL/3.0"}),
+        ("https://api.adsb.one/v2/military",   {"User-Agent": "SENTINEL/3.0"}),
+        ("https://api.airplanes.live/v2/military", {"User-Agent": "SENTINEL/3.0"}),
+    ]
+    data = None
+    for url, hdrs in _MIL_ENDPOINTS:
+        data = _fetch_fast_json(url, timeout=8, headers=hdrs)
+        if data:
+            break
+        logger.warning("fetch_military_aircraft: no data from %s", url)
     if not data:
-        logger.warning("fetch_military_aircraft: airplanes.live returned no data")
+        logger.warning("fetch_military_aircraft: all endpoints exhausted, returning empty")
         return _pd.DataFrame()
     ac_list = data.get("ac", [])
     rows = []
@@ -1735,7 +1742,7 @@ def fetch_satellite_positions():
         from skyfield.api import EarthSatellite, load, wgs84 as _wgs84
         import numpy as _np
     except ImportError:
-        logger.error({"error": "Missing skyfield"}, "Satellite Tracker")
+        logger.error("Satellite Tracker: Missing skyfield dependency")
         return _pd.DataFrame(), []
 
     try:
@@ -1743,7 +1750,7 @@ def fetch_satellite_positions():
         r.raise_for_status()
         lines = [l.strip() for l in r.text.strip().splitlines() if l.strip()]
     except Exception as e:
-        logger.error({"error": str(e)}, "Celestrak Error")
+        logger.error("Celestrak Error: %s", str(e))
         return _pd.DataFrame(), []
 
     from datetime import timezone as _tz, timedelta as _td
