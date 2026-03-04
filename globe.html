@@ -786,11 +786,6 @@
     let CW, CH, renderer, scene, camera;
 
     function _getDims() {
-      // Force canvas to fill iframe if CSS percentage height hasn't resolved yet
-      if (!canvas.style.height || canvas.style.height === '100%') {
-        const docH = document.documentElement.clientHeight || window.innerHeight || 700;
-        if (docH > 50) canvas.style.height = docH + 'px';
-      }
       let w = canvas.clientWidth || canvas.offsetWidth;
       let h = canvas.clientHeight || canvas.offsetHeight;
       if (w < 10) w = document.documentElement.clientWidth - 385;
@@ -798,7 +793,7 @@
       if (w < 50) w = 820;
       if (h < 10) h = document.documentElement.clientHeight;
       if (h < 10) h = window.innerHeight;
-      if (h < 50) h = 700;   // default to 700 matching Streamlit component height
+      if (h < 50) h = 600;
       return { w, h };
     }
 
@@ -1075,9 +1070,8 @@
           if (showSats) renderSatMarkers();
         }
 
-        // 5. Pre-computed military flights from Python — always populate flightData
-        // so that toggling the MIL-AIR layer shows planes instantly without a new fetch.
-        if (DATA.planes && DATA.planes.length > 0) {
+        // 5. Pre-computed military flights from Python
+        if (DATA.planes && DATA.planes.length > 0 && showFlights) {
           flightData = DATA.planes.map(p => ({
             callsign: (p.flight || p.callsign || p.hex || 'MIL').toString().trim(),
             lat: parseFloat(p.lat), lon: parseFloat(p.lon),
@@ -1086,7 +1080,7 @@
             heading: parseFloat(p.track || p.heading || 0),
             hex: (p.hex || '').toString(), country: 'MIL', type: p.type || 'MIL', reg: p.reg || ''
           })).filter(f => isFinite(f.lat) && isFinite(f.lon));
-          if (showFlights) renderFlightMarkers();
+          renderFlightMarkers();
         }
       }
       // Ingest on load
@@ -1402,22 +1396,6 @@
                 .filter(f => isFinite(f.lat) && isFinite(f.lon));
             }
           } catch (e) { }
-        }
-
-        // 4) Python-injected airplanes.live data — last resort if all browser APIs
-        //    are blocked by CORS, rate-limited, or unavailable.
-        if (flights.length === 0) {
-          const injected = window.__SENTINEL_DATA__ && window.__SENTINEL_DATA__.planes;
-          if (injected && injected.length > 0) {
-            flights = injected.map(p => ({
-              callsign: (p.flight || p.callsign || p.hex || 'MIL').toString().trim(),
-              lat: parseFloat(p.lat), lon: parseFloat(p.lon),
-              alt: Math.round(parseFloat(p.alt_baro || p.alt || 0)),
-              speed: Math.round(parseFloat(p.gs || p.speed || 0)),
-              heading: parseFloat(p.track || p.heading || 0),
-              hex: (p.hex || '').toString(), country: 'MIL', type: p.type || 'MIL', reg: ''
-            })).filter(f => isFinite(f.lat) && isFinite(f.lon));
-          }
         }
 
         flightData = flights;
@@ -1806,14 +1784,7 @@
         showFlights = !showFlights;
         if (showFlights) {
           btn.classList.add('flt-on');
-          // If Python already pre-populated flightData, render immediately.
-          // Then also kick off a fresh fetch in background to get latest positions.
-          if (flightData.length > 0) {
-            renderFlightMarkers();
-          } else {
-            fetchMilitaryFlights();
-          }
-          // Schedule periodic refresh regardless
+          fetchMilitaryFlights();
           if (fltUpdateInterval) clearInterval(fltUpdateInterval);
           fltUpdateInterval = setInterval(fetchMilitaryFlights, 60000);
         } else {
@@ -1961,11 +1932,7 @@
       // Pause/resume the rAF loop based on canvas visibility.
       // When the user navigates to another Streamlit tab, CSS sets display:none,
       // IntersectionObserver fires, we stop calling rAF — GPU/battery savings.
-      // IMPORTANT: In Streamlit iframes, the canvas may have 0 computed height at first,
-      // so isIntersecting never fires. We always start animation immediately, then let
-      // the observer pause it when truly off-screen.
-      let isAnimating = true;
-      animate(performance.now()); // start immediately — don't wait for observer
+      let isAnimating = false;
       const _visObserver = new IntersectionObserver((entries) => {
         if (entries[0].isIntersecting) {
           if (!isAnimating) { isAnimating = true; animate(performance.now()); }
@@ -1992,12 +1959,7 @@
     // ── LIVE GDELT NEWS FEED
     async function fetchGDELTNews() {
       const nf = document.getElementById('nf-items');
-      // Show a lightweight loading state immediately so the panel is never blank
-      if (!nf.dataset.loaded) {
-        nf.innerHTML = '<div style="color:#333;font-size:10px;font-family:monospace;padding:4px 0">⏳ FETCHING INTEL FEED…</div>';
-      }
-      // GDELT DOC 2.0 API — reduced timeout to 6s per URL to prevent 30s stalls.
-      // Three query variants for resilience; first successful response wins.
+      // GDELT DOC 2.0 API — multiple query variants for resilience
       const URLS = [
         'https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict OR war OR strike OR attack OR military)%20sourcelang:english&mode=ArtList&maxrecords=8&format=json&timespan=24h&sort=DateDesc',
         'https://api.gdeltproject.org/api/v2/doc/doc?query=(geopolitical OR sanctions OR military)%20sourcelang:english&mode=ArtList&maxrecords=8&format=json&timespan=48h&sort=DateDesc',
@@ -2006,10 +1968,8 @@
       for (const url of URLS) {
         try {
           const ctrl = new AbortController();
-          // 6 seconds per attempt — if GDELT is slow, skip don't stall
-          const tid = setTimeout(() => ctrl.abort(), 6000);
+          setTimeout(() => ctrl.abort(), 10000);
           const r = await fetch(url, { signal: ctrl.signal });
-          clearTimeout(tid);
           if (!r.ok) continue;
           const text = await r.text();
           if (!text || text.length < 10) continue;
@@ -2030,13 +1990,10 @@
               <a href="${a.url}" target="_blank" style="color:#DDD;text-decoration:none;font-size:12px;font-weight:600;line-height:1.4">${(a.title || '').substring(0, 100)}</a>
               <div style="color:#555;font-size:9px;margin-top:3px">${dom} · ${d}</div></div>`;
           }).join('');
-          nf.dataset.loaded = '1';
           return;
         } catch (e) { continue; }
       }
-      // All three URLs failed — show degraded state without blocking
       nf.innerHTML = '<div style="color:#444;font-size:11px;font-family:monospace">GDELT API unavailable — retrying in 5m</div>';
-      nf.dataset.loaded = '1';
     }
     fetchGDELTNews();
     setInterval(fetchGDELTNews, 300000);
