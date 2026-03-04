@@ -216,6 +216,11 @@
       width: 300px;
       display: none;
       box-shadow: 0 10px 40px rgba(0, 0, 0, .9);
+      cursor: grab;
+    }
+
+    #ic:active {
+      cursor: grabbing;
     }
 
     #ic.show {
@@ -1665,6 +1670,34 @@
         ic.className = 'show ' + (h.sev || 'elevated');
         positionCard(px, py);
       }
+ const icElement = document.getElementById('ic');
+      let isDraggingIC = false;
+      let icOffsetX = 0, icOffsetY = 0;
+
+      icElement.addEventListener('mousedown', e => {
+        if (e.target.id === 'ic-close' || e.target.id === 'ic-track-btn' || e.target.tagName.toLowerCase() === 'a') return;
+        isDraggingIC = true;
+        const rect = icElement.getBoundingClientRect();
+        icOffsetX = e.clientX - rect.left;
+        icOffsetY = e.clientY - rect.top;
+        e.preventDefault(); // Prevent text selection
+      });
+
+      window.addEventListener('mousemove', e => {
+        if (!isDraggingIC) return;
+        let newX = e.clientX - icOffsetX;
+        let newY = e.clientY - icOffsetY;
+        // Keep it inside the screen bounds
+        newX = Math.max(0, Math.min(newX, window.innerWidth - icElement.offsetWidth));
+        newY = Math.max(0, Math.min(newY, window.innerHeight - icElement.offsetHeight));
+
+        icElement.style.left = newX + 'px';
+        icElement.style.top = newY + 'px';
+      });
+
+      window.addEventListener('mouseup', () => {
+        isDraggingIC = false;
+      });
 
       function showSatCard(sat, px, py) {
         currentCardObj = { type: 'sat', data: sat };
