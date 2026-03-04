@@ -1724,10 +1724,10 @@ def fetch_military_aircraft() -> "pd.DataFrame":
         if lat is None or lon is None:
             continue
         rows.append({
-            "hex": ac.get("hex", ""), "lat": float(lat), "lon": float(lon),
-            "alt_baro": int(ac.get("alt_baro") or 0), "gs": int(ac.get("gs") or 0),
+            "hex": ac.get("hex", ""), "lat": _safe_float(lat), "lon": _safe_float(lon),
+            "alt_baro": _safe_int(ac.get("alt_baro")), "gs": _safe_int(ac.get("gs")),
             "flight": str(ac.get("flight") or ac.get("hex", "UNKN")).strip(),
-            "track": float(ac.get("track") or 0), "size": 48,
+            "track": _safe_float(ac.get("track")), "size": 48,
         })
     df = _pd.DataFrame(rows)
     if not df.empty:
