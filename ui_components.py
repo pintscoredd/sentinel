@@ -289,22 +289,10 @@ def render_unusual_trade(contract, ticker="", expiry=""):
 # INSIDER TRANSACTIONS
 # ════════════════════════════════════════════════════════════════════
 
-ROLE_SHORTCUTS = {
-    "CEO": "CEO", "C.E.O.": "CEO", "CHIEF EXECUTIVE": "CEO", "PRESIDENT": "President",
-    "CFO": "CFO", "CHIEF FINANCIAL": "CFO", "COO": "COO", "CHIEF OPERATING": "COO",
-    "CTO": "CTO", "CHIEF TECHNOLOGY": "CTO", "CMO": "CMO", "CHIEF MARKETING": "CMO",
-    "GENERAL COUNSEL": "Gen Counsel", "DIRECTOR": "Director", "CHAIRMAN": "Chairman",
-    "VP ": "VP", "VICE PRESIDENT": "VP", "SVP": "SVP", "EVP": "EVP", "TREASURER": "Treasurer",
-    "SECRETARY": "Secretary", "CONTROLLER": "Controller", "10% OWNER": "10% Owner",
-    "BENEFICIAL OWNER": "Beneficial Owner",
-}
-
 def classify_role(raw_role):
     if not raw_role: return "Insider"
-    upper = raw_role.upper()
-    for key, short in ROLE_SHORTCUTS.items():
-        if key in upper: return short
-    return raw_role[:22]
+    # Preserve the full spelled-out position
+    return raw_role.strip()[:60]
 
 def render_insider_cards(data, ticker="", finnhub_key=""):
     if not data:
