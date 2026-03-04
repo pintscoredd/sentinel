@@ -426,6 +426,11 @@ with st.sidebar:
   <div style="color:#000;font-size:9px;opacity:0.6">{now_pst()}</div>
 </div>""", unsafe_allow_html=True)
 
+    st.markdown('<div style="color:#FF6600;font-size:9px;letter-spacing:2px;font-weight:700;margin-bottom:4px">NAVIGATION</div>', unsafe_allow_html=True)
+    TABS_LIST = ["BRIEF", "MARKETS", "SPX 0DTE", "MACRO", "CRYPTO", "POLYMARKET", "GEO", "EARNINGS", "SENTINEL AI"]
+    current_tab = st.radio("Go to", TABS_LIST, label_visibility="collapsed")
+    st.markdown('<hr style="border-top:1px solid #222;margin:12px 0 8px">', unsafe_allow_html=True)
+
     st.markdown('<div style="color:#FF6600;font-size:9px;letter-spacing:2px;font-weight:700">API STATUS</div>', unsafe_allow_html=True)
 
     _alpaca_ok = bool(_get_secret("ALPACA_API_KEY")) and bool(_get_secret("ALPACA_SECRET_KEY"))
@@ -475,12 +480,12 @@ st.markdown(f"""
   <div style="font-size:10px;color:#000;opacity:0.75">{now_pst()} &nbsp;|&nbsp; LIVE</div>
 </div>""", unsafe_allow_html=True)
 
-tabs = st.tabs(["BRIEF","MARKETS","SPX 0DTE","MACRO","CRYPTO","POLYMARKET","GEO","EARNINGS","SENTINEL AI"])
+
 
 # ════════════════════════════════════════════════════════════════════
 # TAB 0 — MORNING BRIEF
 # ════════════════════════════════════════════════════════════════════
-with tabs[0]:
+if current_tab == "BRIEF":
     st.markdown('<div class="bb-ph">⚡ SENTINEL MORNING BRIEF</div>', unsafe_allow_html=True)
 
     ref_col, mkt_col = st.columns([1, 1])
@@ -665,7 +670,7 @@ with tabs[0]:
 # ════════════════════════════════════════════════════════════════════
 # TAB 1 — MARKETS
 # ════════════════════════════════════════════════════════════════════
-with tabs[1]:
+if current_tab == "MARKETS":
     st.markdown('<div class="bb-ph">📊 MARKETS — EQUITIES | OPTIONS | MOVERS | ROTATION</div>', unsafe_allow_html=True)
 
     fc, _ = st.columns([2,3])
@@ -939,7 +944,7 @@ with tabs[1]:
 # ════════════════════════════════════════════════════════════════════
 # TAB 2 — SPX 0DTE
 # ════════════════════════════════════════════════════════════════════
-with tabs[2]:
+if current_tab == "SPX 0DTE":
     if "trade_log_0dte" not in st.session_state:
         st.session_state.trade_log_0dte = []
 
@@ -1162,7 +1167,7 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
 # ════════════════════════════════════════════════════════════════════
 # TAB 3 — MACRO
 # ════════════════════════════════════════════════════════════════════
-with tabs[3]:
+if current_tab == "MACRO":
     st.markdown('<div class="bb-ph">📈 MACRO — FRED DATA DASHBOARD</div>', unsafe_allow_html=True)
 
     if not st.session_state.fred_key:
@@ -1343,7 +1348,7 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
 # ════════════════════════════════════════════════════════════════════
 # TAB 4 — CRYPTO
 # ════════════════════════════════════════════════════════════════════
-with tabs[4]:
+if current_tab == "CRYPTO":
     st.markdown('<div class="bb-ph">💰 CRYPTO — COINGECKO + TRADINGVIEW</div>', unsafe_allow_html=True)
 
     with st.spinner("Loading crypto globals…"):
@@ -1659,7 +1664,7 @@ with tabs[4]:
 # ════════════════════════════════════════════════════════════════════
 # TAB 5 — POLYMARKET
 # ════════════════════════════════════════════════════════════════════
-with tabs[5]:
+if current_tab == "POLYMARKET":
     st.markdown('<div class="bb-ph">🎲 POLYMARKET — PREDICTION INTELLIGENCE & UNUSUAL FLOW</div>', unsafe_allow_html=True)
 
     with st.spinner("Loading Polymarket…"):
@@ -1955,7 +1960,7 @@ Higher = more asymmetric<br><br>
 # ════════════════════════════════════════════════════════════════════
 # TAB 6 — GEO (lazy-loaded: only fetches data when user clicks in)
 # ════════════════════════════════════════════════════════════════════
-with tabs[6]:
+if current_tab == "GEO":
     if "geo_tab_active" not in st.session_state:
         st.session_state.geo_tab_active = False
 
@@ -1987,7 +1992,7 @@ with tabs[6]:
 # ════════════════════════════════════════════════════════════════════
 # TAB 7 — EARNINGS TRACKER
 # ════════════════════════════════════════════════════════════════════
-with tabs[7]:
+if current_tab == "EARNINGS":
     st.markdown('<div class="bb-ph">📅 EARNINGS TRACKER — UPCOMING & RECENT</div>', unsafe_allow_html=True)
 
     ec1, ec2 = st.columns([3,2])
@@ -2107,7 +2112,7 @@ with tabs[7]:
 # ════════════════════════════════════════════════════════════════════
 # TAB 8 — SENTINEL AI
 # ════════════════════════════════════════════════════════════════════
-with tabs[8]:
+if current_tab == "SENTINEL AI":
     st.markdown('<div class="bb-ph">🤖 SENTINEL AI — POWERED BY GOOGLE GEMINI</div>', unsafe_allow_html=True)
 
     if not st.session_state.gemini_key:
