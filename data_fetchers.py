@@ -1745,12 +1745,23 @@ def fetch_satellite_positions():
         logger.error("Satellite Tracker: Missing skyfield dependency")
         return _pd.DataFrame(), []
 
-    try:
-        r = requests.get("https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle", timeout=15, headers={"User-Agent": "SENTINEL/3.0"})
-        r.raise_for_status()
-        lines = [l.strip() for l in r.text.strip().splitlines() if l.strip()]
-    except Exception as e:
-        logger.error("Celestrak Error: %s", str(e))
+    # Celestrak frequently times out — try primary then mirror, both with short timeout
+    _TLE_URLS = [
+        "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle",
+        "https://celestrak.com/NORAD/elements/gp.php?GROUP=active&FORMAT=tle",
+    ]
+    lines = []
+    for _tle_url in _TLE_URLS:
+        try:
+            r = requests.get(_tle_url, timeout=5, headers={"User-Agent": "SENTINEL/3.0"})
+            r.raise_for_status()
+            lines = [l.strip() for l in r.text.strip().splitlines() if l.strip()]
+            if lines:
+                break
+        except Exception as e:
+            logger.warning("fetch_satellite_positions: %s → %s", _tle_url, str(e))
+    if not lines:
+        logger.error("Celestrak Error: all TLE sources unreachable, returning empty")
         return _pd.DataFrame(), []
 
     from datetime import timezone as _tz, timedelta as _td
@@ -1793,8 +1804,17 @@ def fetch_satellite_positions():
 @st.cache_data(ttl=300)
 def fetch_conflict_events() -> "pd.DataFrame":
     import pandas as _pd
-    url = "https://api.gdeltproject.org/api/v2/geo/geo?query=(strike%20OR%20attack%20OR%20bombing%20OR%20explosion)&mode=pointdata&format=geojson&timespan=1h"
-    data = _fetch_fast_json(url, timeout=6, headers={"User-Agent": "SENTINEL/3.0"})
+    # GDELT geo API is frequently unreachable — try 1h, then fall back to 24h on a
+    # different endpoint variant. Hard cap at 4s each so we never stall the spinner.
+    _GDELT_URLS = [
+        "https://api.gdeltproject.org/api/v2/geo/geo?query=(strike%20OR%20attack%20OR%20bombing%20OR%20explosion)&mode=pointdata&format=geojson&timespan=1h",
+        "https://api.gdeltproject.org/api/v2/geo/geo?query=(war%20OR%20conflict%20OR%20attack)&mode=pointdata&format=geojson&timespan=24h",
+    ]
+    data = None
+    for _u in _GDELT_URLS:
+        data = _fetch_fast_json(_u, timeout=4, headers={"User-Agent": "SENTINEL/3.0"})
+        if data:
+            break
     if not data:
         return _pd.DataFrame()
     rows = []
