@@ -721,7 +721,9 @@ with tabs[1]:
             st.markdown('<div class="bb-ph">📋 OPTIONS INTELLIGENCE — ADAPTIVE SCORING ENGINE</div>', unsafe_allow_html=True)
             expiries = options_expiries(tkr)
             selected_exp = None
-            if expiries:
+            if not expiries:
+                options_expiries.clear(tkr)
+            else:
                 def _fmt_exp(d):
                     try: return datetime.strptime(str(d), "%Y-%m-%d").strftime("%B %-d, %Y")
                     except: return str(d)
@@ -772,6 +774,7 @@ with tabs[1]:
                         st.markdown('<div style="color:#FF4444;font-size:9px;font-weight:700;letter-spacing:2px">▼ ALL PUTS</div>', unsafe_allow_html=True)
                         st.markdown(render_options_table(puts, "puts", q["price"]), unsafe_allow_html=True)
             else:
+                options_chain.clear(tkr, selected_exp)
                 st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Options unavailable for this ticker.</p>', unsafe_allow_html=True)
 
             st.markdown('<div class="bb-ph" style="margin-top:12px">🔍 INSIDER TRANSACTIONS</div>', unsafe_allow_html=True)
