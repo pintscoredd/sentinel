@@ -160,22 +160,61 @@ def is_0dte_market_open():
 # YAHOO FINANCE & ASYNC BATCHING
 # ════════════════════════════════════════════════════════════════════
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=60)   # short TTL for live feel
 def yahoo_quote(ticker):
     TICKER_MAP = {"DXY": "DX-Y.NYB", "$DXY": "DX-Y.NYB"}
     t = TICKER_MAP.get(ticker, ticker)
     try:
-        h = yf.Ticker(t).history(period="5d")
-        if h.empty: return None
-        price = h["Close"].iloc[-1]
-        prev = h["Close"].iloc[-2] if len(h) > 1 else price
-        chg = price - prev
-        pct = chg / prev * 100
-        vol = int(h["Volume"].iloc[-1]) if "Volume" in h.columns else 0
-        return {"ticker": ticker, "price": round(price, 2), "change": round(chg, 2),
-                "pct": round(pct, 2), "volume": vol}
+        tk = yf.Ticker(t)
+
+        # fast_info gives live price during market hours
+        fi = tk.fast_info
+        price = getattr(fi, "last_price", None)
+        prev  = getattr(fi, "previous_close", None)
+
+        if price is None or prev is None:
+            # Fallback to history if fast_info unavailable
+            h = tk.history(period="5d")
+            if h.empty: return None
+            price = h["Close"].iloc[-1]
+            prev  = h["Close"].iloc[-2] if len(h) > 1 else price
+
+        price = float(price)
+        prev  = float(prev)
+        chg   = price - prev
+        pct   = chg / prev * 100 if prev else 0.0
+
+        # Volume from fast_info
+        vol = int(getattr(fi, "three_month_average_volume", 0) or 0)
+        try:
+            h = tk.history(period="2d")
+            if not h.empty:
+                vol = int(h["Volume"].iloc[-1])
+        except Exception:
+            pass
+
+        return {
+            "ticker": ticker, "price": round(price, 2),
+            "change": round(chg, 2), "pct": round(pct, 2), "volume": vol,
+        }
     except Exception:
         return None
+
+@st.cache_data(ttl=3600)
+def get_risk_free_rate(fred_key=None):
+    """Fetch current 3-month T-bill rate as risk-free proxy."""
+    if fred_key:
+        df = fred_series("DTB3", fred_key, 5)
+        if df is not None and not df.empty:
+            return round(df["value"].iloc[-1] / 100, 4)
+    # Fallback: fetch from Yahoo Finance
+    try:
+        h = yf.Ticker("^IRX").history(period="5d")
+        if not h.empty:
+            return round(h["Close"].iloc[-1] / 100, 4)
+    except Exception:
+        pass
+    return 0.045   # final fallback
 
 async def _fetch_yahoo_quotes_async(tickers):
     loop = asyncio.get_running_loop()
@@ -243,6 +282,22 @@ def vix_price():
     except:
         return None
 
+@st.cache_data(ttl=3600)
+def vix_with_percentile():
+    try:
+        h = yf.Ticker("^VIX").history(period="1y")
+        if h.empty or len(h) < 20:
+            return None, None, None
+        current = h["Close"].iloc[-1]
+        pct_rank = (h["Close"] < current).mean() * 100   # percentile rank
+        # Posture based on percentile
+        if pct_rank < 30:   posture = "RISK-ON"
+        elif pct_rank < 65: posture = "NEUTRAL"
+        else:               posture = "RISK-OFF"
+        return round(current, 2), round(pct_rank, 1), posture
+    except Exception:
+        return None, None, None
+
 @st.cache_data(ttl=600)
 def options_expiries(ticker):
     try:
@@ -266,7 +321,7 @@ def options_chain(ticker, expiry=None):
         return None, None, None
 
 
-def score_options_chain(calls_df, puts_df, current_price, vix=None):
+def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=None):
     import pandas as pd
     result = {"top_calls": [], "top_puts": [], "unusual": None}
     if calls_df is None or puts_df is None:
@@ -309,8 +364,17 @@ def score_options_chain(calls_df, puts_df, current_price, vix=None):
             df["_iv_pct"] = 0.5
 
         # Precise Delta using Black-Scholes Approximation
-        T_approx = 14 / 365.0
-        r_risk_free = 0.045
+        if expiry_date is not None:
+            try:
+                exp_dt = datetime.strptime(str(expiry_date), "%Y-%m-%d")
+                dte = max((exp_dt.date() - datetime.today().date()).days, 0)
+                T_approx = max(dte / 365.0, 1 / 365.0)   # min 1 day to avoid div/0
+            except Exception:
+                T_approx = 14 / 365.0
+        else:
+            T_approx = 14 / 365.0
+
+        r_risk_free = get_risk_free_rate(st.session_state.get("fred_key"))
         
         def _bs_delta(S, K, T, r, sigma, side):
             if S <= 0 or K <= 0 or T <= 0 or sigma <= 0: return 0.5
@@ -398,27 +462,87 @@ def top_movers():
 
 
 def calc_stock_fear_greed():
+    """5-signal Fear & Greed: VIX, Momentum, Safe Haven, PCR, Junk Demand."""
     try:
+        scores = []
+
+        # --- Signal 1: VIX Level (market volatility) ---
         v = yahoo_quote("^VIX")
-        spy = yahoo_quote("SPY")
-        if not v: return None, None
-        vix = v["price"]
-        vix_score = max(0, min(100, 100 - (vix - 10) / 30 * 100))
-        mom_score = 50
-        if spy:
-            h = yf.Ticker("SPY").history(period="3mo")
-            if not h.empty and len(h) >= 60:  # <--- FIXED OFF-BY-ONE
+        if v:
+            vix = v["price"]
+            # VIX 10=100 (extreme greed), VIX 40=0 (extreme fear), linear
+            vix_score = max(0, min(100, 100 - (vix - 10) / 30 * 100))
+            scores.append(("VIX", vix_score))
+
+        # --- Signal 2: Market Momentum (SPY vs 125-day MA) ---
+        try:
+            h = yf.Ticker("SPY").history(period="7mo")
+            if len(h) >= 125:
                 current = h["Close"].iloc[-1]
-                ma60 = h["Close"].iloc[-60:].mean()
-                mom_score = 75 if current > ma60 * 1.02 else (25 if current < ma60 * 0.98 else 50)
-        score = int(vix_score * 0.6 + mom_score * 0.4)
-        if score >= 75: label = "Extreme Greed"
+                ma125 = h["Close"].iloc[-125:].mean()
+                # How far above/below MA, mapped 0-100
+                pct_above = (current / ma125 - 1) * 100
+                mom_score = max(0, min(100, 50 + pct_above * 5))
+                scores.append(("Momentum", mom_score))
+        except Exception:
+            pass
+
+        # --- Signal 3: Safe Haven Demand (TLT vs SPY 20-day relative perf) ---
+        try:
+            tlt = yahoo_quote("TLT")
+            spy = yahoo_quote("SPY")
+            if tlt and spy:
+                # Positive TLT outperformance = fear; underperformance = greed
+                relative = tlt["pct"] - spy["pct"]
+                # TLT outperforms by >1% → fear (score 0-30); underperforms → greed (70-100)
+                sh_score = max(0, min(100, 50 - relative * 15))
+                scores.append(("SafeHaven", sh_score))
+        except Exception:
+            pass
+
+        # --- Signal 4: Put/Call Ratio (equity options) ---
+        try:
+            # Use SPY options PCR as proxy
+            t = yf.Ticker("SPY")
+            opts = t.options
+            if opts:
+                chain = t.option_chain(opts[0])
+                call_vol = chain.calls["volume"].sum()
+                put_vol = chain.puts["volume"].sum()
+                pcr = put_vol / call_vol if call_vol > 0 else 1.0
+                # PCR 0.5 = extreme greed (100), PCR 1.5 = extreme fear (0)
+                pcr_score = max(0, min(100, (1.5 - pcr) / 1.0 * 100))
+                scores.append(("PCR", pcr_score))
+        except Exception:
+            pass
+
+        # --- Signal 5: Junk Bond Demand (HYG vs LQD spread proxy) ---
+        try:
+            hyg = yahoo_quote("HYG")
+            lqd = yahoo_quote("LQD")
+            if hyg and lqd:
+                # HYG outperforming LQD = risk-on = greed
+                spread = hyg["pct"] - lqd["pct"]
+                junk_score = max(0, min(100, 50 + spread * 20))
+                scores.append(("Junk", junk_score))
+        except Exception:
+            pass
+
+        if not scores:
+            return None, None
+
+        # Equal-weight composite
+        total = sum(s for _, s in scores) / len(scores)
+        score = int(total)
+
+        if score >= 75:   label = "Extreme Greed"
         elif score >= 55: label = "Greed"
         elif score >= 45: label = "Neutral"
         elif score >= 25: label = "Fear"
-        else: label = "Extreme Fear"
+        else:             label = "Extreme Fear"
+
         return score, label
-    except:
+    except Exception:
         return None, None
 
 def market_snapshot_str():
@@ -839,7 +963,10 @@ def compute_gex_profile(chain, spot):
     if spot <= 0: return gex
     for opt in chain:
         k = opt["strike"]
-        raw_gex = opt.get("oi", 0) * abs(opt.get("gamma", 0)) * (spot ** 2)
+        oi = opt.get("oi", 0)
+        gamma = abs(opt.get("gamma", 0))
+        # Dollar GEX = OI × 100 shares × Gamma × Spot² × (1% SPY move)
+        raw_gex = oi * 100 * gamma * (spot ** 2) * 0.01
         sign = 1.0 if opt["type"] == "call" else -1.0
         gex[k] = gex.get(k, 0) + sign * raw_gex / 1_000_000
     return dict(sorted(gex.items()))
@@ -983,39 +1110,56 @@ def fetch_vix_data():
     return result
 
 
-def _score_option(opt, chain_ivs, spot_spy):
+def _score_option(opt, chain_ivs, spot_spy, dte=0):
+    """Score a single option contract for 0DTE selection."""
     import sys
     W1, W2, W3, W4, W5 = 0.25, 0.25, 0.20, 0.15, 0.15
     _EPS = sys.float_info.epsilon
 
-    abs_delta, gamma, theta = abs(opt.get("delta", 0)), abs(opt.get("gamma", 0)), abs(opt.get("theta", 0))
-    iv, bid, ask, mid = opt.get("iv", 0), opt.get("bid", 0), opt.get("ask", 0), opt.get("mid", 0)
-    vol, oi = opt.get("volume", 0), max(opt.get("oi", 1), 1)
+    abs_delta = abs(opt.get("delta", 0))
+    gamma     = abs(opt.get("gamma", 0))
+    theta     = abs(opt.get("theta", 0))
+    iv        = opt.get("iv", 0)
+    bid, ask  = opt.get("bid", 0), opt.get("ask", 0)
+    mid       = opt.get("mid", 0)
+    vol, oi   = opt.get("volume", 0), max(opt.get("oi", 1), 1)
 
-    f1 = math.exp(-((abs_delta - 0.30) ** 2) / (2 * 0.10 ** 2))
+    # DTE-aware delta target: 0DTE wants 0.35-0.45, longer-dated 0.25-0.35
+    if dte == 0:
+        target_delta, sigma_delta = 0.40, 0.08
+    elif dte <= 7:
+        target_delta, sigma_delta = 0.35, 0.09
+    else:
+        target_delta, sigma_delta = 0.30, 0.10
+
+    f1 = math.exp(-((abs_delta - target_delta) ** 2) / (2 * sigma_delta ** 2))
+
     gt_ratio = (gamma / theta) if theta > _EPS else 0.0
     f2 = 1 - 1 / (1 + gt_ratio)
-    
+
     spread = ask - bid
     spread_pct = spread / mid if mid > 0 else 1.0
     f3 = max(0, 1 - spread_pct * 5)
-    
+
     flow = vol / oi if oi > 0 else 0
     f4 = min(flow, 1.0)
-    
+
     median_iv = sorted(chain_ivs)[len(chain_ivs) // 2] if chain_ivs else iv
     f5 = max(0, min(1, 2 - (iv / median_iv))) if median_iv > 0 else 0.5
 
-    total = W1 * f1 + W2 * f2 + W3 * f3 + W4 * f4 + W5 * f5
+    total = W1*f1 + W2*f2 + W3*f3 + W4*f4 + W5*f5
 
     breakdown = {
-        "delta_score": round(f1, 3), "gt_score": round(f2, 3), "liq_score": round(f3, 3), 
-        "flow_score": round(f4, 3), "iv_score": round(f5, 3), "total": round(total, 4),
-        "gt_ratio": round(gt_ratio, 2), "spread_pct": round(spread_pct * 100, 1), "flow_ratio": round(flow, 2),
+        "delta_score": round(f1, 3), "gt_score": round(f2, 3),
+        "liq_score": round(f3, 3), "flow_score": round(f4, 3),
+        "iv_score": round(f5, 3), "total": round(total, 4),
+        "gt_ratio": round(gt_ratio, 2),
+        "spread_pct": round(spread_pct * 100, 1),
+        "flow_ratio": round(flow, 2),
     }
     return total, breakdown
 
-def find_target_strike(chain, bias):
+def find_target_strike(chain, bias, dte=0):
     if bias == "bull": cands = [o for o in chain if o["type"] == "call" and 0.10 < o.get("delta", 0) < 0.50]
     else: cands = [o for o in chain if o["type"] == "put" and -0.50 < o.get("delta", 0) < -0.10]
     cands = [o for o in cands if o.get("mid", 0) > 0 and abs(o.get("gamma", 0)) > 0]
@@ -1026,7 +1170,7 @@ def find_target_strike(chain, bias):
 
     scored = []
     for o in cands:
-        s, bd = _score_option(o, chain_ivs, spot_spy)
+        s, bd = _score_option(o, chain_ivs, spot_spy, dte)
         o_copy = dict(o)
         o_copy["_score"] = s
         o_copy["_breakdown"] = bd
@@ -1044,8 +1188,11 @@ def parse_trade_input(text):
     return result
 
 def generate_recommendation(chain, spx_metrics, vix_data):
-    if not chain or not spx_metrics: return None
-    spot, vwap = spx_metrics["spot"], spx_metrics["vwap"]
+    if not chain or not spx_metrics:
+        return None
+    spot = spx_metrics["spot"]
+    vwap = spx_metrics["vwap"]
+    vix_val = vix_data.get("vix") or 20.0
     pcr = compute_pcr(chain)
     gex_profile = compute_gex_profile(chain, spot / 10)
     gamma_flip_spy = find_gamma_flip(gex_profile)
@@ -1054,69 +1201,160 @@ def generate_recommendation(chain, spx_metrics, vix_data):
     max_pain = max_pain_spy * 10 if max_pain_spy else None
     contango = vix_data.get("contango")
 
-    score = 0
+    # --- Time-of-day gating ---
+    PST = pytz.timezone("US/Pacific")
+    now_pst = datetime.now(PST)
+    hour_et = now_pst.hour + 3   # PST → ET offset
+    if hour_et >= 15:   # After 3 PM ET — no new 0DTE entries
+        return {
+            "recommendation": "NO TRADE — Too Late in Session",
+            "rationale": "0DTE entries after 3 PM ET carry excessive theta risk.",
+            "stats": "", "action": "", "conditions_met": [], "conditions_failed": [],
+            "confidence": "LOW", "strike_spx": 0, "opt_type": "", "mid_price": 0
+        }
+
+    # --- Expected Move check ---
+    # VIX → 1-day expected move for SPX
+    daily_em = spot * (vix_val / 100) / (252 ** 0.5)
+    
+    # --- Weighted Signal Scoring (max ±10) ---
+    score = 0.0
     met, failed = [], []
 
-    if spot > vwap: score += 1; met.append("Spot > VWAP")
-    else: score -= 1; failed.append("Spot < VWAP")
+    # VWAP: highest weight — institutional anchor
+    vwap_dev = (spot - vwap) / vwap * 100
+    if vwap_dev > 0.1:
+        score += 3.0; met.append(f"Spot {vwap_dev:+.2f}% above VWAP")
+    elif vwap_dev < -0.1:
+        score -= 3.0; failed.append(f"Spot {vwap_dev:+.2f}% below VWAP")
+    # else: flat VWAP — neutral, no score
 
+    # Gamma Flip: second highest
     if gamma_flip:
-        if spot > gamma_flip: score += 1; met.append("Spot > Gamma Flip")
-        else: score -= 1; failed.append("Spot < Gamma Flip")
+        gf_dev = (spot - gamma_flip) / spot * 100
+        if spot > gamma_flip:
+            score += 2.5; met.append(f"Spot {gf_dev:+.1f}% above Gamma Flip ({int(gamma_flip)})")
+        else:
+            score -= 2.5; failed.append(f"Spot {gf_dev:+.1f}% below Gamma Flip ({int(gamma_flip)})")
 
+    # PCR
     if pcr is not None:
-        if pcr < 0.8: score += 1; met.append("PCR < 0.8 (Bullish)")
-        elif pcr > 1.0: score -= 1; failed.append("PCR > 1.0 (Bearish)")
+        if pcr < 0.7:
+            score += 2.0; met.append(f"PCR {pcr:.2f} — Strong Bullish Skew")
+        elif pcr < 0.85:
+            score += 1.0; met.append(f"PCR {pcr:.2f} — Mild Bullish Skew")
+        elif pcr > 1.2:
+            score -= 2.0; failed.append(f"PCR {pcr:.2f} — Strong Bearish Skew")
+        elif pcr > 1.0:
+            score -= 1.0; failed.append(f"PCR {pcr:.2f} — Mild Bearish Skew")
 
+    # VIX term structure
     if contango is not None:
-        if contango: score += 1; met.append("VIX in Contango")
-        else: score -= 1; failed.append("VIX in Backwardation")
+        if contango:
+            score += 1.5; met.append("VIX Contango — Regime Stable")
+        else:
+            score -= 1.5; failed.append("VIX Backwardation — Regime Unstable")
 
-    if score >= 2: bias, direction = "bull", "bullish"
-    elif score <= -2: bias, direction, met, failed = "bear", "bearish", failed, met
+    # Max Pain gravity: if spot far from max pain, fade the move
+    if max_pain:
+        mp_dist = spot - max_pain
+        mp_pct = mp_dist / spot * 100
+        if abs(mp_pct) > 0.5:
+            # Spot will be pulled back toward max pain at expiry — fade
+            if mp_pct > 0:
+                score -= 1.0
+                failed.append(f"Max Pain gravity {int(max_pain)} ({mp_pct:+.1f}% below spot)")
+            else:
+                score += 1.0
+                met.append(f"Max Pain gravity {int(max_pain)} ({mp_pct:+.1f}% above spot)")
+
+    # --- Decision thresholds ---
+    BULL_THRESHOLD = 4.0   # need strong confluence to trade
+    BEAR_THRESHOLD = -4.0
+
+    if score >= BULL_THRESHOLD:
+        bias, direction = "bull", "bullish"
+    elif score <= BEAR_THRESHOLD:
+        bias, direction = "bear", "bearish"
+        met, failed = failed, met
     else:
-        return {"recommendation": "NO TRADE — Mixed Signals", "rationale": "The confluence score is too low (-1 to +1).", "stats": "", "action": "Wait for better alignment.", "conditions_met": met, "conditions_failed": failed, "confidence": "LOW", "strike_spx": 0, "opt_type": "", "mid_price": 0}
+        return {
+            "recommendation": f"NO TRADE — Weak Confluence (score: {score:+.1f})",
+            "rationale": f"Weighted score {score:+.1f} is below ±{BULL_THRESHOLD} threshold. Wait for cleaner setup.",
+            "stats": f"Expected 1-day move: ±${daily_em:.1f} pts",
+            "action": "Stand aside. Monitor for VIX expansion or VWAP reclaim.",
+            "conditions_met": met, "conditions_failed": failed,
+            "confidence": "LOW", "strike_spx": 0, "opt_type": "", "mid_price": 0
+        }
 
-    target = find_target_strike(chain, bias)
+    target = find_target_strike(chain, bias, dte=0)
     if not target:
-        return {"recommendation": "NO TRADE — No suitable option found", "rationale": f"No viable {bias} options passed filters.", "stats": "", "action": "", "conditions_met": met, "conditions_failed": failed, "confidence": "LOW", "strike_spx": 0, "opt_type": "", "mid_price": 0}
+        return {
+            "recommendation": f"NO TRADE — No Suitable Option",
+            "rationale": f"No viable {bias} options passed liquidity filters.",
+            "stats": "", "action": "", "conditions_met": met, "conditions_failed": failed,
+            "confidence": "LOW", "strike_spx": 0, "opt_type": "", "mid_price": 0
+        }
 
     strike_spx = round(target["strike"] * 10, 0)
-    delta_pct = round(abs(target["delta"]) * 100)
+    mid = target.get("mid", 0)
+
+    # --- Expected move sanity: don't buy if strike is beyond 1 daily EM ---
+    dist_to_strike = abs(strike_spx - spot)
+    if dist_to_strike > daily_em * 1.5:
+        return {
+            "recommendation": f"NO TRADE — Strike Too Far OTM",
+            "rationale": f"Strike {int(strike_spx)} is ${dist_to_strike:.0f} from spot, "
+                         f"exceeding 1.5× daily EM (${daily_em:.0f}). Low P(ITM).",
+            "stats": f"Daily EM: ±${daily_em:.1f} | Strike dist: ${dist_to_strike:.0f}",
+            "action": "Choose a closer strike or wait for spot to move toward target.",
+            "conditions_met": met, "conditions_failed": failed,
+            "confidence": "LOW", "strike_spx": 0, "opt_type": "", "mid_price": 0
+        }
+
     opt_label = "CALL" if target["type"] == "call" else "PUT"
     bd = target.get("_breakdown", {})
+    delta_pct = round(abs(target["delta"]) * 100)
 
+    # --- Find hedge wall ---
     hedge_wall = None
     if gex_profile:
         for gk, gv in sorted(gex_profile.items(), key=lambda x: abs(x[1]), reverse=True):
             gk_spx = gk * 10
             if (bias == "bull" and gk_spx > strike_spx) or (bias == "bear" and gk_spx < strike_spx):
-                hedge_wall = gk_spx; break
+                hedge_wall = gk_spx
+                break
 
-    confidence = "HIGH" if abs(score) >= 3 else "MODERATE"
+    abs_score = abs(score)
+    if abs_score >= 7.5:   confidence = "HIGH"
+    elif abs_score >= 5.0: confidence = "MODERATE"
+    else:                  confidence = "LOW"
 
-    parts_map = {
-        "bull": {"Spot > VWAP": "SPX is trading above VWAP", "Spot > Gamma Flip": "dealers support rally (Positive Gamma)", "VIX in Contango": "Fear dropping", "PCR < 0.8 (Bullish)": "Sentiment bullish"},
-        "bear": {"Spot < VWAP": "SPX is below VWAP", "Spot < Gamma Flip": "dealers pressure prices lower (Negative Gamma)", "PCR > 1.0 (Bearish)": "Sentiment bearish", "VIX in Backwardation": "Fear elevating"},
-    }
-    rp = [parts_map.get(bias, {}).get(c, "") for c in met if c in parts_map.get(bias, {})]
-    rationale = f"Confluence score is **{score:+d}**. Strong {direction} momentum because " + " and ".join(rp) + "."
+    target_pts = abs(int(hedge_wall - strike_spx)) if hedge_wall else max(int(daily_em * 0.5), 5)
+    stop_pts = max(int(mid * 0.5 / 10), 5)   # Stop at 50% of premium paid, in SPX pts
 
-    target_pts = abs(int(hedge_wall - strike_spx)) if hedge_wall else 10
-    target_pts = target_pts if target_pts > 0 else 10
-    stop_pts = int(abs(strike_spx - max_pain)) if max_pain else 10
-    stop_pts = stop_pts if stop_pts > 0 else 10
-
-    target_desc = f"Target {int(hedge_wall)} Wall (+{target_pts}pts)" if hedge_wall else "Target +10pts"
-    stop_desc = f"Stop at Max Pain {int(max_pain)} (-{stop_pts}pts)" if max_pain else "Stop at -10pts"
+    target_desc = f"Target {int(hedge_wall)} GEX Wall (+{target_pts}pts)" if hedge_wall else f"Target +{target_pts}pts (0.5× daily EM)"
+    stop_desc = f"Stop at 50% premium loss (−${mid/2:.2f} on the option)"
 
     stats_text = (
+        f"Weighted Score: {score:+.1f}/±10 | Daily EM: ±${daily_em:.1f}\n"
         f"Greeks: Δ={target['delta']:+.3f} Γ={target['gamma']:.4f} Θ={target['theta']:.4f} V={target['vega']:.4f} IV={target['iv']:.1%}\n"
-        f"Stats: ~{delta_pct}% P(ITM) | Γ/Θ ratio: {bd.get('gt_ratio', 0):.1f}x | Spread: {bd.get('spread_pct', 0):.1f}% | Flow: {bd.get('flow_ratio', 0):.2f}x OI\n"
-        f"Selection Score: {bd.get('total', 0):.3f} (Δ:{bd.get('delta_score', 0):.2f} Γ/Θ:{bd.get('gt_score', 0):.2f} Liq:{bd.get('liq_score', 0):.2f} Flow:{bd.get('flow_score', 0):.2f} IV:{bd.get('iv_score', 0):.2f})"
+        f"Stats: ~{delta_pct}% P(ITM) | Γ/Θ: {bd.get('gt_ratio', 0):.1f}x | Spread: {bd.get('spread_pct', 0):.1f}% | Flow: {bd.get('flow_ratio', 0):.2f}× OI\n"
+        f"Score Breakdown: Δ:{bd.get('delta_score',0):.2f} Γ/Θ:{bd.get('gt_score',0):.2f} Liq:{bd.get('liq_score',0):.2f} Flow:{bd.get('flow_score',0):.2f} IV:{bd.get('iv_score',0):.2f}"
     )
 
-    return {"recommendation": f"RECOMMENDATION: BUY {int(strike_spx)} {opt_label}", "rationale": f"Rationale: {rationale}", "stats": stats_text, "action": f"Action Plan: Enter now. {target_desc}. {stop_desc}.", "confidence": confidence, "conditions_met": met, "conditions_failed": failed, "strike_spx": strike_spx, "opt_type": opt_label, "mid_price": target.get("mid", 0)}
+    return {
+        "recommendation": f"RECOMMENDATION: BUY {int(strike_spx)} {opt_label}",
+        "rationale": f"Weighted confluence score {score:+.1f}. " + " | ".join(met) + ".",
+        "stats": stats_text,
+        "action": f"Enter at market. {target_desc}. {stop_desc}.",
+        "confidence": confidence,
+        "conditions_met": met,
+        "conditions_failed": failed,
+        "strike_spx": strike_spx,
+        "opt_type": opt_label,
+        "mid_price": mid,
+    }
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1322,10 +1560,10 @@ def get_macro_overview(fred_key):
     max_score = len(signals) * 2
     pct = (total_score / max_score * 100) if max_score else 0
 
-    if pct >= 60: env_label, env_color, env_desc = "EXPANSIONARY 🟢", "#00CC44", "Macro conditions are broadly supportive. Risk-on bias."
-    elif pct >= 20: env_label, env_color, env_desc = "MIXED / NEUTRAL 🟡", "#FF8C00", "Macro signals are mixed. Selective positioning warranted."
-    elif pct >= -20: env_label, env_color, env_desc = "CAUTIONARY ⚠️", "#FFCC00", "More headwinds than tailwinds. Elevated inflation or tightening financial conditions."
-    else: env_label, env_color, env_desc = "CONTRACTIONARY 🔴", "#FF4444", "Multiple macro red flags. Elevated recession risk."
+    if pct >= 50:   env_label, env_color, env_desc = "EXPANSIONARY 🟢", "#00CC44", "Macro conditions are broadly supportive. Risk-on bias."
+    elif pct >= 10: env_label, env_color, env_desc = "MIXED / NEUTRAL 🟡", "#FF8C00", "Macro signals are mixed. Selective positioning warranted."
+    elif pct >= -30: env_label, env_color, env_desc = "CAUTIONARY ⚠️", "#FFCC00", "More headwinds than tailwinds. Elevated inflation or tightening financial conditions."
+    else:            env_label, env_color, env_desc = "CONTRACTIONARY 🔴", "#FF4444", "Multiple macro red flags. Elevated recession risk."
 
     return {"signals": signals, "total_score": total_score, "max_score": max_score, "pct": pct, "env_label": env_label, "env_color": env_color, "env_desc": env_desc}
 
@@ -1589,13 +1827,26 @@ def score_poly_mispricing(markets, base_rate_fn=None):
             vol24 = _safe_float(m.get("volume24hr", 0))
             activity_ratio = min(vol24 / vol, 1.0) if vol > 0 else 0.0
 
-            import math as _math
-            vol24_weight = _math.log1p(vol24) / _math.log1p(1_000_000) if vol24 > 0 else 0.0
+            # --- TRUE EDGE: deviation between raw and liquidity-adjusted ---
+            # In illiquid markets the crowd is unreliable → adj_prob pulls toward 50%
+            # The "edge" is how much the raw price overstates the true probability
+            raw_edge    = abs(raw_yes - 0.5)           # how extreme is raw
+            adj_edge    = abs(adj_prob - 0.5)           # how extreme after discount
+            crowd_error = raw_edge - adj_edge           # error from overcrowding
+
+            # Bet signal: only flag when crowd_error is meaningful
+            # High crowd_error + illiquid = fade opportunity
+            # High adj_edge + liquid = real momentum (ride)
+            vol24_weight = math.log1p(vol24) / math.log1p(1_000_000) if vol24 > 0 else 0.0
             vol24_weight = min(vol24_weight, 1.0)
 
-            edge = abs(adj_prob - 0.5)
-            mispricing_score = round(edge * vol24_weight * (1.0 - liq_score + 0.1) * (0.5 + activity_ratio), 5)
+            # Mispricing score: high when crowd_error is large AND there's real activity
+            mispricing_score = round(
+                crowd_error * vol24_weight * (1.0 - liq_score + 0.1) * (0.5 + activity_ratio),
+                5
+            )
 
+            # Spread for display
             spread_str = ""
             best_bid = _safe_float(m.get("bestBid", 0))
             best_ask = _safe_float(m.get("bestAsk", 0)) or _safe_float(m.get("bestOffer", 0))
@@ -1603,18 +1854,32 @@ def score_poly_mispricing(markets, base_rate_fn=None):
                 spread = best_ask - best_bid
                 spread_str = f"{spread*100:.1f}¢"
 
-            if liq_score < 0.40 and raw_yes > 0.70: signal, signal_color = "FADE YES", "#FF4444"
-            elif liq_score < 0.40 and raw_yes < 0.30: signal, signal_color = "FADE NO", "#00CC44"
-            elif liq_score >= 0.70 and raw_yes > 0.65: signal, signal_color = "RIDE YES", "#00CC44"
-            elif liq_score >= 0.70 and raw_yes < 0.35: signal, signal_color = "RIDE NO", "#FF4444"
-            else: signal, signal_color = "MONITOR", "#FF8C00"
+            # Signal: fade overcrowded thin markets, ride confirmed deep markets
+            if liq_score < 0.40 and raw_yes > 0.70 and crowd_error > 0.05:
+                signal, signal_color = "FADE YES", "#FF4444"
+            elif liq_score < 0.40 and raw_yes < 0.30 and crowd_error > 0.05:
+                signal, signal_color = "FADE NO", "#00CC44"
+            elif liq_score >= 0.70 and raw_yes > 0.65:
+                signal, signal_color = "RIDE YES", "#00CC44"
+            elif liq_score >= 0.70 and raw_yes < 0.35:
+                signal, signal_color = "RIDE NO", "#FF4444"
+            else:
+                signal, signal_color = "MONITOR", "#FF8C00"
 
             results.append({
-                "title": title[:80], "url": m.get("slug", ""), "raw_yes": round(raw_yes * 100, 1),
-                "adj_yes": round(adj_prob * 100, 1), "liq_score": liq_score, "reliability": round(reliability, 2),
-                "edge": round(edge, 3), "mispricing_score": mispricing_score, "vol": vol, "vol24": vol24,
-                "activity_ratio": round(activity_ratio, 3), "signal": signal, "signal_color": signal_color,
-                "spread": spread_str, "liq_tier": ("DEEP" if liq_score >= 0.8 else "MED" if liq_score >= 0.5 else "THIN" if liq_score >= 0.2 else "ILLIQ"),
+                "title": title[:80], "url": m.get("slug", ""),
+                "raw_yes": round(raw_yes * 100, 1),
+                "adj_yes": round(adj_prob * 100, 1),
+                "liq_score": liq_score,
+                "reliability": round(reliability, 2),
+                "edge": round(crowd_error, 3),   # now: true crowd error
+                "mispricing_score": mispricing_score,
+                "vol": vol, "vol24": vol24,
+                "activity_ratio": round(activity_ratio, 3),
+                "signal": signal, "signal_color": signal_color,
+                "spread": spread_str,
+                "liq_tier": ("DEEP" if liq_score >= 0.8 else "MED" if liq_score >= 0.5
+                              else "THIN" if liq_score >= 0.2 else "ILLIQ"),
             })
         except Exception:
             continue
