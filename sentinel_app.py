@@ -26,7 +26,7 @@ from data_fetchers import (
     fear_greed_crypto, calc_stock_fear_greed,
     crypto_markets, crypto_global,
     gdelt_news, newsapi_headlines, finnhub_news, finnhub_insider, finnhub_officers,
-    vix_price, options_chain, options_expiries, sector_etfs, top_movers,
+    yahoo_quote, vix_price, vix_with_percentile, options_chain, options_expiries, sector_etfs, top_movers,
     detect_unusual_poly, market_snapshot_str, _parse_poly_field,
     score_options_chain, score_poly_mispricing,
     get_earnings_calendar, is_market_open,
@@ -523,10 +523,15 @@ with tabs[0]:
                 sfg_c = "#00CC44" if sfg_val>=55 else ("#FF4444" if sfg_val<35 else "#FF8C00")
                 st.markdown(f'<div class="fg-gauge"><div class="fg-num" style="color:{sfg_c}">{sfg_val}</div><div class="fg-lbl" style="color:{sfg_c}">{sfg_lbl}</div><div style="color:#555;font-size:8px;margin-top:2px">STOCK MARKET F&G</div></div>', unsafe_allow_html=True)
         with s3:
-            if v:
-                posture = "RISK-ON" if v<18 else ("NEUTRAL" if v<25 else "RISK-OFF")
-                pc = {"RISK-ON":"#00CC44","NEUTRAL":"#FF8C00","RISK-OFF":"#FF4444"}[posture]
-                st.markdown(f'<div class="fg-gauge"><div style="color:#888;font-size:9px;letter-spacing:1px">POSTURE</div><div class="fg-num" style="color:{pc};font-size:24px">{posture}</div></div>', unsafe_allow_html=True)
+            vix_val, vix_pct, posture = vix_with_percentile()
+            if vix_val:
+                pc = {"RISK-ON": "#00CC44", "NEUTRAL": "#FF8C00", "RISK-OFF": "#FF4444"}[posture]
+                st.markdown(
+                    f'<div class="fg-gauge">'
+                    f'<div style="color:#888;font-size:9px">POSTURE</div>'
+                    f'<div class="fg-num" style="color:{pc};font-size:24px">{posture}</div>'
+                    f'<div style="color:#555;font-size:9px">VIX {vix_val:.1f} — {vix_pct:.0f}th pctile</div>'
+                    f'</div>', unsafe_allow_html=True)
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
@@ -735,7 +740,7 @@ with tabs[1]:
                 except:
                     current_vix = 20.0
 
-                scored = score_options_chain(calls, puts, q["price"], vix=current_vix)
+                scored = score_options_chain(calls, puts, q["price"], vix=current_vix, expiry_date=selected_exp)
 
                 vix_str = f"{current_vix:.1f}" if current_vix else "N/A"
                 if current_vix and current_vix > 25:
