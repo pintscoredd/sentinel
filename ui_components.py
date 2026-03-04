@@ -1198,12 +1198,30 @@ def render_geo_tab():
     )
 
     # ── Fetch dynamic geo data and inject into globe.html ──────────────
+    # Run all four fetches IN PARALLEL so a blocked API (GDELT, Celestrak) doesn't
+    # prevent the globe from rendering. Hard wall-clock cap: 7 s total.
+    import concurrent.futures as _cf
+    _fetch_jobs = {
+        "events":  fetch_conflict_events_json,
+        "planes":  fetch_military_aircraft_json,
+        "sats":    fetch_satellite_positions_json,
+        "vessels": fetch_ais_vessels,
+    }
+    _geo_results = {"events": [], "planes": [], "sats": [], "vessels": []}
     with st.spinner("Loading geo intelligence feeds…"):
-        _geo_events  = fetch_conflict_events_json()
-        _geo_planes  = fetch_military_aircraft_json()
-        _geo_sats    = fetch_satellite_positions_json()
-        _geo_vessels = fetch_ais_vessels()
-        _geo_infra   = GEO_SHIPPING_LANES
+        with _cf.ThreadPoolExecutor(max_workers=4) as _pool:
+            _futures = {_pool.submit(fn): key for key, fn in _fetch_jobs.items()}
+            for _fut in _cf.as_completed(_futures, timeout=7):
+                key = _futures[_fut]
+                try:
+                    _geo_results[key] = _fut.result() or []
+                except Exception:
+                    pass  # leave as empty list
+    _geo_events  = _geo_results["events"]
+    _geo_planes  = _geo_results["planes"]
+    _geo_sats    = _geo_results["sats"]
+    _geo_vessels = _geo_results["vessels"]
+    _geo_infra   = GEO_SHIPPING_LANES
 
     # Build JSON injection script
     _sentinel_data = json.dumps({
@@ -1374,4 +1392,3 @@ def render_geo_tab():
                 f'<span style="color:#444">— {desc}</span></div>',
                 unsafe_allow_html=True,
             )
-
