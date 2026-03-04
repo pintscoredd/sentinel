@@ -339,16 +339,15 @@ def render_insider_cards(data, ticker="", finnhub_key=""):
         raw_role = role_map.get(name_upper, "")
 
         if not raw_role and name_upper:
-            name_parts = name_upper.split()
+            clean_name = name_upper.replace(",", "").replace(".", "")
+            name_parts = clean_name.split()
             if len(name_parts) >= 2:
                 raw_role = role_map.get(" ".join(name_parts[:2]), "")
             if not raw_role and len(name_parts) >= 2:
                 raw_role = role_map.get(name_parts[1] + " " + name_parts[0], "")
             if not raw_role:
-                last = name_parts[0] if name_parts else ""
-                first = name_parts[1] if len(name_parts) > 1 else ""
                 for k, v in role_map.items():
-                    if last in k and first in k:
+                    if len(name_parts) >= 2 and name_parts[0] in k and name_parts[-1] in k:
                         raw_role = v
                         break
 
