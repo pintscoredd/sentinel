@@ -358,6 +358,12 @@ def render_insider_cards(data, ticker="", finnhub_key=""):
                 raw_role = parts[-1].strip()
 
         role = classify_role(raw_role) if raw_role else classify_role(filing_name)
+        
+        if role == "Insider":
+            inst_kw = ["LLC", "LP", "FUND", "CAPITAL", "MANAGEMENT", "TRUST", "PARTNERS", "HOLDINGS", "GROUP", "INC", "L.P.", "L.L.C."]
+            if any(k in name_upper for k in inst_kw):
+                role = "Institutional Investor"
+
         if role == "Insider" and abs(chg) > 100000:
             role = "Beneficial Owner"
 
