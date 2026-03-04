@@ -770,25 +770,42 @@ def finnhub_insider(ticker, key):
 
 @st.cache_data(ttl=1800)
 def finnhub_officers(ticker, key):
-    if not key: return {}
-    try:
-        data = _fetch_robust_json("https://finnhub.io/api/v1/stock/executive",
-            params={"symbol": ticker, "token": key}, timeout=10)
-        role_map = {}
-        for o in data.get("executive", []) or []:
-            name = str(o.get("name", "")).strip()
-            title = str(o.get("position", "") or o.get("title", "") or "")
-            if not name or not title: continue
-            name_upper = name.upper()
-            role_map[name_upper] = title
-            parts = name.split()
-            if len(parts) >= 2:
-                last_first = (parts[-1] + " " + " ".join(parts[:-1])).upper()
-                role_map[last_first] = title
-                role_map[(parts[-1] + " " + parts[0]).upper()] = title
-        return role_map
-    except:
-        return {}
+    role_map = {}
+    if key:
+        try:
+            data = _fetch_robust_json("https://finnhub.io/api/v1/stock/executive",
+                params={"symbol": ticker, "token": key}, timeout=10)
+            for o in data.get("executive", []) or []:
+                name = str(o.get("name", "")).strip()
+                title = str(o.get("position", "") or o.get("title", "") or "")
+                if not name or not title: continue
+                name_upper = name.upper()
+                role_map[name_upper] = title
+                parts = name.split()
+                if len(parts) >= 2:
+                    last_first = (parts[-1] + " " + " ".join(parts[:-1])).upper()
+                    role_map[last_first] = title
+                    role_map[(parts[-1] + " " + parts[0]).upper()] = title
+        except:
+            pass
+
+    if not role_map:
+        try:
+            officers = yf.Ticker(ticker).info.get("companyOfficers", [])
+            for o in officers:
+                name = str(o.get("name", "")).strip()
+                title = str(o.get("title", "")).strip()
+                if not name or not title: continue
+                
+                clean_name = name.upper().replace(".", "").replace(",", "")
+                for pfx in ["MR ", "MS ", "MRS ", "DR ", "PROF "]:
+                    if clean_name.startswith(pfx):
+                        clean_name = clean_name[len(pfx):].strip()
+                role_map[clean_name] = title
+        except:
+            pass
+
+    return role_map
 
 
 # ════════════════════════════════════════════════════════════════════
