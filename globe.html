@@ -1328,53 +1328,27 @@
 
       async function fetchMilitaryFlights() {
         let flights = [];
-
-        // 1) ADS-B Exchange (requires API key)
-        if (typeof ADSBX_API_KEY !== 'undefined' && ADSBX_API_KEY) {
-          try {
-            const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 8000);
-            const r = await fetch('https://adsbexchange-com1.p.rapidapi.com/v2/mil/', {
-              signal: ctrl.signal,
-              headers: { 'X-RapidAPI-Key': ADSBX_API_KEY, 'X-RapidAPI-Host': 'adsbexchange-com1.p.rapidapi.com' }
-            });
-            if (r.ok) {
-              const data = await r.json();
-              flights = (data.ac || []).filter(a => a.lat && a.lon && !a.gnd).map(a => ({
-                callsign: (a.flight || a.r || 'UNKNOWN').trim(),
+        try {
+          const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 10000);
+          const r = await fetch('https://api.airplanes.live/v2/mil', { signal: ctrl.signal });
+          if (r.ok) {
+            const data = await r.json();
+            flights = (data.ac || [])
+              .filter(a => a.lat != null && a.lon != null && a.alt_baro !== 'ground' && (a.dbFlags & 1))
+              .slice(0, 300)
+              .map(a => ({
+                callsign: (a.flight || a.r || a.hex || 'MIL').trim(),
                 lat: parseFloat(a.lat), lon: parseFloat(a.lon),
                 alt: Math.round(parseFloat(a.alt_baro) || 0),
                 speed: Math.round(parseFloat(a.gs) || 0),
                 heading: parseFloat(a.track) || 0,
-                hex: a.hex || '', country: 'USA', type: a.t || 'MIL', reg: a.r || ''
-              }));
-            }
-          } catch (e) { }
-        }
+                hex: a.hex || '', country: 'MIL', type: a.t || 'MIL', reg: a.r || ''
+              }))
+              .filter(f => isFinite(f.lat) && isFinite(f.lon));
+          }
+        } catch (e) { }
 
-        // 2) adsb.fi military endpoint — no key needed, good global coverage
-        if (flights.length === 0) {
-          try {
-            const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 10000);
-            const r = await fetch('https://api.adsb.fi/v1/mil', { signal: ctrl.signal });
-            if (r.ok) {
-              const data = await r.json();
-              flights = (data.aircraft || data.ac || [])
-                .filter(a => a.lat != null && a.lon != null && a.alt_baro !== 'ground')
-                .slice(0, 300)
-                .map(a => ({
-                  callsign: (a.flight || a.r || a.hex || 'MIL').trim(),
-                  lat: parseFloat(a.lat), lon: parseFloat(a.lon),
-                  alt: Math.round(parseFloat(a.alt_baro) || 0),
-                  speed: Math.round(parseFloat(a.gs) || 0),
-                  heading: parseFloat(a.track) || 0,
-                  hex: a.hex || '', country: 'MIL', type: a.t || 'MIL', reg: a.r || ''
-                }))
-                .filter(f => isFinite(f.lat) && isFinite(f.lon));
-            }
-          } catch (e) { }
-        }
-
-        // 3) OpenSky fallback
+        // OpenSky fallback
         if (flights.length === 0) {
           try {
             const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 12000);
@@ -1460,7 +1434,7 @@
           trackUpdateInt = setInterval(() => fetchMilitaryFlights().then(() => {
             const updated = flightData.find(f => f.hex === obj.hex);
             if (updated) computeFlightPath(updated);
-          }), 30000);
+          }), 60000);
         }
       }
 
@@ -1730,10 +1704,14 @@
               if (data && data.photos && data.photos.length > 0) {
                 const url = data.photos[0].thumbnail_large?.src || data.photos[0].thumbnail?.src || '';
                 if (url) photoContainer.innerHTML = `<div style="margin-top:6px"><img src="${url}" style="width:100%;max-width:260px;border-radius:3px;border:1px solid #222" onerror="this.parentElement.style.display='none'"/></div>`;
-                else photoContainer.innerHTML = '';
-              } else { photoContainer.innerHTML = ''; }
+                else photoContainer.innerHTML = '<div style="margin-top:6px;padding:8px;text-align:center;border:1px dashed #333;color:#666;font-size:10px;font-family:monospace;border-radius:3px;letter-spacing:1px;background:rgba(0,0,0,0.5)">CLASSIFIED / NO PHOTO</div>';
+              } else {
+                photoContainer.innerHTML = '<div style="margin-top:6px;padding:8px;text-align:center;border:1px dashed #333;color:#666;font-size:10px;font-family:monospace;border-radius:3px;letter-spacing:1px;background:rgba(0,0,0,0.5)">CLASSIFIED / NO PHOTO</div>';
+              }
             })
-            .catch(() => { photoContainer.innerHTML = ''; });
+            .catch(() => {
+              photoContainer.innerHTML = '<div style="margin-top:6px;padding:8px;text-align:center;border:1px dashed #333;color:#666;font-size:10px;font-family:monospace;border-radius:3px;letter-spacing:1px;background:rgba(0,0,0,0.5)">CLASSIFIED / NO PHOTO</div>';
+            });
         }
         document.getElementById('ic-tags').innerHTML = `<span class="ictag">MIL</span><span class="ictag">${flight.country}</span><span class="ictag">${flight.type || 'UNKN'}</span>`;
         document.getElementById('ic-date').textContent = 'POSITION: LIVE ADS-B';
