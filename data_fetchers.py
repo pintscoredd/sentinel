@@ -725,11 +725,11 @@ def gdelt_news(query, max_rec=15):
         {"url": "https://api.gdeltproject.org/api/v2/doc/doc",
          "params": {"query": query + " sourcelang:english", "mode": "artlist", "maxrecords": max_rec, "format": "json", "timespan": "72h"}},
         {"url": "https://api.gdeltproject.org/api/v2/doc/doc",
-         "params": {"query": query + " sourcelang:english", "mode": "artlist", "maxrecords": max_rec, "format": "json", "timespan": "168h"}},
+         "params": {"query": query, "mode": "artlist", "maxrecords": max_rec, "format": "json", "timespan": "168h"}},
     ]
     for ep in endpoints:
         try:
-            data = _fetch_robust_json(ep["url"], params=ep["params"], timeout=18)
+            data = _fetch_robust_json(ep["url"], params=ep["params"], timeout=8)
             arts = data.get("articles", [])
             if arts:
                 filtered = [a for a in arts if _is_english(a.get("title", ""))][:max_rec]
@@ -924,11 +924,18 @@ def fetch_0dte_chain(underlying="SPY"):
         params = {"feed": "indicative", "limit": 250, "expiration_date": target_expiry}
         data = _fetch_robust_json(url, headers=headers, params=params, timeout=15)
         snapshots = data.get("snapshots", {})
+        seen_tokens = set()
+        pages = 0
 
-        while data.get("next_page_token"):
-            params["page_token"] = data["next_page_token"]
+        while data.get("next_page_token") and pages < 10:
+            token = data["next_page_token"]
+            if token in seen_tokens:
+                break
+            seen_tokens.add(token)
+            params["page_token"] = token
             data = _fetch_robust_json(url, headers=headers, params=params, timeout=15)
             snapshots.update(data.get("snapshots", {}))
+            pages += 1
 
         chain = []
         lower_bound, upper_bound = spot * 0.98, spot * 1.02
