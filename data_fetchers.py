@@ -466,11 +466,12 @@ def build_brief_context():
     )
 
     def _fetch_geo():
+        # Single attempt, 3s — GDELT is frequently blocked on Streamlit Cloud.
         data = _fetch_fast_json(
             "https://api.gdeltproject.org/api/v2/doc/doc",
             params={"query": GEO_QUERY + " sourcelang:english", "mode": "artlist",
                     "maxrecords": 20, "format": "json", "timespan": "72h"},
-            timeout=6,
+            timeout=3,
         )
         if not data:
             return []
@@ -607,24 +608,20 @@ def crypto_global():
 
 @st.cache_data(ttl=600)
 def gdelt_news(query, max_rec=15):
-    """Fetch GDELT articles. Uses _fetch_fast_json (single attempt, 6s timeout) to avoid
-    the retry+backoff chain that previously blocked Streamlit spinners for up to 2 minutes.
-    Falls back through three timespan windows before returning an empty list.
+    """Fetch GDELT articles — single attempt, 3s timeout.
+    GDELT is frequently unreachable on Streamlit Cloud; retrying multiple
+    timespan windows just multiplies the wait. One try, then give up fast.
     """
     GDELT_BASE = "https://api.gdeltproject.org/api/v2/doc/doc"
-    for ts in ["72h", "168h", "720h"]:
-        data = _fetch_fast_json(
-            GDELT_BASE,
-            params={"query": query + " sourcelang:english", "mode": "artlist",
-                    "maxrecords": max_rec, "format": "json", "timespan": ts},
-            timeout=6,
-        )
-        if not data:
-            continue
-        filtered = [a for a in data.get("articles", []) if _is_english(a.get("title", ""))][:max_rec]
-        if filtered:
-            return filtered
-    return []
+    data = _fetch_fast_json(
+        GDELT_BASE,
+        params={"query": query + " sourcelang:english", "mode": "artlist",
+                "maxrecords": max_rec, "format": "json", "timespan": "72h"},
+        timeout=3,
+    )
+    if not data:
+        return []
+    return [a for a in data.get("articles", []) if _is_english(a.get("title", ""))][:max_rec]
 
 @st.cache_data(ttl=300)
 def newsapi_headlines(key, query="stock market finance"):
