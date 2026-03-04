@@ -1008,7 +1008,7 @@ def _geo_network_embed_html(network):
 
     return f'''
     <div style="background:#030303;padding:10px;border:1px solid #1A1A1A;
-                border-top:2px solid #FF6600;margin-bottom:8px">
+                border-top:2px solid #FF6600;margin-bottom:8px;max-width:1400px;margin-left:auto;margin-right:auto;">
       <div style="font-family:monospace;font-size:11px;color:#FF6600;
                   letter-spacing:2px;text-transform:uppercase;margin-bottom:8px">
         📡 {name} — LIVE
@@ -1025,7 +1025,7 @@ def _geo_network_embed_html(network):
       <div style="font-family:monospace;font-size:9px;color:#333;margin-top:6px;
                   display:flex;justify-content:space-between">
         <span>Auto-embed via YouTube Live</span>
-        <a href="https://www.youtube.com/channel/{channel_id}/live"
+        <a href="{fallback_url}"
            target="_blank"
            style="color:#FF6600;text-decoration:none">
           Open in YouTube ↗
@@ -1249,7 +1249,7 @@ def render_geo_tab():
 
     # Find the selected network and embed it
     net_obj = next((n for n in GEO_FINANCIAL_NETWORKS if n["name"] == selected_network), GEO_FINANCIAL_NETWORKS[0])
-    _components.html(_geo_network_embed_html(net_obj), height=780, scrolling=False)
+    _components.html(_geo_network_embed_html(net_obj), height=1000, scrolling=True)
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
