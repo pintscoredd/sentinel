@@ -160,7 +160,7 @@ def is_0dte_market_open():
 # YAHOO FINANCE & ASYNC BATCHING
 # ════════════════════════════════════════════════════════════════════
 
-@st.cache_data(ttl=60)   # short TTL for live feel
+@st.cache_data(ttl=300)
 def yahoo_quote(ticker):
     TICKER_MAP = {"DXY": "DX-Y.NYB", "$DXY": "DX-Y.NYB"}
     t = TICKER_MAP.get(ticker, ticker)
@@ -374,8 +374,11 @@ def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=
         else:
             T_approx = 14 / 365.0
 
-        r_risk_free = get_risk_free_rate(st.session_state.get("fred_key"))
-        
+        try:
+            fred_key = st.session_state.get("fred_key")
+        except:
+            fred_key = None
+        r_risk_free = get_risk_free_rate(fred_key)        
         def _bs_delta(S, K, T, r, sigma, side):
             if S <= 0 or K <= 0 or T <= 0 or sigma <= 0: return 0.5
             d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
