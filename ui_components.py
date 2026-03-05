@@ -285,6 +285,46 @@ def render_unusual_trade(contract, ticker="", expiry=""):
         f'</div></div>'
     )
 
+def render_stat_arb_cards(data):
+    if not data:
+        return '<p style="color:#555;font-family:monospace;font-size:11px">Stat Arb data unavailable.</p>'
+    
+    html = '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">'
+    for row in data:
+        t1, t2 = row["t1"], row["t2"]
+        z = row["zscore"]
+        beta = row["beta"]
+        hl = row["half_life"]
+        pval = row["pvalue"]
+        coint = row["coint"]
+        sig = row["signal"]
+        
+        # Color encoding based on Z-Score
+        z_color = "#FF4444" if z > 2 else ("#00CC44" if z < -2 else "#FF8C00" if abs(z)>1 else "#888")
+        
+        # Cointegration status indicator
+        coint_dot = "🟢" if coint else "🔴"
+        
+        # Format the signal label
+        sig_color = "#00CC44" if "Long T1" in sig else "#FF4444" if "Short T1" in sig else "#888"
+        if "Neutral" in sig: sig_color = "#888"
+        
+        html += f'''
+        <div style="background:#111; border-left:3px solid {z_color}; padding:8px 12px; border-radius:3px; font-family:monospace; box-shadow:0 1px 3px rgba(0,0,0,0.5);">
+            <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:4px;">
+                <span style="color:#FFF; font-size:14px; font-weight:700; letter-spacing:1px;">{t1} / {t2}</span>
+                <span style="color:{sig_color}; font-size:12px; font-weight:700;">{sig}</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; color:#AAA; font-size:11px;">
+                <span>Z-Score: <span style="color:{z_color}; font-weight:bold;">{z:+.2f}</span></span>
+                <span>Hedge Ratio: {beta:.3f}</span>
+                <span>Half-Life: {hl:.1f}d</span>
+                <span>{coint_dot} Coint (p={pval:.3f})</span>
+            </div>
+        </div>
+        '''
+    html += '</div>'
+    return html
 # ════════════════════════════════════════════════════════════════════
 # INSIDER TRANSACTIONS
 # ════════════════════════════════════════════════════════════════════
