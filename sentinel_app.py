@@ -764,6 +764,26 @@ with tabs[1]:
 
                 if scored.get("unusual"):
                     st.markdown(render_unusual_trade(scored["unusual"], ticker=tkr, expiry=exp_fmt), unsafe_allow_html=True)
+                
+                with st.expander("🔧 TRUE BLACK-SCHOLES ENGINE (WHAT-IF)", expanded=False):
+                    from scipy.stats import norm
+                    import math
+                    st.markdown('<div style="color:#888;font-size:10px;margin-bottom:8px">Calculate Delta, Gamma, Theta locally bypassing Alpaca endpoint limits.</div>', unsafe_allow_html=True)
+                    wc1, wc2, wc3, wc4, wc5 = st.columns(5)
+                    with wc1: bs_s = st.number_input("Spot Price", value=float(q["price"]), format="%.2f", key=f"bs_s_{tkr}")
+                    with wc2: bs_k = st.number_input("Strike", value=float(q["price"]), format="%.2f", key=f"bs_k_{tkr}")
+                    with wc3:
+                        dt_exp = max((exp_dt.date() - datetime.today().date()).days, 1) if 'exp_dt' in locals() else 14
+                        bs_t = st.number_input("Days to Expire", value=float(dt_exp), format="%.1f", key=f"bs_t_{tkr}")
+                    with wc4:
+                        bs_v = st.number_input("Implied Vol (%)", value=float(current_vix) if current_vix else 20.0, format="%.1f", key=f"bs_v_{tkr}")
+                    with wc5: bs_side = st.selectbox("Type", ["call", "put"], key=f"bs_side_{tkr}")
+                    
+                    bs_res = bs_greeks_engine(bs_s, bs_k, bs_t / 365.0, 0.045, bs_v / 100.0, bs_side)
+                    rc1, rc2, rc3 = st.columns(3)
+                    rc1.metric("Delta", f"{bs_res['delta']:.4f}")
+                    rc2.metric("Gamma", f"{bs_res['gamma']:.6f}")
+                    rc3.metric("Theta (Daily)", f"{bs_res['theta']:.4f}")
 
                 with st.expander("📊 **FULL OPTIONS CHAIN**", expanded=False):
                     fc, fp = st.columns(2)
@@ -787,6 +807,16 @@ with tabs[1]:
                     st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No recent insider transactions found.</p>', unsafe_allow_html=True)
             else:
                 st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Add Finnhub key in sidebar.</p>', unsafe_allow_html=True)
+
+            st.markdown('<div class="bb-ph" style="margin-top:12px">📉 SHORT VOLUME & DARK POOL PROXY (FINRA/YF)</div>', unsafe_allow_html=True)
+            finra = get_finra_short_volume(tkr)
+            if finra:
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Short % of Float", f"{finra['short_pct_float']}%")
+                c2.metric("Short Shares", f"{finra['short_shares']:,}")
+                c3.metric("Days to Cover", f"{finra['days_to_cover']}")
+            else:
+                st.markdown('<div style="color:#555;font-size:11px">Short volume data unavailable for this ticker.</div>', unsafe_allow_html=True)
         else:
             st.error(f"No data for '{tkr}'. Check ticker symbol.")
 
@@ -860,7 +890,15 @@ with tabs[1]:
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-    st.markdown('<div class="bb-ph">🔄 SECTOR ROTATION HEATMAP</div>', unsafe_allow_html=True)
+    st.markdown('<div class="bb-ph">⚖️ STATISTICAL ARBITRAGE (Cointegration Screener)</div>', unsafe_allow_html=True)
+    with st.spinner("Running Engle-Granger tests..."):
+        arb_df = stat_arb_screener()
+    if arb_df is not None and not arb_df.empty:
+        st.dataframe(arb_df, hide_index=True, use_container_width=True)
+    else:
+        st.markdown('<div style="color:#555;font-size:11px">Stat Arb data unavailable (statsmodels missing or fetch failed).</div>', unsafe_allow_html=True)
+
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
     sec_df = sector_etfs()
     if not sec_df.empty:
         ss = sec_df.sort_values("Pct")
@@ -1072,6 +1110,23 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
         if st.session_state.trade_log_0dte:
             _log_entries = st.session_state.trade_log_0dte[-10:]
             st.markdown(render_0dte_trade_log(_log_entries), unsafe_allow_html=True)
+
+        with st.expander("⚖️ KELLY CRITERION POSITION SIZING", expanded=False):
+            st.markdown('<div style="color:#888;font-family:monospace;font-size:10px;margin-bottom:8px">Institutional risk management optimal sizing calculator.</div>', unsafe_allow_html=True)
+            kc1, kc2, kc3 = st.columns(3)
+            with kc1: win_rate = st.number_input("Est. Win Rate (%)", min_value=1.0, max_value=99.0, value=55.0, step=1.0) / 100.0
+            with kc2: risk_reward = st.number_input("Risk/Reward Ratio", min_value=0.1, max_value=10.0, value=1.5, step=0.1)
+            with kc3: bankroll = st.number_input("Account Max Risk ($)", min_value=100.0, max_value=10000000.0, value=10000.0, step=100.0)
+                
+            kelly_pct = max(0.0, win_rate - ((1.0 - win_rate) / risk_reward))
+            half_kelly = kelly_pct / 2.0
+            
+            st.markdown(f"""
+            <div style="padding:10px; background:#1A0500; border-left:4px solid #FF6600; margin-top:10px;">
+                <span style="color:#FFF; font-weight:bold; font-family:monospace; font-size:14px;">Full Kelly: {kelly_pct*100:.2f}% | Half Kelly (Rec): {half_kelly*100:.2f}%</span><br>
+                <span style="color:#00CC44; font-family:monospace; font-size:16px;">Recommended Max Capital Allocation: ${bankroll * half_kelly:.2f}</span>
+            </div>
+            """, unsafe_allow_html=True)
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
