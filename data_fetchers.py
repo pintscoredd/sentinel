@@ -470,10 +470,11 @@ def get_finra_short_volume(ticker):
 
 @st.cache_data(ttl=3600)
 def stat_arb_screener(pairs=None):
-    """Statistical Arbitrage Screener using Engle-Granger Cointegration."""
+    """Statistical Arbitrage Screener using Engle-Granger Cointegration & OLS Half-Life."""
     try:
-        import statsmodels
+        import statsmodels.api as sm
         from statsmodels.tsa.stattools import coint
+        import numpy as np
     except ImportError:
         return None
         
@@ -495,22 +496,50 @@ def stat_arb_screener(pairs=None):
             if len(df) < 100:
                 continue
                 
+            # Engle-Granger Cointegration Test
             score, pvalue, _ = coint(df[t1], df[t2])
-            ratio = df[t1] / df[t2]
-            z_score = (ratio.iloc[-1] - ratio.mean()) / ratio.std()
+            
+            # OLS for Hedge Ratio (Beta)
+            Y = df[t1]
+            X = sm.add_constant(df[t2])
+            model = sm.OLS(Y, X).fit()
+            beta = model.params.iloc[1]
+            
+            # Spread = Y - beta * X
+            spread = df[t1] - beta * df[t2]
+            mean_spread = spread.mean()
+            std_spread = spread.std()
+            z_score = (spread.iloc[-1] - mean_spread) / std_spread
+            
+            # Ornstein-Uhlenbeck Process for Half-Life
+            spread_lag = spread.shift(1).dropna()
+            spread_diff = spread.diff().dropna()
+            lag_with_const = sm.add_constant(spread_lag)
+            ou_model = sm.OLS(spread_diff, lag_with_const).fit()
+            ou_lambda = -ou_model.params.iloc[1]
+            half_life = np.log(2) / ou_lambda if ou_lambda > 0 else float('inf')
+            
+            signal = "Neutral"
+            if z_score < -2: signal = "Long T1 / Short T2"
+            elif z_score > 2: signal = "Short T1 / Long T2"
+            elif z_score < -1: signal = "Leaning Long T1"
+            elif z_score > 1: signal = "Leaning Short T1"
             
             results.append({
-                "Pair": f"{t1} / {t2}",
-                "P-Value": round(float(pvalue), 4),
-                "Z-Score": round(float(z_score), 2),
-                "Cointegrated": "Yes" if pvalue < 0.05 else "No",
-                "Signal": "Long T1 / Short T2" if z_score < -2 else ("Short T1 / Long T2" if z_score > 2 else "Neutral")
+                "t1": t1, "t2": t2,
+                "pvalue": round(float(pvalue), 4),
+                "zscore": round(float(z_score), 2),
+                "half_life": round(float(half_life), 1),
+                "beta": round(float(beta), 3),
+                "coint": pvalue < 0.05,
+                "signal": signal
             })
         except Exception:
             continue
             
     if results:
-        return pd.DataFrame(results).sort_values("Z-Score")
+        results.sort(key=lambda x: abs(x["zscore"]), reverse=True)
+        return results
     return None
 
 @st.cache_data(ttl=600)
