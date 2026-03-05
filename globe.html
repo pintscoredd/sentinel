@@ -216,11 +216,6 @@
       width: 300px;
       display: none;
       box-shadow: 0 10px 40px rgba(0, 0, 0, .9);
-      cursor: grab;
-    }
-
-    #ic:active {
-      cursor: grabbing;
     }
 
     #ic.show {
@@ -1333,27 +1328,53 @@
 
       async function fetchMilitaryFlights() {
         let flights = [];
-        try {
-          const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 10000);
-          const r = await fetch('https://api.airplanes.live/v2/mil', { signal: ctrl.signal });
-          if (r.ok) {
-            const data = await r.json();
-            flights = (data.ac || [])
-              .filter(a => a.lat != null && a.lon != null && a.alt_baro !== 'ground' && (a.dbFlags & 1))
-              .slice(0, 300)
-              .map(a => ({
-                callsign: (a.flight || a.r || a.hex || 'MIL').trim(),
+
+        // 1) ADS-B Exchange (requires API key)
+        if (typeof ADSBX_API_KEY !== 'undefined' && ADSBX_API_KEY) {
+          try {
+            const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 8000);
+            const r = await fetch('https://adsbexchange-com1.p.rapidapi.com/v2/mil/', {
+              signal: ctrl.signal,
+              headers: { 'X-RapidAPI-Key': ADSBX_API_KEY, 'X-RapidAPI-Host': 'adsbexchange-com1.p.rapidapi.com' }
+            });
+            if (r.ok) {
+              const data = await r.json();
+              flights = (data.ac || []).filter(a => a.lat && a.lon && !a.gnd).map(a => ({
+                callsign: (a.flight || a.r || 'UNKNOWN').trim(),
                 lat: parseFloat(a.lat), lon: parseFloat(a.lon),
                 alt: Math.round(parseFloat(a.alt_baro) || 0),
                 speed: Math.round(parseFloat(a.gs) || 0),
                 heading: parseFloat(a.track) || 0,
-                hex: a.hex || '', country: 'MIL', type: a.t || 'MIL', reg: a.r || ''
-              }))
-              .filter(f => isFinite(f.lat) && isFinite(f.lon));
-          }
-        } catch (e) { }
+                hex: a.hex || '', country: 'USA', type: a.t || 'MIL', reg: a.r || ''
+              }));
+            }
+          } catch (e) { }
+        }
 
-        // OpenSky fallback
+        // 2) adsb.fi military endpoint — no key needed, good global coverage
+        if (flights.length === 0) {
+          try {
+            const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 10000);
+            const r = await fetch('https://api.adsb.fi/v1/mil', { signal: ctrl.signal });
+            if (r.ok) {
+              const data = await r.json();
+              flights = (data.aircraft || data.ac || [])
+                .filter(a => a.lat != null && a.lon != null && a.alt_baro !== 'ground')
+                .slice(0, 300)
+                .map(a => ({
+                  callsign: (a.flight || a.r || a.hex || 'MIL').trim(),
+                  lat: parseFloat(a.lat), lon: parseFloat(a.lon),
+                  alt: Math.round(parseFloat(a.alt_baro) || 0),
+                  speed: Math.round(parseFloat(a.gs) || 0),
+                  heading: parseFloat(a.track) || 0,
+                  hex: a.hex || '', country: 'MIL', type: a.t || 'MIL', reg: a.r || ''
+                }))
+                .filter(f => isFinite(f.lat) && isFinite(f.lon));
+            }
+          } catch (e) { }
+        }
+
+        // 3) OpenSky fallback
         if (flights.length === 0) {
           try {
             const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 12000);
@@ -1439,7 +1460,7 @@
           trackUpdateInt = setInterval(() => fetchMilitaryFlights().then(() => {
             const updated = flightData.find(f => f.hex === obj.hex);
             if (updated) computeFlightPath(updated);
-          }), 60000);
+          }), 30000);
         }
       }
 
@@ -1670,34 +1691,6 @@
         ic.className = 'show ' + (h.sev || 'elevated');
         positionCard(px, py);
       }
- const icElement = document.getElementById('ic');
-      let isDraggingIC = false;
-      let icOffsetX = 0, icOffsetY = 0;
-
-      icElement.addEventListener('mousedown', e => {
-        if (e.target.id === 'ic-close' || e.target.id === 'ic-track-btn' || e.target.tagName.toLowerCase() === 'a') return;
-        isDraggingIC = true;
-        const rect = icElement.getBoundingClientRect();
-        icOffsetX = e.clientX - rect.left;
-        icOffsetY = e.clientY - rect.top;
-        e.preventDefault(); // Prevent text selection
-      });
-
-      window.addEventListener('mousemove', e => {
-        if (!isDraggingIC) return;
-        let newX = e.clientX - icOffsetX;
-        let newY = e.clientY - icOffsetY;
-        // Keep it inside the screen bounds
-        newX = Math.max(0, Math.min(newX, window.innerWidth - icElement.offsetWidth));
-        newY = Math.max(0, Math.min(newY, window.innerHeight - icElement.offsetHeight));
-
-        icElement.style.left = newX + 'px';
-        icElement.style.top = newY + 'px';
-      });
-
-      window.addEventListener('mouseup', () => {
-        isDraggingIC = false;
-      });
 
       function showSatCard(sat, px, py) {
         currentCardObj = { type: 'sat', data: sat };
@@ -1706,9 +1699,41 @@
         document.getElementById('ic-ttl').textContent = sat.name;
         const alt = sat.altKm ? Math.round(sat.altKm) + 'KM' : 'N/A';
         const spd = sat.speed ? Math.round(sat.speed) + ' KM/H' : 'N/A';
+
+        let flag = "🛰️ UNKN";
+        let n = (sat.name || "").toUpperCase();
+        let img = "https://upload.wikimedia.org/wikipedia/commons/thumb/2/27/Satellite_icon.png/320px-Satellite_icon.png";
+        if (n.includes("STARLINK")) {
+          flag = "🇺🇸 USA (SpaceX)"; img = "https://upload.wikimedia.org/wikipedia/commons/thumb/7/77/Starlink_Logo_2.svg/320px-Starlink_Logo_2.svg.png";
+        } else if (n.includes("SPACEBEE") || n.includes("USA") || n.includes("NOAA") || n.includes("GOES") || n.includes("FLOCK") || n.includes("GPS") || n.includes("NAVSTAR")) {
+          flag = "🇺🇸 USA"; img = "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/Flag_of_the_United_States_%28Pantone%29.svg/320px-Flag_of_the_United_States_%28Pantone%29.svg.png";
+        } else if (n.includes("COSMOS") || n.includes("KSM") || n.includes("METEOR") || n.includes("GLONASS") || n.includes("RESURS")) {
+          flag = "🇷🇺 RUS"; img = "https://upload.wikimedia.org/wikipedia/en/thumb/f/f3/Flag_of_Russia.svg/320px-Flag_of_Russia.svg.png";
+        } else if (n.includes("BEIDOU") || n.includes("PRC") || n.includes("FENGYUN") || n.includes("GAOFEN") || n.includes("YAOGAN") || n.includes("TIANHUI")) {
+          flag = "🇨🇳 CHN"; img = "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fa/Flag_of_the_People%27s_Republic_of_China.svg/320px-Flag_of_the_People%27s_Republic_of_China.svg.png";
+        } else if (n.includes("GALILEO") || n.includes("SENTINEL") || n.includes("METOP") || n.includes("PLEIADES")) {
+          flag = "🇪🇺 ESA/EU"; img = "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b7/Flag_of_Europe.svg/320px-Flag_of_Europe.svg.png";
+        } else if (n.includes("GSAT") || n.includes("CARTOSAT") || n.includes("INSAT") || n.includes("RISAT") || n.includes("MICROSAT")) {
+          flag = "🇮🇳 IND"; img = "https://upload.wikimedia.org/wikipedia/en/thumb/4/41/Flag_of_India.svg/320px-Flag_of_India.svg.png";
+        } else if (n.includes("IGS") || n.includes("QZS") || n.includes("ALOS") || n.includes("HIMAWARI")) {
+          flag = "🇯🇵 JPN"; img = "https://upload.wikimedia.org/wikipedia/en/thumb/9/9e/Flag_of_Japan.svg/320px-Flag_of_Japan.svg.png";
+        } else if (n.includes("ONEWEB")) {
+          flag = "🇬🇧 UK (OneWeb)"; img = "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/OneWeb_Logo.svg/320px-OneWeb_Logo.svg.png";
+        } else if (n.includes("ISS") || n.includes("ZARYA")) {
+          flag = "🌐 INT (ISS)"; img = "https://upload.wikimedia.org/wikipedia/commons/thumb/0/04/International_Space_Station_after_undocking_of_STS-132.jpg/320px-International_Space_Station_after_undocking_of_STS-132.jpg";
+        } else if (n.includes("IRIDIUM")) {
+          flag = "🌐 INT (Iridium)"; img = "https://upload.wikimedia.org/wikipedia/commons/thumb/1/17/Iridium_satellite_model.jpg/320px-Iridium_satellite_model.jpg";
+        }
+
         document.getElementById('ic-body').textContent =
-          `ALTITUDE: ${alt}\nPERIOD: ${sat.info.period} MIN\nINCLINATION: ${sat.info.incl}°\nSPEED: ${spd}\nNORAD ID: ${sat.noradId || '—'}`;
-        document.getElementById('ic-mkt').textContent = '';
+          `ALTITUDE: ${alt}\nPERIOD: ${sat.info.period} MIN\nINCLINATION: ${sat.info.incl}°\nSPEED: ${spd}\nORIGIN: ${flag}\nNORAD ID: ${sat.noradId || '—'}`;
+
+        const mkt = document.getElementById('ic-mkt');
+        mkt.innerHTML = '';
+        if (img) {
+          mkt.innerHTML = `<img src="${img}" style="margin-top:8px; border-radius:4px; max-width:80px; max-height:50px; opacity:0.95; border:1px solid #444;" />`;
+        }
+
         document.getElementById('ic-tags').innerHTML = `<span class="ictag">${sat.groupId.toUpperCase()}</span><span class="ictag">NORAD ${sat.noradId || '?'}</span>`;
         document.getElementById('ic-date').textContent = 'POSITION: LIVE PROPAGATED';
         const btn = document.getElementById('ic-track-btn');
@@ -1737,14 +1762,10 @@
               if (data && data.photos && data.photos.length > 0) {
                 const url = data.photos[0].thumbnail_large?.src || data.photos[0].thumbnail?.src || '';
                 if (url) photoContainer.innerHTML = `<div style="margin-top:6px"><img src="${url}" style="width:100%;max-width:260px;border-radius:3px;border:1px solid #222" onerror="this.parentElement.style.display='none'"/></div>`;
-                else photoContainer.innerHTML = '<div style="margin-top:6px;padding:8px;text-align:center;border:1px dashed #333;color:#666;font-size:10px;font-family:monospace;border-radius:3px;letter-spacing:1px;background:rgba(0,0,0,0.5)">CLASSIFIED / NO PHOTO</div>';
-              } else {
-                photoContainer.innerHTML = '<div style="margin-top:6px;padding:8px;text-align:center;border:1px dashed #333;color:#666;font-size:10px;font-family:monospace;border-radius:3px;letter-spacing:1px;background:rgba(0,0,0,0.5)">CLASSIFIED / NO PHOTO</div>';
-              }
+                else photoContainer.innerHTML = '';
+              } else { photoContainer.innerHTML = ''; }
             })
-            .catch(() => {
-              photoContainer.innerHTML = '<div style="margin-top:6px;padding:8px;text-align:center;border:1px dashed #333;color:#666;font-size:10px;font-family:monospace;border-radius:3px;letter-spacing:1px;background:rgba(0,0,0,0.5)">CLASSIFIED / NO PHOTO</div>';
-            });
+            .catch(() => { photoContainer.innerHTML = ''; });
         }
         document.getElementById('ic-tags').innerHTML = `<span class="ictag">MIL</span><span class="ictag">${flight.country}</span><span class="ictag">${flight.type || 'UNKN'}</span>`;
         document.getElementById('ic-date').textContent = 'POSITION: LIVE ADS-B';
