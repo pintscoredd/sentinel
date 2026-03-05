@@ -428,6 +428,37 @@ def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=
 
     return result
 
+def bs_price(S, K, T, r, sigma, side="call"):
+    """Calculate theoretical option price using Black-Scholes."""
+    try:
+        # Prevent math domain errors on edge cases
+        if T <= 0 or sigma <= 0 or S <= 0 or K <= 0: return 0.0
+        d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+        d2 = d1 - sigma * math.sqrt(T)
+        if side == "call":
+            p = S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
+        else:
+            p = K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+        return max(p, 0.0)
+    except Exception:
+        return 0.0
+
+def get_iv_newton(S, K, T, r, target_price, side="call"):
+    """Newton-Raphson root solver to back out Implied Volatility from market price."""
+    from scipy.optimize import newton
+    if target_price <= 0 or S <= 0 or K <= 0 or T <= 0: return 0.0
+    
+    def objective(sigma):
+        return bs_price(S, K, T, r, sigma, side) - target_price
+        
+    try:
+        # Newton solver with an initial guess of 20% IV
+        iv = newton(objective, x0=0.20, tol=1e-4, maxiter=50)
+        return float(max(iv, 0.0))
+    except Exception:
+        # Fallback to 0 if solver fails to converge (e.g. deep OTM)
+        return 0.0
+
 def bs_greeks_engine(S, K, T, r, sigma, side="call"):
     """True Black-Scholes Greeks Engine computing Delta, Gamma, Theta locally for 'what-if' shifting."""
     if S <= 0 or K <= 0 or T <= 0 or sigma <= 0:
@@ -1094,14 +1125,32 @@ def fetch_0dte_chain(underlying="SPY"):
             if strike <= 0 or strike < lower_bound or strike > upper_bound: continue
             bid = _safe_float(quote.get("bp"))
             ask = _safe_float(quote.get("ap"))
-            mid = round((bid + ask) / 2, 2) if (bid + ask) > 0 else _safe_float(trade.get("p"))
+            last = _safe_float(trade.get("p"))
+            mid = round((bid + ask) / 2, 2) if (bid + ask) > 0 else last
+            
+            # Use Newton-Raphson dynamically if mid price is available
+            r_rate = 0.045
+            T_val = 0.5 / 365.0  # Appx half a trading day for 0DTE flow
+            
+            calculated_iv = get_iv_newton(spot, strike, T_val, r_rate, mid, opt_type)
+            if calculated_iv > 0:
+                bs_override = bs_greeks_engine(spot, strike, T_val, r_rate, calculated_iv, opt_type)
+                final_iv = calculated_iv
+                final_delta = bs_override["delta"]
+                final_gamma = bs_override["gamma"]
+                final_theta = bs_override["theta"]
+            else:
+                final_iv = _safe_float(snap_data.get("impliedVolatility"))
+                final_delta = _safe_float(greeks.get("delta"))
+                final_gamma = _safe_float(greeks.get("gamma"))
+                final_theta = _safe_float(greeks.get("theta"))
 
             chain.append({
                 "symbol": sym, "strike": strike, "type": opt_type,
-                "bid": bid, "ask": ask, "mid": mid, "last": _safe_float(trade.get("p")),
-                "iv": _safe_float(snap_data.get("impliedVolatility")),
-                "delta": _safe_float(greeks.get("delta")), "gamma": _safe_float(greeks.get("gamma")),
-                "theta": _safe_float(greeks.get("theta")), "vega": _safe_float(greeks.get("vega")),
+                "bid": bid, "ask": ask, "mid": mid, "last": last,
+                "iv": final_iv,
+                "delta": final_delta, "gamma": final_gamma,
+                "theta": final_theta, "vega": _safe_float(greeks.get("vega")),
                 "oi": int(_safe_float(snap_data.get("openInterest", 0))), "volume": int(_safe_float(trade.get("s", 0))),
             })
         chain.sort(key=lambda x: x["strike"])
@@ -2337,17 +2386,26 @@ def _fetch_yahoo_v8_chart(ticker, range_str="5d", interval="1d"):
         if not result: return []
         meta = result[0]
         timestamps, indicators = meta.get("timestamp", []), meta.get("indicators", {}).get("quote", [{}])[0]
-        closes, volumes = indicators.get("close", []), indicators.get("volume", [])
+        highs, lows = indicators.get("high", []), indicators.get("low", [])
         if not timestamps or not closes: return []
 
         rows = []
         for i, ts in enumerate(timestamps):
             c = closes[i] if i < len(closes) else None
+            h = highs[i] if i < len(highs) else c
+            l = lows[i] if i < len(lows) else c
             v = volumes[i] if i < len(volumes) else None
             if c is None or v is None: continue
-            rows.append({"timestamp": ts, "close": float(c), "volume": int(v)})
+            rows.append({
+                "timestamp": ts, 
+                "close": float(c), 
+                "high": float(h) if h else float(c),
+                "low": float(l) if l else float(c),
+                "volume": int(v)
+            })
         return rows
-    except Exception:
+    except Exception as e:
+        logger.error({"error": str(e)}, "Failed to fetch Yahoo V8 chart")
         return []
 
 @st.cache_data(ttl=600)
@@ -2362,13 +2420,20 @@ def fetch_btc_etf_flows():
             if len(rows) < 2: continue
             ticker_flows = {}
             for i in range(1, len(rows)):
-                prev_close, curr_close, volume, ts = rows[i - 1]["close"], rows[i]["close"], rows[i]["volume"], rows[i]["timestamp"]
+                prev_close = rows[i - 1]["close"]
+                curr_close, curr_high, curr_low = rows[i]["close"], rows[i]["high"], rows[i]["low"]
+                volume, ts = rows[i]["volume"], rows[i]["timestamp"]
+                
                 if prev_close <= 0 or curr_close <= 0: continue
+                vwap = (curr_high + curr_low + curr_close) / 3.0
                 direction = 1.0 if (curr_close - prev_close) >= 0 else -1.0
-                ticker_flows[_pd.Timestamp.fromtimestamp(ts).normalize()] = round((volume * curr_close * direction * 0.10) / 1e6, 2)
+                # Using VWAP for accumulation mathematically handles intraday volatility
+                ticker_flows[_pd.Timestamp.fromtimestamp(ts).normalize()] = round((volume * vwap * direction * 0.10) / 1e6, 2)
             if ticker_flows: all_flows[ticker] = ticker_flows
             _time.sleep(1.0)
-        except Exception: continue
+        except Exception as e:
+            logger.error({"error": str(e), "ticker": ticker}, "BTC ETF Flow specific fallback error")
+            continue
 
     if not all_flows: return None
     df = _pd.DataFrame(all_flows)
@@ -2388,9 +2453,12 @@ def fetch_btc_etf_flows_fallback():
                 hist = yf.Ticker(ticker).history(period="60d")
                 if hist is None or hist.empty or len(hist) < 2: continue
                 prev_close = hist["Close"].shift(1)
+                vwap = (hist["High"] + hist["Low"] + hist["Close"]) / 3.0
                 direction = (hist["Close"] - prev_close).apply(lambda x: 1.0 if x >= 0 else -1.0)
-                all_data[ticker] = ((hist["Volume"] * hist["Close"] * direction * 0.10) / 1e6).iloc[1:]
-            except Exception: continue
+                all_data[ticker] = ((hist["Volume"] * vwap * direction * 0.10) / 1e6).iloc[1:]
+            except Exception as e:
+                logger.error({"error": str(e), "ticker": ticker}, "BTC ETF Fallback flow error")
+                continue
 
         if not all_data: return None
         df = _pd.DataFrame(all_data)
