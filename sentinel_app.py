@@ -52,7 +52,7 @@ from ui_components import (
     render_poly_card, render_crypto_etf_chart,
     SENTINEL_PROMPT, GEMINI_MODELS, list_gemini_models, gemini_response,
     render_0dte_gex_chart, render_0dte_gex_decoder, render_0dte_recommendation, render_0dte_trade_log,
-    render_geo_tab,
+    render_geo_tab, render_stat_arb_cards,
 )
 
 st.set_page_config(page_title="SENTINEL", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
@@ -894,8 +894,8 @@ with tabs[1]:
     st.markdown('<div class="bb-ph">⚖️ STATISTICAL ARBITRAGE (Cointegration Screener)</div>', unsafe_allow_html=True)
     with st.spinner("Running Engle-Granger tests..."):
         arb_df = stat_arb_screener()
-    if arb_df is not None and not arb_df.empty:
-        st.dataframe(arb_df, hide_index=True, use_container_width=True)
+    if arb_df:
+        st.markdown(render_stat_arb_cards(arb_df), unsafe_allow_html=True)
     else:
         st.markdown('<div style="color:#555;font-size:11px">Stat Arb data unavailable (statsmodels missing or fetch failed).</div>', unsafe_allow_html=True)
 
