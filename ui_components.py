@@ -1032,6 +1032,10 @@ def _geo_network_embed_html(network):
     """HTML block: single financial network live stream with robust fallback."""
     name = network["name"]
     embed_url = network.get("embed_url", "")
+    if "?" in embed_url:
+        embed_url += "&enablejsapi=1"
+    else:
+        embed_url += "?enablejsapi=1"
 
     # Build an HTML page with a primary iframe and a JS fallback.
     # If the live_stream?channel= embed fails (shows "unavailable"),
@@ -1065,6 +1069,19 @@ def _geo_network_embed_html(network):
         </a>
       </div>
     </div>
+    <script>
+      const iframe = document.getElementById('net-frame');
+      const observer = new IntersectionObserver((entries) => {{
+        entries.forEach(entry => {{
+          if (entry.isIntersecting) {{
+            iframe.contentWindow.postMessage('{{"event":"command","func":"playVideo","args":""}}', '*');
+          }} else {{
+            iframe.contentWindow.postMessage('{{"event":"command","func":"pauseVideo","args":""}}', '*');
+          }}
+        }});
+      }});
+      observer.observe(iframe);
+    </script>
     '''
 
 
@@ -1074,14 +1091,14 @@ def _geo_webcam_region_html(region_cams):
     cols = 2 if len(region_cams) <= 4 else 3
     items = ""
     for cam in region_cams:
-        src   = f"https://www.youtube.com/embed/{cam['fallbackVideoId']}?autoplay=1&mute=1"
+        src   = f"https://www.youtube.com/embed/{cam['fallbackVideoId']}?autoplay=1&mute=1&enablejsapi=1"
         label = f"{cam['city']}, {cam['country']}"
         items += (
             f'<div>'
             f'<div style="font-family:monospace;font-size:10px;color:#888;'
             f'letter-spacing:1px;padding:3px 0;margin-bottom:4px">{label}</div>'
             f'<div style="position:relative;width:100%;padding-top:56.25%;background:#000">'
-            f'<iframe src="{src}" '
+            f'<iframe class="cam-frame" src="{src}" '
             f'style="position:absolute;top:0;left:0;width:100%;height:100%;border:1px solid #1A1A1A" '
             f'frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe>'
             f'</div>'
@@ -1091,6 +1108,19 @@ def _geo_webcam_region_html(region_cams):
         f'<div style="background:#030303;padding:8px;border:1px solid #1A1A1A">'
         f'<div style="display:grid;grid-template-columns:repeat({cols},1fr);gap:10px">{items}</div>'
         f'</div>'
+        f'<script>'
+        f'  const iframes = document.querySelectorAll(".cam-frame");'
+        f'  const observer = new IntersectionObserver((entries) => {{'
+        f'    entries.forEach(entry => {{'
+        f'      if (entry.isIntersecting) {{'
+        f'        entry.target.contentWindow.postMessage(\'{{"event":"command","func":"playVideo","args":""}}\', "*");'
+        f'      }} else {{'
+        f'        entry.target.contentWindow.postMessage(\'{{"event":"command","func":"pauseVideo","args":""}}\', "*");'
+        f'      }}'
+        f'    }});'
+        f'  }});'
+        f'  iframes.forEach(f => observer.observe(f));'
+        f'</script>'
     )
 
 
