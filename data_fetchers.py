@@ -423,6 +423,96 @@ def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=
 
     return result
 
+def bs_greeks_engine(S, K, T, r, sigma, side="call"):
+    """True Black-Scholes Greeks Engine computing Delta, Gamma, Theta locally for 'what-if' shifting."""
+    if S <= 0 or K <= 0 or T <= 0 or sigma <= 0:
+        return {"delta": 0.5 if side == "call" else -0.5, "gamma": 0.0, "theta": 0.0}
+    try:
+        d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+        d2 = d1 - sigma * math.sqrt(T)
+        N_d1 = norm.cdf(d1)
+        N_d2 = norm.cdf(d2)
+        n_d1 = norm.pdf(d1)
+        
+        delta = N_d1 if side == "call" else N_d1 - 1.0
+        gamma = n_d1 / (S * sigma * math.sqrt(T))
+        
+        theta_d1 = -(S * n_d1 * sigma) / (2 * math.sqrt(T))
+        if side == "call":
+            theta = (theta_d1 - r * K * math.exp(-r * T) * N_d2) / 365.0
+        else:
+            theta = (theta_d1 + r * K * math.exp(-r * T) * norm.cdf(-d2)) / 365.0
+            
+        return {"delta": round(delta, 4), "gamma": round(gamma, 6), "theta": round(theta, 4)}
+    except Exception:
+        return {"delta": 0.0, "gamma": 0.0, "theta": 0.0}
+
+@st.cache_data(ttl=21600)
+def get_finra_short_volume(ticker):
+    """Free Short Volume Data via FINRA/yfinance fallback."""
+    try:
+        t = yf.Ticker(ticker)
+        i = t.fast_info
+        # Attempt to get short data via ticker info
+        info = t.info
+        s_pct = info.get("shortPercentOfFloat", 0)
+        s_shares = info.get("sharesShort", 0)
+        s_ratio = info.get("shortRatio", 0)
+        if s_pct or s_shares:
+            return {
+                "short_pct_float": round(float(s_pct)*100, 2) if s_pct else 0,
+                "short_shares": s_shares,
+                "days_to_cover": s_ratio
+            }
+    except Exception:
+        pass
+    return None
+
+@st.cache_data(ttl=3600)
+def stat_arb_screener(pairs=None):
+    """Statistical Arbitrage Screener using Engle-Granger Cointegration."""
+    try:
+        import statsmodels
+        from statsmodels.tsa.stattools import coint
+    except ImportError:
+        return None
+        
+    if not pairs:
+        pairs = [("GLD", "GDX"), ("XOM", "CVX"), ("JPM", "BAC"), ("QQQ", "XLK"), ("SPY", "TLT")]
+    
+    results = []
+    end = datetime.today()
+    start = end - timedelta(days=252)
+    
+    for t1, t2 in pairs:
+        try:
+            stk1 = yf.download(t1, start=start, end=end, progress=False)["Close"].dropna()
+            stk2 = yf.download(t2, start=start, end=end, progress=False)["Close"].dropna()
+            if isinstance(stk1, pd.DataFrame): stk1 = stk1.iloc[:, 0]
+            if isinstance(stk2, pd.DataFrame): stk2 = stk2.iloc[:, 0]
+            
+            df = pd.DataFrame({t1: stk1, t2: stk2}).dropna()
+            if len(df) < 100:
+                continue
+                
+            score, pvalue, _ = coint(df[t1], df[t2])
+            ratio = df[t1] / df[t2]
+            z_score = (ratio.iloc[-1] - ratio.mean()) / ratio.std()
+            
+            results.append({
+                "Pair": f"{t1} / {t2}",
+                "P-Value": round(float(pvalue), 4),
+                "Z-Score": round(float(z_score), 2),
+                "Cointegrated": "Yes" if pvalue < 0.05 else "No",
+                "Signal": "Long T1 / Short T2" if z_score < -2 else ("Short T1 / Long T2" if z_score > 2 else "Neutral")
+            })
+        except Exception:
+            continue
+            
+    if results:
+        return pd.DataFrame(results).sort_values("Z-Score")
+    return None
+
 @st.cache_data(ttl=600)
 def sector_etfs():
     S = {"Technology": "XLK", "Financials": "XLF", "Energy": "XLE", "Healthcare": "XLV",
@@ -986,17 +1076,41 @@ def fetch_0dte_chain(underlying="SPY"):
         return [], f"Error: {str(e)}"
 
 def compute_gex_profile(chain, spot):
+    """Local DuckDB Time-Series Engine for instantaneous querying of aggregations."""
     gex = {}
-    if spot <= 0: return gex
-    for opt in chain:
-        k = opt["strike"]
-        oi = opt.get("oi", 0)
-        gamma = abs(opt.get("gamma", 0))
-        # Dollar GEX = OI × 100 shares × Gamma × Spot² × (1% SPY move)
-        raw_gex = oi * 100 * gamma * (spot ** 2) * 0.01
-        sign = 1.0 if opt["type"] == "call" else -1.0
-        gex[k] = gex.get(k, 0) + sign * raw_gex / 1_000_000
-    return dict(sorted(gex.items()))
+    if spot <= 0 or not chain: return gex
+    
+    try:
+        import duckdb
+        import pandas as pd
+        df = pd.DataFrame(chain)
+        if "gamma" not in df.columns or "oi" not in df.columns or "strike" not in df.columns:
+            raise ValueError("Missing columns")
+            
+        con = duckdb.connect(database=':memory:')
+        con.execute("CREATE TABLE options_chain AS SELECT * FROM df")
+        
+        query = f"""
+            SELECT strike, 
+                   SUM(CASE WHEN type = 'call' THEN 1 ELSE -1 END * oi * 100 * ABS(gamma) * POWER({spot}, 2) * 0.01 / 1000000) as gex
+            FROM options_chain
+            GROUP BY strike
+            ORDER BY strike
+        """
+        res = con.execute(query).df()
+        gex = {row['strike']: row['gex'] for _, row in res.iterrows()}
+        return gex
+    except Exception as e:
+        logger.error({"error": str(e)}, "DuckDB Engine Error")
+        # fallback
+        for opt in chain:
+            k = opt["strike"]
+            oi = opt.get("oi", 0)
+            gamma = abs(opt.get("gamma", 0))
+            raw_gex = oi * 100 * gamma * (spot ** 2) * 0.01
+            sign = 1.0 if opt["type"] == "call" else -1.0
+            gex[k] = gex.get(k, 0) + sign * raw_gex / 1_000_000
+        return dict(sorted(gex.items()))
 
 def find_gamma_flip(gex_profile):
     if not gex_profile: return None
