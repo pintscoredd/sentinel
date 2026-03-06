@@ -2195,7 +2195,7 @@ def fetch_military_aircraft() -> "pd.DataFrame":
             df["photo_url"] = df["hex"].apply(lambda h: f"https://api.planespotters.net/pub/photos/hex/{h}")
         return df
     except Exception as e:
-        logger.error({"error": str(e)}, "Military Flight Fetch Error")
+        logger.error("Military Flight Fetch Error: %s", str(e))
         return _pd.DataFrame()
 
 
@@ -2206,7 +2206,7 @@ def fetch_satellite_positions():
         from skyfield.api import EarthSatellite, load, wgs84 as _wgs84
         import numpy as _np
     except ImportError:
-        logger.error({"error": "Missing skyfield"}, "Satellite Tracker")
+        logger.error("Satellite Tracker: Missing skyfield")
         return _pd.DataFrame(), []
 
     try:
@@ -2214,7 +2214,7 @@ def fetch_satellite_positions():
         r.raise_for_status()
         lines = [l.strip() for l in r.text.strip().splitlines() if l.strip()]
     except Exception as e:
-        logger.error({"error": str(e)}, "Celestrak Error")
+        logger.error("Celestrak Error: %s", str(e))
         return _pd.DataFrame(), []
 
     from datetime import timezone as _tz, timedelta as _td
@@ -2376,12 +2376,19 @@ def fetch_ais_vessels():
 
 _ETF_TICKERS = ["IBIT", "FBTC", "ARKB", "BITB", "GBTC", "HODL", "BRRR", "EZBC", "BTCO", "BTCW"]
 _ETF_COLORS = {"IBIT": "#00CC44", "FBTC": "#00AA88", "ARKB": "#44BB66", "BITB": "#66CC88", "GBTC": "#FF4444", "HODL": "#55DD99", "BRRR": "#33CC77", "EZBC": "#77DDAA", "BTCO": "#88CCBB", "BTCW": "#99BBAA"}
-_YAHOO_CHART_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+_YAHOO_UAS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+]
 
 def _fetch_yahoo_v8_chart(ticker, range_str="5d", interval="1d"):
+    import random
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={range_str}&interval={interval}"
     try:
-        data = _fetch_robust_json(url, headers={"User-Agent": _YAHOO_CHART_UA}, timeout=8)
+        ua = random.choice(_YAHOO_UAS)
+        data = _fetch_robust_json(url, headers={"User-Agent": ua}, timeout=10)
         result = data.get("chart", {}).get("result", [])
         if not result: return []
         meta = result[0]
@@ -2405,7 +2412,7 @@ def _fetch_yahoo_v8_chart(ticker, range_str="5d", interval="1d"):
             })
         return rows
     except Exception as e:
-        logger.error({"error": str(e)}, "Failed to fetch Yahoo V8 chart")
+        logger.error("Failed to fetch Yahoo V8 chart for %s: %s", ticker, str(e))
         return []
 
 @st.cache_data(ttl=600)
@@ -2416,8 +2423,9 @@ def fetch_btc_etf_flows():
     
     for ticker in _ETF_TICKERS:
         try:
+            _time.sleep(1.0 + (_time.time() % 1.5))
             rows = _fetch_yahoo_v8_chart(ticker, range_str="5d", interval="1d")
-            if len(rows) < 2: continue
+            if not rows or len(rows) < 2: continue
             ticker_flows = {}
             for i in range(1, len(rows)):
                 prev_close = rows[i - 1]["close"]
@@ -2432,7 +2440,7 @@ def fetch_btc_etf_flows():
             if ticker_flows: all_flows[ticker] = ticker_flows
             _time.sleep(1.0)
         except Exception as e:
-            logger.error({"error": str(e), "ticker": ticker}, "BTC ETF Flow specific fallback error")
+            logger.error("BTC ETF Flow specific fallback error for %s: %s", ticker, str(e))
             continue
 
     if not all_flows: return None
@@ -2457,7 +2465,7 @@ def fetch_btc_etf_flows_fallback():
                 direction = (hist["Close"] - prev_close).apply(lambda x: 1.0 if x >= 0 else -1.0)
                 all_data[ticker] = ((hist["Volume"] * vwap * direction * 0.10) / 1e6).iloc[1:]
             except Exception as e:
-                logger.error({"error": str(e), "ticker": ticker}, "BTC ETF Fallback flow error")
+                logger.error("BTC ETF Fallback flow error for %s: %s", ticker, str(e))
                 continue
 
         if not all_data: return None
