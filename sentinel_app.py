@@ -34,7 +34,7 @@ from data_fetchers import (
     get_full_financials, get_stock_news,
     is_0dte_market_open, get_stock_snapshot, get_spx_metrics,
     fetch_0dte_chain, compute_gex_profile, compute_max_pain, compute_pcr,
-    find_gamma_flip, fetch_vix_data, find_target_strike,
+    find_gamma_flip, fetch_vix_data, find_target_strike, compute_spx_direction,
     parse_trade_input, generate_recommendation,
     fetch_cboe_gex, compute_cboe_gex_profile, compute_cboe_total_gex, compute_cboe_pcr,
     get_whale_trades, get_exchange_netflow, get_funding_rates,
@@ -1133,6 +1133,66 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                     <span style="color:#00CC44; font-family:monospace; font-size:16px;">Recommended Max Capital Allocation: ${bankroll * half_kelly:.2f}</span>
                 </div>
                 """, unsafe_allow_html=True)
+
+            st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+            # ── SPX DIRECTION PREDICTOR ─────────────────────────────
+            st.markdown('<div class="bb-ph">🧭 SPX DAILY DIRECTION PREDICTOR — QUANT ENGINE</div>', unsafe_allow_html=True)
+            _dir_result = compute_spx_direction(_0dte_chain, _spx, _vix_data)
+            if _dir_result:
+                _d = _dir_result
+                _conf_colors = {"HIGH": "#00CC44", "MEDIUM": "#FF8C00", "LOW": "#888"}
+                _conf_c = _conf_colors.get(_d['confidence'], '#888')
+                _score_bar_pct = min(abs(_d['normalized']) * 100, 100)
+                _score_bar_color = _d['direction_color']
+
+                # Direction header card
+                st.markdown(f'''
+                <div style="background:#080808;border:1px solid {_d["direction_color"]};border-left:5px solid {_d["direction_color"]};
+                    padding:16px 20px;margin-bottom:10px;font-family:'IBM Plex Mono',monospace">
+                  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+                    <div>
+                      <div style="color:{_d["direction_color"]};font-size:22px;font-weight:800;letter-spacing:2px">
+                        {_d["direction"]}</div>
+                      <div style="color:#888;font-size:10px;margin-top:2px">Confidence:
+                        <span style="color:{_conf_c};font-weight:700">{_d["confidence"]}</span>
+                        &nbsp;|&nbsp; Score: <span style="color:{_d["direction_color"]};font-weight:700">{_d["score"]:+.1f}</span>
+                        / ±{_d["max_score"]}</div>
+                    </div>
+                    <div style="text-align:right">
+                      <div style="color:#888;font-size:9px;letter-spacing:1px">EXPECTED RANGE</div>
+                      <div style="color:#FFF;font-size:16px;font-weight:700">{_d["expected_range"]}</div>
+                      <div style="color:#555;font-size:9px">1σ Move: ±${_d["daily_em"]:.0f} pts (VIX {_d["vix"]:.0f})</div>
+                    </div>
+                  </div>
+                  <div style="margin-top:10px;background:#111;border-radius:4px;height:6px;overflow:hidden">
+                    <div style="width:{_score_bar_pct}%;height:100%;background:{_score_bar_color};
+                        border-radius:4px;transition:width 0.3s"></div>
+                  </div>
+                </div>''', unsafe_allow_html=True)
+
+                # Signal breakdown table
+                _sig_header = ('<div style="display:grid;grid-template-columns:140px 130px 60px 1fr;gap:6px;'
+                               'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
+                               'font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
+                               '<span>SIGNAL</span><span>VALUE</span><span>WEIGHT</span><span>INTERPRETATION</span></div>')
+                st.markdown(_sig_header, unsafe_allow_html=True)
+
+                for sig_name, sig_val, sig_weight, sig_desc, sig_color in _d["signals"]:
+                    _w_sign = "+" if sig_weight >= 0 else ""
+                    _w_color = "#00CC44" if sig_weight > 0 else ("#FF4444" if sig_weight < 0 else "#555")
+                    st.markdown(
+                        f'<div style="display:grid;grid-template-columns:140px 130px 60px 1fr;gap:6px;'
+                        f'padding:5px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px;align-items:center">'
+                        f'<span style="color:#CCC;font-weight:600">{sig_name}</span>'
+                        f'<span style="color:{sig_color};font-weight:700">{sig_val}</span>'
+                        f'<span style="color:{_w_color};font-weight:700">{_w_sign}{sig_weight:.1f}</span>'
+                        f'<span style="color:#888;font-size:10px">{sig_desc}</span></div>',
+                        unsafe_allow_html=True)
+            else:
+                st.markdown('<div style="color:#555;font-family:monospace;font-size:11px;padding:10px">'
+                            'Direction predictor requires options chain + SPX data.</div>',
+                            unsafe_allow_html=True)
 
             st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
