@@ -25,6 +25,7 @@ from data_fetchers import (
     gdelt_news, newsapi_headlines,
     fetch_conflict_events_json, fetch_military_aircraft_json,
     fetch_satellite_positions_json, fetch_ais_vessels,
+    fetch_ai_hotspots_json,
     fetch_btc_etf_flows, fetch_btc_etf_flows_fallback,
     _ETF_TICKERS, _ETF_COLORS,
 )
@@ -1267,6 +1268,13 @@ def render_geo_tab():
         _geo_sats    = fetch_satellite_positions_json()
         _geo_vessels = fetch_ais_vessels()
         _geo_infra   = GEO_SHIPPING_LANES
+
+    # ── Merge AI-discovered hotspots (runs once / 12h) ─────────────
+    gemini_key = getattr(st.session_state, "gemini_key", None) or ""
+    if gemini_key:
+        ai_events = fetch_ai_hotspots_json(gemini_key)
+        if ai_events:
+            _geo_events = list(_geo_events) + ai_events
 
     # Build JSON injection script
     _sentinel_data = json.dumps({
