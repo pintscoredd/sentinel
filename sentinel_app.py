@@ -499,10 +499,13 @@ with tabs[0]:
     KEY_T = {"SPY":"S&P 500","QQQ":"Nasdaq 100","DIA":"Dow Jones","IWM":"Russell 2K",
              "^TNX":"10Y Yield","DX-Y.NYB":"USD Index","GLD":"Gold","CL=F":"WTI Crude","BTC-USD":"Bitcoin"}
     qs = multi_quotes(list(KEY_T.keys()))
-    cols = st.columns(len(qs))
-    for col, q in zip(cols, qs):
-        chg_str = f"{q['pct']:+.2f}% ({q['change']:+.2f})"
-        with col: st.metric(KEY_T.get(q["ticker"],q["ticker"]), fmt_p(q["price"]), delta=chg_str)
+    if qs:
+        cols = st.columns(len(qs))
+        for col, q in zip(cols, qs):
+            chg_str = f"{q['pct']:+.2f}% ({q['change']:+.2f})"
+            with col: st.metric(KEY_T.get(q["ticker"],q["ticker"]), fmt_p(q["price"]), delta=chg_str)
+    else:
+        st.markdown('<div style="color:#FF4444;font-size:11px;font-family:monospace">Quotes unavailable. Rate limits or network error.</div>', unsafe_allow_html=True)
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
     L, R = st.columns([3,2])
