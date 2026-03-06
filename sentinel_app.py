@@ -1869,25 +1869,24 @@ with tabs[5]:
             def _event_best_outcome(evt):
                 """Return (leading_outcome_name, probability_0_to_100) for the best sub-market."""
                 markets = evt.get("markets", [])
-                best_name, best_p = "YES", 50.0
+                best_name, best_p = None, 0.0
                 for mk in markets:
                     pp = _parse_poly_field(mk.get("outcomePrices", []))
-                    outcomes = _parse_poly_field(mk.get("outcomes", []))
-                    if pp:
-                        p = _safe_float(pp[0]) * 100
-                        if p > best_p:
-                            best_p = p
-                            # Use groupItemTitle (the multi-outcome participant name) if available
-                            candidate = mk.get("groupItemTitle") or (outcomes[0] if outcomes else None) or mk.get("question","")
-                            best_name = str(candidate)[:35] if candidate else "YES"
-                # Fallback to event-level outcomes
-                if best_p == 50.0:
+                    if not pp: continue
+                    p = _safe_float(pp[0]) * 100
+                    if p > best_p:
+                        best_p = p
+                        # Multi-outcome: groupItemTitle = candidate/team name
+                        # Binary: fall back to question or generic "Yes"
+                        candidate = mk.get("groupItemTitle") or mk.get("question", "")
+                        best_name = str(candidate).strip()[:35] if candidate else None
+                # Fallback to event-level data if no sub-markets found
+                if best_name is None:
                     pp = _parse_poly_field(evt.get("outcomePrices", []))
                     outcomes = _parse_poly_field(evt.get("outcomes", []))
-                    if pp and outcomes:
-                        p0 = _safe_float(pp[0]) * 100
-                        best_p = max(0.0, min(100.0, p0))
-                        best_name = str(outcomes[0])[:35] if outcomes else "YES"
+                    if pp:
+                        best_p = max(0.0, min(100.0, _safe_float(pp[0]) * 100))
+                    best_name = str(outcomes[0])[:35] if outcomes else "Yes"
                 return best_name, round(best_p, 1)
 
             event_urls   = [poly_url(e) for e in top10]
