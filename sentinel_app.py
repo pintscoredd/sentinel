@@ -31,7 +31,7 @@ from data_fetchers import (
     score_options_chain, score_poly_mispricing,
     get_earnings_calendar, is_market_open,
     get_macro_overview, get_macro_calendar, get_ticker_exchange,
-    get_full_financials, get_stock_news,
+    get_full_financials, get_stock_news, get_earnings_matrix,
     is_0dte_market_open, get_stock_snapshot, get_spx_metrics,
     fetch_0dte_chain, compute_gex_profile, compute_max_pain, compute_pcr,
     find_gamma_flip, fetch_vix_data, find_target_strike, compute_spx_direction,
@@ -358,6 +358,42 @@ section.main > div.block-container {
 .earn-card:hover { background: var(--bg2); }
 .earn-ticker { color: var(--org); font-weight: 700; font-size: 16px; }
 .earn-date { color: var(--wht); font-weight: 700; font-size: 13px; }
+
+/* EARNINGS MATRIX */
+.em-container { background: #080808; border: 1px solid #1A1A1A; border-radius: 4px; padding: 14px; margin: 10px 0; }
+.em-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.em-badge { background: #1A3A1A; color: #00CC44; padding: 2px 8px; border-radius: 3px; font-size: 9px; font-weight: 700; letter-spacing: 1px; font-family: var(--mono); }
+.em-ticker-label { color: var(--org); font-weight: 700; font-size: 14px; font-family: var(--mono); }
+.em-metric-label { color: #888; font-size: 10px; font-family: var(--mono); letter-spacing: 1px; }
+.em-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11px; }
+.em-table th { color: var(--org); font-size: 9px; letter-spacing: 1px; padding: 4px 8px; text-align: right; border-bottom: 1px solid var(--org); font-weight: 700; }
+.em-table th:first-child { text-align: left; }
+.em-table td { padding: 5px 8px; text-align: right; border-bottom: 1px solid #0D0D0D; color: #CCC; }
+.em-table td:first-child { text-align: left; color: #888; font-size: 10px; }
+.em-table tr:hover { background: #0A0A0A; }
+.em-table .em-annual td { border-top: 1px solid #333; font-weight: 700; }
+.em-positive { color: #00CC44 !important; }
+.em-negative { color: #FF4444 !important; }
+.em-neutral { color: #888 !important; }
+.em-estimate { color: #666 !important; font-style: italic; }
+.em-growth-toggle { display: flex; gap: 0; margin-bottom: 10px; }
+.em-growth-btn { background: #111; color: #888; border: 1px solid #222; padding: 5px 14px; font-family: var(--mono); font-size: 10px; font-weight: 700; cursor: pointer; letter-spacing: 1px; transition: all 0.15s; }
+.em-growth-btn:first-child { border-radius: 3px 0 0 3px; }
+.em-growth-btn:last-child { border-radius: 0 3px 3px 0; }
+.em-growth-btn.active { background: #1A3A1A; color: #00CC44; border-color: #00CC44; }
+.em-val-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11px; margin-top: 8px; }
+.em-val-table th { color: var(--org); font-size: 9px; letter-spacing: 1px; padding: 4px 6px; text-align: right; border-bottom: 1px solid var(--org); }
+.em-val-table th:first-child { text-align: left; }
+.em-val-table td { padding: 5px 6px; text-align: right; border-bottom: 1px solid #0D0D0D; color: #CCC; font-weight: 600; }
+.em-val-table td:first-child { text-align: left; color: #888; }
+.em-val-table tr:hover { background: #0A0A0A; }
+.em-chart-tabs { display: flex; gap: 0; margin-bottom: 10px; }
+.em-chart-tab { background: #111; color: #888; border: 1px solid #222; padding: 5px 14px; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 1px; }
+.em-chart-tab:first-child { border-radius: 3px 0 0 3px; }
+.em-chart-tab:last-child { border-radius: 0 3px 3px 0; }
+.em-chart-tab.active { background: var(--bg2); color: var(--wht); border-color: #444; }
+.em-legend { display: flex; gap: 16px; align-items: center; font-family: var(--mono); font-size: 9px; color: #888; margin-bottom: 6px; }
+.em-legend-dot { width: 10px; height: 10px; display: inline-block; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
 
 /* CAPS */
 [data-testid="column"] { padding: 0 4px !important; }
@@ -2235,6 +2271,218 @@ with tabs[7]:
                     st.markdown(render_news_card(art["title"], art["url"], art["source"], art["date"], "bb-news"), unsafe_allow_html=True)
             else:
                 st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No recent news found. Add Finnhub or NewsAPI key for richer coverage.</p>', unsafe_allow_html=True)
+
+    # ════════════════════════════════════════════════════════════════════
+    # EARNINGS MATRIX — Bloomberg-style EPS grid with growth & valuations
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+    st.markdown('<div class="bb-ph">📊 EARNINGS MATRIX — EPS HISTORY, GROWTH & VALUATIONS</div>', unsafe_allow_html=True)
+
+    _em_ticker = st.text_input("Ticker for Earnings Matrix", placeholder="MSFT, AAPL, NVDA…", key="em_tkr")
+    if _em_ticker:
+        _em_tkr = _em_ticker.upper().strip()
+        with st.spinner(f"Building Earnings Matrix for {_em_tkr}…"):
+            _em_data = get_earnings_matrix(_em_tkr)
+
+        if _em_data is None:
+            st.markdown(f'<p style="color:#555;font-family:monospace;font-size:11px">No earnings data available for {_em_tkr}. Try a different ticker.</p>', unsafe_allow_html=True)
+        else:
+            _em_years = _em_data["years"]
+            _em_qlabels = _em_data["q_labels"]
+            _em_quarterly = _em_data["quarterly"]
+            _em_annual = _em_data["annual"]
+            _em_yoy = _em_data["yoy_growth"]
+            _em_ann_growth = _em_data["annual_growth"]
+            _em_vals = _em_data["valuations"]
+            _em_currency = _em_data["currency"]
+            _em_company = _em_data.get("company", _em_tkr)
+
+            # ── Header ──
+            st.markdown(f'''<div class="em-container">
+  <div class="em-header">
+    <span class="em-badge">Earnings Matrix</span>
+    <span class="em-ticker-label">● {_em_tkr}</span>
+    <span class="em-metric-label">EPS (GAAP)</span>
+  </div>''', unsafe_allow_html=True)
+
+            # ── Side-by-side: EPS Values + YoY Growth ──
+            _em_left, _em_right = st.columns(2)
+
+            with _em_left:
+                # All values in currency
+                st.markdown(f'<div style="color:#555;font-family:monospace;font-size:9px;margin-bottom:6px;letter-spacing:1px">All values are in {_em_currency} ($)</div>', unsafe_allow_html=True)
+
+                # Build EPS values table
+                year_headers = "".join(f"<th>{yr}</th>" for yr in _em_years)
+                eps_html = f'<table class="em-table"><thead><tr><th></th>{year_headers}</tr></thead><tbody>'
+
+                for ql in _em_qlabels:
+                    eps_html += f"<tr><td>{ql}</td>"
+                    for yr in _em_years:
+                        val = _em_quarterly.get(yr, {}).get(ql)
+                        if val is not None:
+                            color = "#00CC44" if val >= 0 else "#FF4444"
+                            eps_html += f'<td style="color:{color}">{val:.2f}</td>'
+                        else:
+                            eps_html += '<td style="color:#333">—</td>'
+                    eps_html += "</tr>"
+
+                # Annual row
+                eps_html += '<tr class="em-annual"><td>Annual</td>'
+                for yr in _em_years:
+                    val = _em_annual.get(yr)
+                    if val is not None:
+                        color = "#00CC44" if val >= 0 else "#FF4444"
+                        eps_html += f'<td style="color:{color};font-weight:700">{val:.2f}</td>'
+                    else:
+                        eps_html += '<td style="color:#333">—</td>'
+                eps_html += "</tr></tbody></table>"
+                st.markdown(eps_html, unsafe_allow_html=True)
+
+            with _em_right:
+                # YoY Growth toggle
+                st.markdown('<div class="em-growth-toggle"><span class="em-growth-btn active">YoY % Growth</span></div>', unsafe_allow_html=True)
+
+                # Build YoY growth table
+                year_headers_g = "".join(f"<th>{yr}</th>" for yr in _em_years)
+                growth_html = f'<table class="em-table"><thead><tr><th></th>{year_headers_g}</tr></thead><tbody>'
+
+                for ql in _em_qlabels:
+                    growth_html += f"<tr><td>{ql}</td>"
+                    for yr in _em_years:
+                        val = _em_yoy.get(yr, {}).get(ql)
+                        if val is not None:
+                            color = "#00CC44" if val >= 0 else "#FF4444"
+                            growth_html += f'<td style="color:{color}">{val:+.1f}%</td>'
+                        else:
+                            growth_html += '<td style="color:#333">—</td>'
+                    growth_html += "</tr>"
+
+                # Annual growth row
+                growth_html += '<tr class="em-annual"><td>Annual</td>'
+                for yr in _em_years:
+                    val = _em_ann_growth.get(yr)
+                    if val is not None:
+                        color = "#00CC44" if val >= 0 else "#FF4444"
+                        growth_html += f'<td style="color:{color};font-weight:700">{val:+.1f}%</td>'
+                    else:
+                        growth_html += '<td style="color:#333">—</td>'
+                growth_html += "</tr></tbody></table>"
+                st.markdown(growth_html, unsafe_allow_html=True)
+
+            st.markdown('</div>', unsafe_allow_html=True)  # close em-container
+
+            # ── Charts + Valuations row ──
+            _em_chart_col, _em_val_col = st.columns([3, 2])
+
+            with _em_chart_col:
+                st.markdown('<div class="em-container">', unsafe_allow_html=True)
+
+                # ── Annual EPS Line Chart ──
+                _ann_years_sorted = sorted(_em_annual.keys())
+                if _ann_years_sorted:
+                    ann_labels = [str(yr) for yr in _ann_years_sorted]
+                    ann_values = [_em_annual[yr] for yr in _ann_years_sorted]
+
+                    fig_eps_line = dark_fig(250)
+                    fig_eps_line.add_trace(go.Scatter(
+                        x=ann_labels, y=ann_values, mode="lines+markers",
+                        line=dict(color="#00CC44", width=2),
+                        marker=dict(size=8, color="#00CC44", line=dict(width=1, color="#000")),
+                        text=[f"FY{yr}: ${v:.2f}" for yr, v in zip(_ann_years_sorted, ann_values)],
+                        hoverinfo="text",
+                    ))
+                    fig_eps_line.update_layout(
+                        margin=dict(l=40, r=20, t=30, b=30), height=250,
+                        title=dict(text="ANNUAL EPS (YEARLY)", font=dict(size=10, color="#FF6600"), x=0),
+                        xaxis=dict(color="#555", tickfont=dict(size=9), showgrid=False),
+                        yaxis=dict(color="#555", tickfont=dict(size=9), gridcolor="#111", title=None,
+                                   tickprefix="$"),
+                    )
+                    st.plotly_chart(fig_eps_line, use_container_width=True, config={'displayModeBar': False})
+
+                # ── Quarterly EPS Bar Chart ──
+                # Build a bar for each quarter across all years
+                _q_bar_labels = []
+                _q_bar_values = []
+                _q_bar_colors = []
+                for yr in _em_years:
+                    for ql in _em_qlabels:
+                        val = _em_quarterly.get(yr, {}).get(ql)
+                        if val is not None:
+                            _q_bar_labels.append(f"{ql[:2]} {yr}")
+                            _q_bar_values.append(val)
+                            _q_bar_colors.append("#00CC44" if val >= 0 else "#FF4444")
+
+                if _q_bar_labels:
+                    fig_q_bar = dark_fig(220)
+                    fig_q_bar.add_trace(go.Bar(
+                        x=_q_bar_labels, y=_q_bar_values,
+                        marker=dict(color=_q_bar_colors, line=dict(width=0), opacity=0.85),
+                        text=[f"${v:.2f}" for v in _q_bar_values],
+                        textposition="outside",
+                        textfont=dict(size=8, color="#888"),
+                    ))
+                    fig_q_bar.update_layout(
+                        margin=dict(l=40, r=10, t=30, b=40), height=220,
+                        title=dict(text="QUARTERLY EPS", font=dict(size=10, color="#FF6600"), x=0),
+                        xaxis=dict(color="#555", tickfont=dict(size=7, color="#666"), tickangle=-45, showgrid=False),
+                        yaxis=dict(color="#555", tickfont=dict(size=9), gridcolor="#111", title=None,
+                                   tickprefix="$"),
+                    )
+                    st.plotly_chart(fig_q_bar, use_container_width=True, config={'displayModeBar': False})
+
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            with _em_val_col:
+                st.markdown('<div class="em-container">', unsafe_allow_html=True)
+                st.markdown('<div style="color:#FF6600;font-size:10px;letter-spacing:1px;font-family:monospace;font-weight:700;margin-bottom:8px">VALUATION MULTIPLES</div>', unsafe_allow_html=True)
+
+                if _em_vals:
+                    val_html = '<table class="em-val-table"><thead><tr><th></th><th>Last 4Q</th><th>Forward</th></tr></thead><tbody>'
+                    for metric_name, periods in _em_vals.items():
+                        last4q = periods.get("Last 4Q", "—")
+                        fwd = periods.get("Forward", "—")
+                        # Color the values — green for low (cheap), orange for mid, red for high
+                        def _val_color(v_str):
+                            try:
+                                v = float(v_str.replace("x", ""))
+                                if v < 15: return "#00CC44"
+                                elif v < 25: return "#FF8C00"
+                                else: return "#FF6600"
+                            except:
+                                return "#888"
+                        l_color = _val_color(last4q)
+                        f_color = _val_color(fwd)
+                        val_html += f'<tr><td>{metric_name}</td><td style="color:{l_color}">{last4q}</td><td style="color:{f_color}">{fwd}</td></tr>'
+                    val_html += "</tbody></table>"
+                    st.markdown(val_html, unsafe_allow_html=True)
+                else:
+                    st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Valuation data unavailable.</p>', unsafe_allow_html=True)
+
+                # ── YoY Growth Summary ──
+                st.markdown('<div style="margin-top:16px;color:#FF6600;font-size:10px;letter-spacing:1px;font-family:monospace;font-weight:700;margin-bottom:6px">EPS GROWTH SUMMARY</div>', unsafe_allow_html=True)
+                for yr in _em_years:
+                    g_val = _em_ann_growth.get(yr)
+                    if g_val is not None:
+                        g_color = "#00CC44" if g_val >= 0 else "#FF4444"
+                        g_icon = "▲" if g_val >= 0 else "▼"
+                        st.markdown(
+                            f'<div style="display:flex;justify-content:space-between;padding:3px 0;font-family:monospace;font-size:11px;border-bottom:1px solid #0D0D0D">'
+                            f'<span style="color:#888">FY {yr}</span>'
+                            f'<span style="color:{g_color};font-weight:700">{g_icon} {g_val:+.1f}%</span></div>',
+                            unsafe_allow_html=True)
+
+                # ── Company quick info ──
+                st.markdown(
+                    f'<div style="margin-top:14px;padding:10px;background:#0A0A0A;border:1px solid #1A1A1A;border-radius:3px;font-family:monospace;font-size:10px">'
+                    f'<div style="color:#FF6600;font-weight:700;margin-bottom:4px">{_em_company}</div>'
+                    f'<div style="color:#888">Currency: {_em_currency}</div>'
+                    f'<div style="color:#888">FY End: Month {_em_data["fiscal_end_month"]}</div>'
+                    f'<div style="color:#00CC44;margin-top:4px">Price: ${_em_data.get("price", 0):,.2f}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════
 # TAB 8 — SENTINEL AI
