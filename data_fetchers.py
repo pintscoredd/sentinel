@@ -1038,8 +1038,8 @@ def get_earnings_calendar(today_str=None):
                         continue
                 elif isinstance(cal, dict):
                     ed = cal.get("Earnings Date", [None])
-                    ed = ed[0] if isinstance(ed, list) else ed
-                    eps = cal.get("EPS Estimate", None)
+                    ed = ed[0] if isinstance(ed, list) and len(ed) > 0 else (ed if not isinstance(ed, list) else None)
+                    eps = cal.get("EPS Estimate", cal.get("Earnings Average", None))
                 else:
                     continue
                 if ed is None: continue
@@ -1047,7 +1047,7 @@ def get_earnings_calendar(today_str=None):
                     "Ticker": tkr,
                     "Company": info.get("shortName", tkr)[:22],
                     "EarningsDate": pd.to_datetime(ed).date(),
-                    "EPS Est": round(float(eps), 2) if eps else None,
+                    "EPS Est": round(float(eps), 2) if eps is not None else None,
                     "Sector": info.get("sector", "—"), 
                 })
         except:
