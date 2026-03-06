@@ -37,6 +37,21 @@ except ImportError:
 logger = logging.getLogger("sentinel.data")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+_YAHOO_UAS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+]
+
+def get_yf_ticker(ticker):
+    """Return a yfinance Ticker with a rotated User-Agent session to bypass rate limits."""
+    if yf is None: return None
+    import random
+    session = requests.Session()
+    session.headers.update({"User-Agent": random.choice(_YAHOO_UAS)})
+    return yf.Ticker(ticker, session=session)
+
 
 # ════════════════════════════════════════════════════════════════════
 # UTILITY FUNCTIONS & ONLINE VARIANCE
@@ -170,7 +185,8 @@ def yahoo_quote(ticker):
     TICKER_MAP = {"DXY": "DX-Y.NYB", "$DXY": "DX-Y.NYB"}
     t = TICKER_MAP.get(ticker, ticker)
     try:
-        tk = yf.Ticker(t)
+        tk = get_yf_ticker(t)
+        if tk is None: return None
 
         # fast_info gives live price during market hours
         fi = tk.fast_info
@@ -214,7 +230,7 @@ def get_risk_free_rate(fred_key=None):
             return round(df["value"].iloc[-1] / 100, 4)
     # Fallback: fetch from Yahoo Finance
     try:
-        h = yf.Ticker("^IRX").history(period="5d")
+        h = get_yf_ticker("^IRX").history(period="5d")
         if not h.empty:
             return round(h["Close"].iloc[-1] / 100, 4)
     except Exception:
@@ -282,7 +298,7 @@ def multi_quotes(tickers):
 @st.cache_data(ttl=300)
 def vix_price():
     try:
-        h = yf.Ticker("^VIX").history(period="5d")
+        h = get_yf_ticker("^VIX").history(period="5d")
         return round(h["Close"].iloc[-1], 2) if not h.empty else None
     except:
         return None
@@ -290,7 +306,7 @@ def vix_price():
 @st.cache_data(ttl=3600)
 def vix_with_percentile():
     try:
-        h = yf.Ticker("^VIX").history(period="1y")
+        h = get_yf_ticker("^VIX").history(period="1y")
         if h.empty or len(h) < 20:
             return None, None, None
         current = h["Close"].iloc[-1]
@@ -306,14 +322,16 @@ def vix_with_percentile():
 @st.cache_data(ttl=600)
 def options_expiries(ticker):
     try:
-        return list(yf.Ticker(ticker).options)
+        tk = get_yf_ticker(ticker)
+        return list(tk.options) if tk else []
     except:
         return []
 
 @st.cache_data(ttl=600)
 def options_chain(ticker, expiry=None):
     try:
-        t = yf.Ticker(ticker)
+        t = get_yf_ticker(ticker)
+        if t is None: return None, None, None
         exps = t.options
         if not exps: return None, None, None
         exp = expiry if expiry and expiry in exps else exps[0]
@@ -487,7 +505,8 @@ def bs_greeks_engine(S, K, T, r, sigma, side="call"):
 def get_finra_short_volume(ticker):
     """Free Short Volume Data via FINRA/yfinance fallback."""
     try:
-        t = yf.Ticker(ticker)
+        t = get_yf_ticker(ticker)
+        if t is None: return []
         i = t.fast_info
         # Attempt to get short data via ticker info
         info = t.info
@@ -634,7 +653,7 @@ def calc_stock_fear_greed():
 
         # --- Signal 2: Market Momentum (SPY vs 125-day MA) ---
         try:
-            h = yf.Ticker("SPY").history(period="7mo")
+            h = get_yf_ticker("SPY").history(period="7mo")
             if len(h) >= 125:
                 current = h["Close"].iloc[-1]
                 ma125 = h["Close"].iloc[-125:].mean()
@@ -661,7 +680,7 @@ def calc_stock_fear_greed():
         # --- Signal 4: Put/Call Ratio (equity options) ---
         try:
             # Use SPY options PCR as proxy
-            t = yf.Ticker("SPY")
+            t = get_yf_ticker("SPY")
             opts = t.options
             if opts:
                 chain = t.option_chain(opts[0])
@@ -946,7 +965,8 @@ def finnhub_officers(ticker, key):
 
     if not role_map:
         try:
-            officers = yf.Ticker(ticker).info.get("companyOfficers", [])
+            tk = get_yf_ticker(ticker)
+            officers = tk.info.get("companyOfficers", []) if tk else []
             for o in officers:
                 name = str(o.get("name", "")).strip()
                 title = str(o.get("title", "")).strip()
@@ -975,7 +995,8 @@ def get_earnings_calendar(today_str=None):
     rows = []
     for tkr in MAJOR:
         try:
-            t = yf.Ticker(tkr)
+            t = get_yf_ticker(tkr)
+            if t is None: continue
             info = t.info
             cal = t.calendar
             if cal is not None and not (cal.empty if hasattr(cal, "empty") else False):
@@ -1322,11 +1343,11 @@ def fetch_vix_data():
     result = {"vix": None, "vix9d": None, "contango": None}
     if yf is None: return result
     try:
-        h = yf.Ticker("^VIX").history(period="5d")
+        h = get_yf_ticker("^VIX").history(period="5d")
         if not h.empty: result["vix"] = round(h["Close"].iloc[-1], 2)
     except Exception: pass
     try:
-        h9 = yf.Ticker("^VIX9D").history(period="5d")
+        h9 = get_yf_ticker("^VIX9D").history(period="5d")
         if not h9.empty: result["vix9d"] = round(h9["Close"].iloc[-1], 2)
     except Exception: pass
     if result["vix"] is not None and result["vix9d"] is not None:
@@ -1910,7 +1931,8 @@ def get_ticker_exchange(ticker):
         "BTT": "NYSE", "NYSEArca": "AMEX", "NasdaqCM": "NASDAQ", "NasdaqGS": "NASDAQ", "NasdaqGM": "NASDAQ", "NYSE": "NYSE",
     }
     try:
-        info = yf.Ticker(ticker).info
+        tk = get_yf_ticker(ticker)
+        info = tk.info if tk else {}
         exch = info.get("exchange", "") or info.get("fullExchangeName", "")
         tv_prefix = EXCHANGE_MAP.get(exch, None)
         if tv_prefix: return f"{tv_prefix}:{ticker}"
@@ -1923,7 +1945,8 @@ def get_ticker_exchange(ticker):
 def get_full_financials(ticker):
     if yf is None: return {}
     try:
-        t = yf.Ticker(ticker)
+        t = get_yf_ticker(ticker)
+        if t is None: return {}
         income, cashflow, balance = t.quarterly_financials, t.quarterly_cashflow, t.quarterly_balance_sheet
         if income is None or income.empty: return {}
 
@@ -1984,7 +2007,8 @@ def get_stock_news(ticker, finnhub_key=None, newsapi_key=None):
         except Exception: pass
 
     try:
-        info = yf.Ticker(ticker).info if yf else {}
+        tk = get_yf_ticker(ticker)
+        info = tk.info if tk else {}
         co_name = info.get("shortName", ticker).split()[0] if info else ticker
         query = f"{ticker} {co_name} stock"
         arts = gdelt_news(query, max_rec=8)
@@ -2376,13 +2400,6 @@ def fetch_ais_vessels():
 
 _ETF_TICKERS = ["IBIT", "FBTC", "ARKB", "BITB", "GBTC", "HODL", "BRRR", "EZBC", "BTCO", "BTCW"]
 _ETF_COLORS = {"IBIT": "#00CC44", "FBTC": "#00AA88", "ARKB": "#44BB66", "BITB": "#66CC88", "GBTC": "#FF4444", "HODL": "#55DD99", "BRRR": "#33CC77", "EZBC": "#77DDAA", "BTCO": "#88CCBB", "BTCW": "#99BBAA"}
-_YAHOO_UAS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-]
-
 def _fetch_yahoo_v8_chart(ticker, range_str="5d", interval="1d"):
     import random
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={range_str}&interval={interval}"
@@ -2458,7 +2475,9 @@ def fetch_btc_etf_flows_fallback():
         all_data = {}
         for ticker in _ETF_TICKERS:
             try:
-                hist = yf.Ticker(ticker).history(period="60d")
+                tk = get_yf_ticker(ticker)
+                if tk is None: continue
+                hist = tk.history(period="60d")
                 if hist is None or hist.empty or len(hist) < 2: continue
                 prev_close = hist["Close"].shift(1)
                 vwap = (hist["High"] + hist["Low"] + hist["Close"]) / 3.0
