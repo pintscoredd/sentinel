@@ -132,13 +132,11 @@ def _fetch_robust_json(url, params=None, headers=None, timeout=10):
 
 
 def run_async(coro):
-    """Helper to safely run async tasks in Streamlit threads."""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+    """Helper to safely run async tasks in Streamlit threads.
+    Uses asyncio.run() which creates and tears down a fresh event loop,
+    avoiding RuntimeError collisions across Streamlit's multi-threaded sessions.
+    """
+    return asyncio.run(coro)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -484,20 +482,21 @@ def bs_price(S, K, T, r, sigma, side="call"):
         return 0.0
 
 def get_iv_newton(S, K, T, r, target_price, side="call"):
-    """Newton-Raphson root solver to back out Implied Volatility from market price."""
+    """Newton-Raphson root solver to back out Implied Volatility from market price.
+    Returns None if the solver fails to converge, signaling the caller to
+    fall back to broker-provided IV instead of injecting a bogus 0.0.
+    """
     from scipy.optimize import newton
-    if target_price <= 0 or S <= 0 or K <= 0 or T <= 0: return 0.0
+    if target_price <= 0 or S <= 0 or K <= 0 or T <= 0: return None
     
     def objective(sigma):
         return bs_price(S, K, T, r, sigma, side) - target_price
         
     try:
-        # Newton solver with an initial guess of 20% IV
         iv = newton(objective, x0=0.20, tol=1e-4, maxiter=50)
         return float(max(iv, 0.0))
     except Exception:
-        # Fallback to 0 if solver fails to converge (e.g. deep OTM)
-        return 0.0
+        return None
 
 def bs_greeks_engine(S, K, T, r, sigma, side="call"):
     """True Black-Scholes Greeks Engine computing Delta, Gamma, Theta locally for 'what-if' shifting."""
@@ -1227,19 +1226,19 @@ def compute_gex_profile(chain, spot):
         if "gamma" not in df.columns or "oi" not in df.columns or "strike" not in df.columns:
             raise ValueError("Missing columns")
             
-        con = duckdb.connect(database=':memory:')
-        con.execute("CREATE TABLE options_chain AS SELECT * FROM df")
-        
-        query = f"""
-            SELECT strike, 
-                   SUM(CASE WHEN type = 'call' THEN 1 ELSE -1 END * oi * 100 * ABS(gamma) * POWER({spot}, 2) * 0.01 / 1000000) as gex
-            FROM options_chain
-            GROUP BY strike
-            ORDER BY strike
-        """
-        res = con.execute(query).df()
-        gex = {row['strike']: row['gex'] for _, row in res.iterrows()}
-        return gex
+        with duckdb.connect(database=':memory:') as con:
+            con.execute("CREATE TABLE options_chain AS SELECT * FROM df")
+            
+            query = f"""
+                SELECT strike, 
+                       SUM(CASE WHEN type = 'call' THEN 1 ELSE -1 END * oi * 100 * ABS(gamma) * POWER({spot}, 2) * 0.01 / 1000000) as gex
+                FROM options_chain
+                GROUP BY strike
+                ORDER BY strike
+            """
+            res = con.execute(query).df()
+            gex = {row['strike']: row['gex'] for _, row in res.iterrows()}
+            return gex
     except Exception as e:
         logger.error({"error": str(e)}, "DuckDB Engine Error")
         # fallback
