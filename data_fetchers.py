@@ -2313,6 +2313,190 @@ def get_full_financials(ticker):
     except Exception:
         return {}
 
+@st.cache_data(ttl=1800)
+def get_earnings_matrix(ticker):
+    """Build Bloomberg-style Earnings Matrix data for a ticker.
+    
+    Returns dict with:
+        - quarterly: {year: {q_label: eps_value}} e.g. {2024: {"Q1 Sep": 2.99, ...}}
+        - annual: {year: total_eps}
+        - yoy_growth: {year: {q_label: pct_growth}}  YoY % for each quarter
+        - annual_growth: {year: pct_growth}
+        - valuations: {metric: {period: value}} e.g. {"P/E": {"Last 4Q": 25.7, ...}}
+        - fiscal_end_month: int (1-12)
+        - currency: str
+        - years: sorted list of years
+        - q_labels: ordered list of quarter labels
+    """
+    if yf is None:
+        return None
+    try:
+        t = get_yf_ticker(ticker)
+        if t is None:
+            return None
+        info = t.info or {}
+
+        # ── Determine fiscal year end month ──
+        fiscal_end_month = info.get("fiscalYearEnd") or info.get("lastFiscalYearEnd")
+        if isinstance(fiscal_end_month, str):
+            # Some tickers return month name
+            _month_map = {"january": 1, "february": 2, "march": 3, "april": 4,
+                          "may": 5, "june": 6, "july": 7, "august": 8,
+                          "september": 9, "october": 10, "november": 11, "december": 12}
+            fiscal_end_month = _month_map.get(fiscal_end_month.lower(), 12)
+        elif not isinstance(fiscal_end_month, int):
+            fiscal_end_month = 12
+
+        # Map fiscal quarter end months to quarter label
+        _q_month_labels = {}
+        import calendar
+        for qi in range(4):
+            m = ((fiscal_end_month - 3 * (3 - qi)) % 12) or 12
+            month_abbr = calendar.month_abbr[m]
+            _q_month_labels[m] = f"Q{qi+1} {month_abbr}"
+        # Ordered list: Q1, Q2, Q3, Q4
+        q_labels = [f"Q{qi+1} {calendar.month_abbr[((fiscal_end_month - 3*(3-qi)) % 12) or 12]}" for qi in range(4)]
+
+        # ── Get historical quarterly EPS from financials ──
+        quarterly = {}  # {year: {q_label: eps}}
+        try:
+            income = t.quarterly_financials
+            if income is not None and not income.empty:
+                for col in income.columns:
+                    dt = pd.to_datetime(col)
+                    month = dt.month
+                    year = dt.year
+                    # Find which fiscal quarter this falls into
+                    q_label = _q_month_labels.get(month)
+                    if not q_label:
+                        # Closest match
+                        best_m = min(_q_month_labels.keys(), key=lambda m: abs(m - month))
+                        q_label = _q_month_labels[best_m]
+                    
+                    # Determine fiscal year
+                    fiscal_year = year if month <= fiscal_end_month else year + 1
+                    
+                    # Get EPS
+                    eps_val = None
+                    for key in ["Diluted EPS", "Basic EPS"]:
+                        if key in income.index:
+                            v = income.loc[key, col]
+                            if v is not None and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
+                                eps_val = round(float(v), 2)
+                                break
+                    
+                    if eps_val is not None:
+                        if fiscal_year not in quarterly:
+                            quarterly[fiscal_year] = {}
+                        quarterly[fiscal_year][q_label] = eps_val
+        except Exception:
+            pass
+
+        # Also try earnings_history / earnings_dates for more data
+        try:
+            eh = t.earnings_history
+            if eh is not None and not eh.empty:
+                for _, row in eh.iterrows():
+                    dt = pd.to_datetime(row.get("reportDate") or row.get("date") or row.name)
+                    month = dt.month
+                    year = dt.year
+                    q_label = _q_month_labels.get(month)
+                    if not q_label:
+                        best_m = min(_q_month_labels.keys(), key=lambda m: abs(m - month))
+                        q_label = _q_month_labels[best_m]
+                    fiscal_year = year if month <= fiscal_end_month else year + 1
+                    eps_val = row.get("epsActual") or row.get("actual")
+                    if eps_val is not None and not (isinstance(eps_val, float) and math.isnan(eps_val)):
+                        if fiscal_year not in quarterly:
+                            quarterly[fiscal_year] = {}
+                        if q_label not in quarterly[fiscal_year]:
+                            quarterly[fiscal_year][q_label] = round(float(eps_val), 2)
+        except Exception:
+            pass
+
+        if not quarterly:
+            return None
+
+        years = sorted(quarterly.keys())
+
+        # ── Annual totals ──
+        annual = {}
+        for yr in years:
+            vals = [v for v in quarterly[yr].values() if v is not None]
+            if vals:
+                annual[yr] = round(sum(vals), 2)
+
+        # ── YoY growth ──
+        yoy_growth = {}
+        annual_growth = {}
+        for yr in years:
+            yoy_growth[yr] = {}
+            for ql in q_labels:
+                cur = quarterly.get(yr, {}).get(ql)
+                prev = quarterly.get(yr - 1, {}).get(ql)
+                if cur is not None and prev is not None and prev != 0:
+                    yoy_growth[yr][ql] = round((cur - prev) / abs(prev) * 100, 1)
+            # Annual YoY
+            cur_ann = annual.get(yr)
+            prev_ann = annual.get(yr - 1)
+            if cur_ann is not None and prev_ann is not None and prev_ann != 0:
+                annual_growth[yr] = round((cur_ann - prev_ann) / abs(prev_ann) * 100, 1)
+
+        # ── Valuation multiples ──
+        valuations = {}
+        price = _safe_float(info.get("currentPrice") or info.get("regularMarketPrice"), 0)
+        if price > 0:
+            # P/E
+            trailing_pe = _safe_float(info.get("trailingPE"), 0)
+            forward_pe = _safe_float(info.get("forwardPE"), 0)
+            # P/S
+            trailing_ps = _safe_float(info.get("priceToSalesTrailing12Months"), 0)
+            # P/B
+            pb = _safe_float(info.get("priceToBook"), 0)
+            # P/CF (price to operating cash flow)
+            opcf = _safe_float(info.get("operatingCashflow"), 0)
+            shares = _safe_float(info.get("sharesOutstanding"), 0)
+            pcf = round(price / (opcf / shares), 1) if opcf > 0 and shares > 0 else 0
+
+            valuations = {
+                "P/E": {
+                    "Last 4Q": f"{trailing_pe:.1f}x" if trailing_pe > 0 else "—",
+                    "Forward": f"{forward_pe:.1f}x" if forward_pe > 0 else "—",
+                },
+                "P/S": {
+                    "Last 4Q": f"{trailing_ps:.1f}x" if trailing_ps > 0 else "—",
+                    "Forward": "—",
+                },
+                "P/B": {
+                    "Last 4Q": f"{pb:.1f}x" if pb > 0 else "—",
+                    "Forward": "—",
+                },
+                "P/CF": {
+                    "Last 4Q": f"{pcf:.1f}x" if pcf > 0 else "—",
+                    "Forward": "—",
+                },
+            }
+
+        currency = info.get("currency", "USD")
+
+        return {
+            "quarterly": quarterly,
+            "annual": annual,
+            "yoy_growth": yoy_growth,
+            "annual_growth": annual_growth,
+            "valuations": valuations,
+            "fiscal_end_month": fiscal_end_month,
+            "currency": currency,
+            "years": years,
+            "q_labels": q_labels,
+            "price": price,
+            "company": info.get("shortName", ticker),
+        }
+    except Exception as e:
+        logger.error({"error": str(e)}, "Earnings Matrix Error")
+        return None
+
+
 @st.cache_data(ttl=600)
 def get_stock_news(ticker, finnhub_key=None, newsapi_key=None):
     results = []
