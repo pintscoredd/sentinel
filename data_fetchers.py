@@ -45,12 +45,10 @@ _YAHOO_UAS = [
 ]
 
 def get_yf_ticker(ticker):
-    """Return a yfinance Ticker with a rotated User-Agent session to bypass rate limits."""
+    """Return a yfinance Ticker. Note: YF >= 0.2.54 uses curl_cffi internally to bypass rate limits, do not inject requests.Session."""
     if yf is None: return None
-    import random
-    session = requests.Session()
-    session.headers.update({"User-Agent": random.choice(_YAHOO_UAS)})
-    return yf.Ticker(ticker, session=session)
+    return yf.Ticker(ticker)
+
 
 
 # ════════════════════════════════════════════════════════════════════
