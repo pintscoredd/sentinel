@@ -51,10 +51,44 @@ _YAHOO_UAS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 ]
 
+# ── Yahoo Finance Global Rate Limiter ─────────────────────────────
+# Prevents 429 errors by serializing requests with a minimum gap.
+# All yfinance calls go through get_yf_ticker() which enforces the throttle.
+import threading as _threading
+import time as _time
+
+_yf_lock = _threading.Lock()
+_yf_last_request = 0.0
+_YF_MIN_GAP = 0.35          # minimum seconds between Yahoo API calls
+_yf_ticker_cache = {}        # symbol → (yf.Ticker, timestamp)
+_YF_CACHE_TTL = 120          # reuse Ticker objects for 2 minutes
+
 def get_yf_ticker(ticker):
-    """Return a yfinance Ticker. Note: YF >= 0.2.54 uses curl_cffi internally to bypass rate limits, do not inject requests.Session."""
+    """Return a yfinance Ticker with global rate limiting.
+    
+    Serializes all Yahoo requests with a minimum gap to prevent 429 errors.
+    Caches Ticker objects per-symbol to avoid redundant HTTP sessions.
+    """
     if yf is None: return None
-    return yf.Ticker(ticker)
+    global _yf_last_request
+    
+    now = _time.time()
+    
+    # Check cache first (no lock needed for read)
+    cached = _yf_ticker_cache.get(ticker)
+    if cached and (now - cached[1]) < _YF_CACHE_TTL:
+        return cached[0]
+    
+    # Throttle: enforce minimum gap between Yahoo API requests
+    with _yf_lock:
+        elapsed = _time.time() - _yf_last_request
+        if elapsed < _YF_MIN_GAP:
+            _time.sleep(_YF_MIN_GAP - elapsed)
+        _yf_last_request = _time.time()
+    
+    tk = yf.Ticker(ticker)
+    _yf_ticker_cache[ticker] = (tk, _time.time())
+    return tk
 
 
 
@@ -324,18 +358,19 @@ def vix_with_percentile():
 
 @st.cache_data(ttl=600)
 def options_expiries(ticker):
-    try:
-        tk = get_yf_ticker(ticker)
-        if not tk: return []
-        for _ in range(2):
+    import time
+    for attempt in range(3):
+        try:
+            if attempt > 0:
+                time.sleep(0.5 * (attempt + 1))
+            tk = get_yf_ticker(ticker)
+            if not tk: return []
             res = list(tk.options)
             if res: return res
-            import time
-            time.sleep(0.5)
-        return []
-    except Exception as e:
-        logger.error(f"options_expiries error: {e}")
-        return []
+        except Exception as e:
+            logger.warning(f"options_expiries attempt {attempt+1}: {e}")
+    logger.error(f"options_expiries failed after 3 attempts for {ticker}")
+    return []
 
 @st.cache_data(ttl=600)
 def options_chain(ticker, expiry=None):
