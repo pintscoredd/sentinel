@@ -321,8 +321,15 @@ def vix_with_percentile():
 def options_expiries(ticker):
     try:
         tk = get_yf_ticker(ticker)
-        return list(tk.options) if tk else []
-    except:
+        if not tk: return []
+        for _ in range(2):
+            res = list(tk.options)
+            if res: return res
+            import time
+            time.sleep(0.5)
+        return []
+    except Exception as e:
+        logger.error(f"options_expiries error: {e}")
         return []
 
 @st.cache_data(ttl=600)
@@ -330,15 +337,25 @@ def options_chain(ticker, expiry=None):
     try:
         t = get_yf_ticker(ticker)
         if t is None: return None, None, None
-        exps = t.options
+        exps = []
+        for _ in range(2):
+            exps = list(t.options)
+            if exps: break
+            import time
+            time.sleep(0.5)
+            
         if not exps: return None, None, None
         exp = expiry if expiry and expiry in exps else exps[0]
         chain = t.option_chain(exp)
         cols = ["strike", "lastPrice", "bid", "ask", "volume", "openInterest", "impliedVolatility"]
-        c = chain.calls[[x for x in cols if x in chain.calls.columns]]
-        p = chain.puts[[x for x in cols if x in chain.puts.columns]]
+        c, p = None, None
+        if hasattr(chain, "calls") and not chain.calls.empty:
+            c = chain.calls[[x for x in cols if x in chain.calls.columns]]
+        if hasattr(chain, "puts") and not chain.puts.empty:
+            p = chain.puts[[x for x in cols if x in chain.puts.columns]]
         return c, p, exp
-    except:
+    except Exception as e:
+        logger.error(f"options_chain error: {e}")
         return None, None, None
 
 
@@ -961,22 +978,36 @@ def finnhub_officers(ticker, key):
         except:
             pass
 
-    if not role_map:
-        try:
-            tk = get_yf_ticker(ticker)
-            officers = tk.info.get("companyOfficers", []) if tk else []
+    try:
+        tk = get_yf_ticker(ticker)
+        if tk:
+            # 1. Fallback to companyOfficers
+            officers = tk.info.get("companyOfficers", [])
             for o in officers:
                 name = str(o.get("name", "")).strip()
                 title = str(o.get("title", "")).strip()
                 if not name or not title: continue
-                
                 clean_name = name.upper().replace(".", "").replace(",", "")
                 for pfx in ["MR ", "MS ", "MRS ", "DR ", "PROF "]:
                     if clean_name.startswith(pfx):
                         clean_name = clean_name[len(pfx):].strip()
-                role_map[clean_name] = title
-        except:
-            pass
+                if clean_name not in role_map:
+                    role_map[clean_name] = title
+                    
+            # 2. Extract Board of Directors from insider_transactions
+            try:
+                idf = tk.insider_transactions
+                if idf is not None and not idf.empty:
+                    if 'Insider' in idf.columns and 'Position' in idf.columns:
+                        for _, row in idf.iterrows():
+                            ins_name = str(row['Insider']).strip().upper()
+                            pos = str(row['Position']).strip()
+                            if ins_name and pos and ins_name not in role_map:
+                                role_map[ins_name] = pos
+            except:
+                pass
+    except:
+        pass
 
     return role_map
 
