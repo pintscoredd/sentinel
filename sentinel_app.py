@@ -1791,9 +1791,9 @@ with tabs[5]:
             '<div style="color:#555;font-family:monospace;font-size:10px;margin-bottom:8px">'
             'Finds markets where crowd pricing appears unreliable due to low liquidity, '
             'herd behavior, or extreme probability with thin volume. '
-            '<b style="color:#FF8C00">FADE</b> = bet against crowd. '
-            '<b style="color:#00CC44">RIDE</b> = crowd is right. '
-            '<b style="color:#888">MONITOR</b> = watch for entry.</div>', unsafe_allow_html=True)
+            '<b style="color:#00CC44">BET YES</b> / <b style="color:#FF4444">BET NO</b> = actionable edge. '
+            '<b style="color:#00CC44">CONFIRMED</b> = deep market agrees. '
+            '<b style="color:#FF8C00">WATCH</b> = wait for entry.</div>', unsafe_allow_html=True)
 
         if all_mkts:
             mispriced = score_poly_mispricing(all_mkts)
@@ -1852,7 +1852,7 @@ with tabs[5]:
                     )
                 fig_mis.update_layout(
                     margin=dict(l=10, r=160, t=32, b=0), height=300,
-                    title=dict(text="MISPRICING SCORE — Color: 🔴 FADE · 🟢 RIDE · 🟠 MONITOR", font=dict(size=10, color="#FF6600"), x=0),
+                    title=dict(text="MISPRICING SCORE — 🟢 BET YES / CONFIRMED · 🔴 BET NO / CONTRARIAN · 🟠 WATCH", font=dict(size=10, color="#FF6600"), x=0),
                     xaxis=dict(showgrid=False, color="#333", title=None),
                     yaxis=dict(autorange="reversed", tickfont=dict(size=9, color="#CCC"), title=None),
                 )
@@ -2003,19 +2003,21 @@ with tabs[5]:
         with guide_col:
             st.markdown("""<div style="background:#080808;border:1px solid #1A1A1A;padding:14px;font-family:monospace;font-size:10px;color:#888;line-height:2.0">
 <span style="color:#FF6600;font-weight:700">HOW TO TRADE</span><br><br>
-<span style="color:#FF4444">FADE YES</span><br>
-Low-liq + crowd piled in<br>
-→ Bet NO (buy cheap)<br><br>
-<span style="color:#00CC44">FADE NO</span><br>
-Low-liq + crowd fading<br>
-→ Bet YES (buy cheap)<br><br>
-<span style="color:#00CC44">RIDE YES</span><br>
-Deep market confirms high<br>
-probability → trend trade<br><br>
-<span style="color:#888">MONITOR</span><br>
+<span style="color:#00CC44">↑ BET YES</span><br>
+Crowd underpriced YES<br>
+→ Buy YES shares cheap<br><br>
+<span style="color:#FF4444">↓ BET NO</span><br>
+Crowd overpriced YES<br>
+→ Buy NO shares cheap<br><br>
+<span style="color:#00CC44">✓ CONFIRMED</span><br>
+Deep market agrees with<br>
+probability → safe to follow<br><br>
+<span style="color:#FF4444">↓ CONTRARIAN</span><br>
+Deep market prices NO<br>
+strongly → consider NO<br><br>
+<span style="color:#FF8C00">◌ WATCH</span><br>
 Mixed signals — wait<br>for volume confirmation<br><br>
-<span style="color:#FF6600">EDGE</span> = post-discount<br>deviation from 50/50<br>
-Higher = more asymmetric<br><br>
+<span style="color:#FF6600">EDGE</span> = gap between raw<br>crowd price and adjusted<br>fair value. Higher = more<br>mispriced.<br><br>
 <span style="color:#FF4444">ILLIQ</span> crowd unreliable<br>
 <span style="color:#FF8C00">THIN</span> use with caution<br>
 <span style="color:#888">MED</span> decent accuracy<br>
