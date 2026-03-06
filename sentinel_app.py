@@ -1,2276 +1,2478 @@
 #!/usr/bin/env python3
-"""SENTINEL — Bloomberg Professional Intelligence Terminal v3"""
+"""SENTINEL — Data Fetchers Module
+All @st.cache_data API functions, data utilities, and helpers.
+"""
 
 import streamlit as st
-import streamlit.components.v1 as components
+import requests
+import asyncio
+import pandas as pd
+import math
+import re
+import logging
+from datetime import datetime, timedelta, time as dtime
+import pytz
+from collections import defaultdict
+import skyfield.api as sf
+from skyfield.api import Topos, EarthSatellite
+from skyfield.sgp4lib import EarthSatellite
+
+# ── Newly Integrated Libraries ──
+import pandas_market_calendars as mcal
+# For Black-Scholes Greeks Engine
+from scipy.stats import norm
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
+try:
+    import orjson as json
+except ImportError:
+    import json
 
 try:
     import yfinance as yf
 except ImportError:
-    st.error("Missing: yfinance — check requirements.txt"); st.stop()
+    yf = None
 
-try:
-    import plotly.graph_objects as go
-    import plotly.express as px
-except ImportError:
-    st.error("Missing: plotly"); st.stop()
+# ── Logging Setup ──
+logger = logging.getLogger("sentinel.data")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-import requests, pandas as pd, json, pathlib, math, re
-from datetime import datetime, timedelta
-import pytz
-
-from data_fetchers import (
-    _safe_float, _safe_int, _esc, fmt_p, fmt_pct, pct_color, _is_english,
-    yahoo_quote, get_futures, get_heatmap_data, multi_quotes,
-    fred_series, polymarket_events, polymarket_markets,
-    fear_greed_crypto, calc_stock_fear_greed,
-    crypto_markets, crypto_global,
-    gdelt_news, newsapi_headlines, finnhub_news, finnhub_insider, finnhub_officers,
-    yahoo_quote, vix_price, vix_with_percentile, options_chain, options_expiries, sector_etfs, top_movers,
-    detect_unusual_poly, market_snapshot_str, _parse_poly_field,
-    score_options_chain, score_poly_mispricing,
-    get_earnings_calendar, is_market_open,
-    get_macro_overview, get_macro_calendar, get_ticker_exchange,
-    get_full_financials, get_stock_news,
-    is_0dte_market_open, get_stock_snapshot, get_spx_metrics,
-    fetch_0dte_chain, compute_gex_profile, compute_max_pain, compute_pcr,
-    find_gamma_flip, fetch_vix_data, find_target_strike,
-    parse_trade_input, generate_recommendation,
-    fetch_cboe_gex, compute_cboe_gex_profile, compute_cboe_total_gex, compute_cboe_pcr,
-    get_whale_trades, get_exchange_netflow, get_funding_rates,
-    get_open_interest, get_liquidations,
-    build_brief_context,
-    fetch_btc_etf_flows, fetch_btc_etf_flows_fallback, _ETF_TICKERS,
-    stat_arb_screener, get_finra_short_volume, bs_greeks_engine,
-)
-from ui_components import (
-    CHART_LAYOUT, dark_fig, tv_chart, tv_mini, tv_tape,
-    yield_curve_chart, yield_history_chart, cpi_vs_rates_chart,
-    render_news_card, render_wl_row, render_options_table,
-    render_scored_options, render_unusual_trade,
-    render_insider_cards, poly_url, poly_status, unusual_side,
-    render_poly_card, render_crypto_etf_chart,
-    SENTINEL_PROMPT, GEMINI_MODELS, list_gemini_models, gemini_response,
-    render_0dte_gex_chart, render_0dte_gex_decoder, render_0dte_recommendation, render_0dte_trade_log,
-    render_geo_tab, render_stat_arb_cards,
-)
-
-st.set_page_config(page_title="SENTINEL", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
-PST = pytz.timezone("US/Pacific")
-def now_pst(): return datetime.now(PST).strftime("%Y-%m-%d %H:%M PST")
-def now_short(): return datetime.now(PST).strftime("%H:%M:%S")
-
-# ════════════════════════════════════════════════════════════════════════════════
-# BLOOMBERG TERMINAL CSS — 1:1 accurate
-# ════════════════════════════════════════════════════════════════════════════════
-st.markdown("""<style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&display=swap');
-:root {
-  --blk:#000000; --bg1:#080808; --bg2:#0D0D0D; --bg3:#111111;
-  --org:#FF6600; --org2:#FF8C00; --org3:#FF4500;
-  --wht:#FFFFFF; --txt:#CCCCCC; --dim:#888888; --muted:#444444; --ghost:#222222;
-  --grn:#00CC44; --red:#FF4444; --yel:#FFCC00; --blu:#00AAFF; --pur:#AA44FF;
-  --mono:'IBM Plex Mono','Courier New',monospace;
-}
-*, *::before, *::after { box-sizing: border-box; }
-html, body, .stApp, [data-testid="stAppViewContainer"] {
-  background: var(--blk) !important; color: var(--txt) !important;
-  font-family: var(--mono) !important;
-}
-[data-testid="stHeader"] { background: var(--blk) !important; }
-[data-testid="stSidebar"] {
-  background: var(--bg1) !important;
-  border-right: 1px solid var(--org) !important;
-}
-[data-testid="stSidebar"] * { font-family: var(--mono) !important; font-size: 11px !important; }
-[data-testid="stSidebar"] label { color: var(--org2) !important; }
-
-/* TABS */
-.stTabs [data-baseweb="tab-list"] {
-  background: var(--blk); border-bottom: 1px solid var(--org) !important; gap: 0; padding: 0;
-}
-.stTabs [data-baseweb="tab"] {
-  color: var(--muted) !important; font-family: var(--mono) !important;
-  font-size: 11px !important; font-weight: 700 !important; letter-spacing: 1px !important;
-  padding: 7px 14px !important; border-bottom: 2px solid transparent !important;
-  border-right: 1px solid var(--ghost) !important; background: transparent !important;
-  text-transform: uppercase; border-radius: 0 !important;
-}
-.stTabs [aria-selected="true"] {
-  color: var(--org) !important; background: var(--bg1) !important;
-  border-bottom: 2px solid var(--org) !important;
-}
-.stTabs [data-baseweb="tab"]:hover { color: var(--org2) !important; }
-
-/* METRICS */
-[data-testid="stMetric"] {
-  background: var(--bg1) !important; border: 1px solid var(--ghost) !important;
-  border-top: 2px solid var(--org) !important; border-radius: 0 !important; padding: 8px 10px !important;
-}
-[data-testid="stMetric"] label { color: var(--dim) !important; font-size: 9px !important; letter-spacing: 2px !important; text-transform: uppercase !important; }
-[data-testid="stMetricValue"] { color: var(--wht) !important; font-size: 18px !important; font-weight: 700 !important; font-family: var(--mono) !important; }
-[data-testid="stMetricDelta"] { font-size: 11px !important; font-family: var(--mono) !important; }
-
-/* BUTTONS — global */
-.stButton > button {
-  background: var(--bg1) !important; color: var(--org) !important;
-  border: 1px solid var(--org) !important; border-radius: 0 !important;
-  font-family: var(--mono) !important; font-size: 10px !important; font-weight: 700 !important;
-  letter-spacing: 1px !important; text-transform: uppercase !important; padding: 4px 12px !important;
-}
-.stButton > button:hover { background: var(--org) !important; color: var(--blk) !important; }
-
-/* ── WATCHLIST DELETE BUTTON — refined, compact, proportional ── */
-.wl-delete-col .stButton > button {
-  background: transparent !important;
-  color: #444 !important;
-  border: 1px solid #2A2A2A !important;
-  border-radius: 2px !important;
-  font-size: 11px !important;
-  font-weight: 400 !important;
-  letter-spacing: 0 !important;
-  padding: 2px 6px !important;
-  min-height: 24px !important;
-  height: 24px !important;
-  line-height: 1 !important;
-  width: 24px !important;
-  transition: all 0.15s ease !important;
-}
-.wl-delete-col .stButton > button:hover {
-  background: rgba(255, 68, 68, 0.12) !important;
-  color: #FF4444 !important;
-  border-color: #FF4444 !important;
-}
-
-/* INPUTS */
-.stTextInput > div > div > input,
-.stTextArea > div > div > textarea,
-.stSelectbox > div > div {
-  background: var(--bg2) !important; color: var(--org2) !important;
-  border: 1px solid var(--muted) !important; border-radius: 0 !important;
-  font-family: var(--mono) !important; font-size: 12px !important;
-}
-.stSelectbox > div > div { color: var(--org2) !important; }
-
-/* EXPANDER */
-.stExpander { border: 1px solid var(--ghost) !important; background: var(--bg1) !important; border-radius: 0 !important; }
-.stExpander summary { color: var(--org2) !important; font-family: var(--mono) !important; }
-
-/* SCROLLBAR */
-::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: var(--blk); }
-::-webkit-scrollbar-thumb { background: var(--org); }
-
-/* HIDE BRANDING */
-div[data-testid="stDecoration"], footer, #MainMenu,
-[data-testid="stToolbar"] { display: none !important; }
-
-/* Keep sidebar toggle always visible */
-button[data-testid="stSidebarNavCollapseButton"],
-button[data-testid="stSidebarCollapsedControl"],
-[data-testid="collapsedControl"] {
-  display: flex !important;
-  visibility: visible !important;
-  opacity: 1 !important;
-  z-index: 999999 !important;
-  position: fixed !important;
-  top: 0.5rem !important;
-  left: 0.5rem !important;
-}
-
-/* MOVE CONTENT UP */
-section.main > div.block-container {
-  padding-top: 0.25rem !important;
-  padding-bottom: 1rem !important;
-}
-[data-testid="stAppViewContainer"] > section.main {
-  padding-top: 0 !important;
-}
-
-/* ── AUTO-DISMISS ALERT ANIMATION (3 seconds) ── */
-@keyframes sentinelFadeOut {
-  0%   { opacity: 1; max-height: 120px; margin-bottom: 8px; }
-  70%  { opacity: 1; max-height: 120px; margin-bottom: 8px; }
-  100% { opacity: 0; max-height: 0; margin-bottom: 0; padding: 0; overflow: hidden; }
-}
-.sentinel-alert-dismiss {
-  animation: sentinelFadeOut 3s ease-out forwards;
-  overflow: hidden;
-}
-
-/* ─── BLOOMBERG COMPONENT STYLES ─── */
-.bb-bar {
-  background: var(--org); color: var(--blk);
-  padding: 4px 12px; font-size: 11px; font-weight: 700; letter-spacing: 1px;
-  display: flex; justify-content: space-between; align-items: center;
-  font-family: var(--mono);
-}
-.bb-ph {
-  display: flex; align-items: center; gap: 6px;
-  color: var(--org); font-size: 9px; font-weight: 700; letter-spacing: 2px;
-  text-transform: uppercase; border-bottom: 1px solid var(--ghost);
-  padding-bottom: 5px; margin-bottom: 8px; font-family: var(--mono);
-}
-.bb-panel {
-  background: var(--bg1); border: 1px solid var(--ghost);
-  border-top: 2px solid var(--org); padding: 10px 12px; margin: 4px 0;
-  font-family: var(--mono);
-}
-.bb-divider { border: 0; border-top: 1px solid var(--ghost); margin: 10px 0; }
-
-/* WATCHLIST */
-.wl-hdr {
-  display: grid; grid-template-columns: 75px 110px 90px 85px 80px 60px;
-  gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--org);
-  font-family: var(--mono); font-size: 9px; color: var(--org); letter-spacing: 1px;
-}
-.wl-row {
-  display: grid; grid-template-columns: 75px 110px 90px 85px 80px 60px;
-  gap: 6px; padding: 5px 8px; border-bottom: 1px solid var(--bg3);
-  font-family: var(--mono); font-size: 12px; align-items: center;
-}
-.wl-row:hover { background: var(--bg2); }
-.wl-ticker { color: var(--org); font-weight: 700; }
-.wl-price  { color: var(--wht); font-weight: 600; }
-.up { color: var(--grn); } .dn { color: var(--red); }
-.wl-vol { color: var(--muted); font-size: 10px; }
-
-/* NEWS */
-.bb-news {
-  background: var(--bg1); border-left: 3px solid var(--org);
-  padding: 9px 12px; margin: 4px 0; font-family: var(--mono); cursor: pointer;
-  transition: border-color 0.15s;
-}
-.bb-news:hover { border-left-color: var(--wht); background: var(--bg2); }
-.bb-news a { color: var(--wht); text-decoration: none; font-size: 17px; font-weight: 600; line-height: 1.5; }
-.bb-news a:hover { color: var(--org2); text-decoration: underline; }
-.bb-meta { color: #AAA; font-size: 11px; margin-top: 4px; letter-spacing: 0.5px; text-align: right; }
-.bb-news-geo  { border-left-color: #FFFF00; }
-.bb-news-macro{ border-left-color: var(--blu); }
-.bb-news-poly { border-left-color: var(--pur); }
-.bb-news-red  { border-left-color: var(--red); }
-
-/* POLYMARKET */
-.poly-card {
-  background: var(--bg1); border: 1px solid var(--ghost); border-left: 3px solid var(--pur);
-  padding: 11px 13px; margin: 5px 0; font-family: var(--mono); font-size: 13px;
-}
-.poly-card:hover { background: var(--bg2); border-left-color: var(--org); }
-.poly-card a { color: var(--wht); text-decoration: none; font-weight: 600; }
-.poly-card a:hover { color: var(--org2); }
-.poly-status-active   { color: var(--grn); font-size: 9px; font-weight: 700; letter-spacing: 1px; }
-.poly-status-resolved { color: var(--yel); font-size: 9px; font-weight: 700; letter-spacing: 1px; }
-.poly-status-closed   { color: var(--red); font-size: 9px; font-weight: 700; letter-spacing: 1px; }
-.poly-unusual-yes { color: var(--grn); font-size: 10px; font-weight: 700; }
-.poly-unusual-no  { color: var(--red); font-size: 10px; font-weight: 700; }
-
-/* OPTIONS CHAIN */
-.opt-tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; }
-.opt-tbl th {
-  background: var(--bg3); color: var(--org); padding: 6px 9px;
-  text-align: right; font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
-  border-bottom: 1px solid var(--org);
-}
-.opt-tbl th:first-child { text-align: left; }
-.opt-tbl td { padding: 6px 9px; text-align: right; color: var(--txt); border-bottom: 1px solid var(--bg3); }
-.opt-tbl td:first-child { text-align: left; font-weight: 600; }
-.opt-tbl tr:hover td { background: var(--bg2); }
-.opt-call { color: var(--grn) !important; }
-.opt-put  { color: var(--red) !important; }
-.opt-itm  { background: rgba(255,102,0,0.07) !important; }
-.opt-hvol { color: var(--org2) !important; font-weight: 600 !important; }
-
-/* INSIDER */
-.ins-card {
-  background: var(--bg1); border: 1px solid var(--ghost);
-  border-left: 3px solid var(--muted);
-  padding: 10px 14px; margin: 3px 0; font-family: var(--mono);
-}
-.ins-card.buy  { border-left-color: var(--grn); }
-.ins-card.sell { border-left-color: var(--red); }
-.ins-card:hover { background: var(--bg2); }
-.ins-name  { color: var(--wht); font-weight: 700; font-size: 14px; }
-.ins-role  { color: var(--org2); font-size: 11px; }
-.ins-buy   { color: var(--grn); font-weight: 700; font-size: 13px; }
-.ins-sell  { color: var(--red); font-weight: 700; font-size: 13px; }
-.ins-meta  { color: #AAA; font-size: 11px; }
-
-/* SECTOR CELL */
-.sec-cell {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 7px 12px; margin: 2px 0; font-family: var(--mono); font-size: 13px;
-}
-.sec-cell.up { background: rgba(0,204,68,0.08); border-left: 3px solid var(--grn); }
-.sec-cell.dn { background: rgba(255,68,68,0.08); border-left: 3px solid var(--red); }
-
-/* GAINERS/LOSERS */
-.mover-row {
-  display: grid; grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
-  gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--bg3);
-  font-family: var(--mono); font-size: 14px; align-items: center; width:100%;
-}
-.mover-row:hover { background: var(--bg2); }
-
-/* FUTURES ROW */
-.fut-row {
-  display: grid; grid-template-columns: 1fr 1.4fr 1.2fr 0.8fr 0.9fr 0.8fr;
-  gap: 6px; padding: 5px 10px; border-bottom: 1px solid var(--bg3);
-  font-family: var(--mono); font-size: 14px; align-items: center; width:100%;
-}
-.fut-row:hover { background: var(--bg2); }
-
-/* THEATER */
-.theater-row {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 5px 8px; margin: 2px 0; background: var(--bg1);
-  border: 1px solid var(--bg3); font-family: var(--mono); font-size: 10px;
-}
-
-/* CHAT */
-.chat-user {
-  background: var(--bg2); border: 1px solid var(--muted); border-left: 3px solid var(--org);
-  padding: 10px 14px; margin: 6px 0; font-family: var(--mono); font-size: 12px;
-}
-.chat-ai {
-  background: var(--bg1); border: 1px solid var(--ghost); border-left: 3px solid var(--grn);
-  padding: 10px 14px; margin: 6px 0; font-family: var(--mono); font-size: 12px;
-  white-space: pre-wrap; color: var(--txt); line-height: 1.7;
-}
-
-/* WATCHLIST MANAGE */
-.wl-manage { background: var(--bg2); border: 1px solid var(--ghost); padding: 8px 12px; margin: 4px 0; }
-
-/* F&G GAUGE */
-.fg-gauge {
-  background: var(--bg1); border: 1px solid var(--ghost); border-top: 2px solid var(--org);
-  padding: 10px; font-family: var(--mono); text-align: center;
-}
-.fg-num { font-size: 32px; font-weight: 700; }
-.fg-lbl { font-size: 11px; letter-spacing: 2px; margin-top: 4px; }
-
-/* EARN */
-.earn-card {
-  background: var(--bg1); border: 1px solid var(--ghost); border-left: 3px solid var(--blu);
-  padding: 10px 14px; margin: 3px 0; display: grid;
-  grid-template-columns: 85px 1fr auto auto auto;
-  gap: 12px; align-items: center; font-family: var(--mono); font-size: 11px;
-}
-.earn-card:hover { background: var(--bg2); }
-.earn-ticker { color: var(--org); font-weight: 700; font-size: 16px; }
-.earn-date { color: var(--wht); font-weight: 700; font-size: 13px; }
-
-/* CAPS */
-[data-testid="column"] { padding: 0 4px !important; }
-small, .stCaption { color: var(--muted) !important; font-size: 10px !important; }
-.stMarkdown p { font-family: var(--mono) !important; }
-h1,h2,h3,h4 { color: var(--org) !important; font-family: var(--mono) !important; text-transform: uppercase; letter-spacing: 2px; }
-</style>""", unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════
-# SESSION STATE
+# UTILITY FUNCTIONS & ONLINE VARIANCE
 # ════════════════════════════════════════════════════════════════════
-def _get_secret(name, default=""):
-    """Try st.secrets with exact name, then lowercase, then uppercase."""
-    for k in [name, name.lower(), name.upper()]:
+
+class OnlineVariance:
+    """Welford's Online Algorithm for O(1) running variance on tick streams."""
+    def __init__(self):
+        self.count = 0
+        self.mean = 0.0
+        self.M2 = 0.0
+
+    def update(self, new_value):
+        self.count += 1
+        delta = new_value - self.mean
+        self.mean += delta / self.count
+        delta2 = new_value - self.mean
+        self.M2 += delta * delta2
+
+    def variance(self):
+        return self.M2 / self.count if self.count > 1 else 0.0
+
+
+def _safe_float(v, default=0.0):
+    try:
+        f = float(v) if v is not None else default
+        return default if (math.isnan(f) or math.isinf(f)) else f
+    except:
+        return default
+
+def _safe_int(v):
+    try:
+        f = float(v) if v is not None else 0.0
+        return 0 if (math.isnan(f) or math.isinf(f)) else int(f)
+    except:
+        return 0
+
+def _esc(t):
+    return str(t).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;") if t else ""
+
+def fmt_p(p):
+    """Format price — 2 decimal places always"""
+    if p is None: return "—"
+    if p < 0.01: return f"${p:.6f}"
+    return f"${p:,.2f}"
+
+def fmt_pct(p):
+    if p is None: return "—"
+    s = "+" if p >= 0 else ""
+    return f"{s}{p:.2f}%"
+
+def pct_color(v):
+    return "#00CC44" if v >= 0 else "#FF4444"
+
+def _is_english(text):
+    if not text: return False
+    return sum(1 for c in text if ord(c) < 128) / max(len(text), 1) > 0.72
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), retry=retry_if_exception_type((requests.exceptions.RequestException, ValueError)))
+def _fetch_robust_json(url, params=None, headers=None, timeout=10):
+    """Centralized, robust external fetcher using exponential backoff and fast JSON parsing."""
+    if headers is None:
+        headers = {}
+    
+    # Many APIs (GDELT, Airplanes.live) block Python/Streamlit user-agents
+    if "User-Agent" not in headers or "SENTINEL" in headers["User-Agent"]:
+        headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+        
+    r = requests.get(url, params=params, headers=headers, timeout=timeout)
+    r.raise_for_status()
+    return json.loads(r.content)
+
+
+def run_async(coro):
+    """Helper to safely run async tasks in Streamlit threads."""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
+
+
+# ════════════════════════════════════════════════════════════════════
+# MARKET STATUS
+# ════════════════════════════════════════════════════════════════════
+
+def is_market_open():
+    """Check US equity market status using accurate NYSE calendar schedules."""
+    try:
+        ET = pytz.timezone("US/Eastern")
+        now = datetime.now(ET)
+        
+        nyse = mcal.get_calendar('NYSE')
+        schedule = nyse.schedule(start_date=now.date(), end_date=now.date())
+        
+        if schedule.empty:
+            return "CLOSED", "#FF4444", "Weekend / Holiday"
+        
+        market_open = schedule.iloc[0]['market_open'].astimezone(ET).time()
+        market_close = schedule.iloc[0]['market_close'].astimezone(ET).time()
+        
+        t = now.time()
+        if market_open <= t <= market_close:
+            return "OPEN", "#00CC44", "Regular Hours"
+        elif dtime(4, 0) <= t < market_open:
+            return "PRE-MARKET", "#FF8C00", "Pre-Market"
+        elif market_close < t <= dtime(20, 0):
+            return "AFTER-HOURS", "#FF8C00", "After-Hours"
+        else:
+            return "CLOSED", "#FF4444", "Markets Closed"
+    except Exception as e:
+        logger.error({"error": str(e)}, "is_market_open fallback")
+        return "UNKNOWN", "#555555", "Status Unknown"
+
+def is_0dte_market_open():
+    """Check if within regular US equity hours for Alpaca."""
+    status, _, _ = is_market_open()
+    if status == "OPEN":
+        return True, f"Market OPEN"
+    return False, f"Market {status}"
+
+
+# ════════════════════════════════════════════════════════════════════
+# YAHOO FINANCE & ASYNC BATCHING
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=300)
+def yahoo_quote(ticker):
+    TICKER_MAP = {"DXY": "DX-Y.NYB", "$DXY": "DX-Y.NYB"}
+    t = TICKER_MAP.get(ticker, ticker)
+    try:
+        tk = yf.Ticker(t)
+
+        # fast_info gives live price during market hours
+        fi = tk.fast_info
+        price = getattr(fi, "last_price", None)
+        prev  = getattr(fi, "previous_close", None)
+
+        if price is None or prev is None:
+            # Fallback to history if fast_info unavailable
+            h = tk.history(period="5d")
+            if h.empty: return None
+            price = h["Close"].iloc[-1]
+            prev  = h["Close"].iloc[-2] if len(h) > 1 else price
+
+        price = float(price)
+        prev  = float(prev)
+        chg   = price - prev
+        pct   = chg / prev * 100 if prev else 0.0
+
+        # Volume from fast_info
+        vol = int(getattr(fi, "three_month_average_volume", 0) or 0)
         try:
-            val = st.secrets.get(k, None)
-            if val:
-                return str(val).strip()
+            h = tk.history(period="2d")
+            if not h.empty:
+                vol = int(h["Volume"].iloc[-1])
         except Exception:
             pass
-    # Also try nested [api_keys] section some users set up
+
+        return {
+            "ticker": ticker, "price": round(price, 2),
+            "change": round(chg, 2), "pct": round(pct, 2), "volume": vol,
+        }
+    except Exception:
+        return None
+
+@st.cache_data(ttl=3600)
+def get_risk_free_rate(fred_key=None):
+    """Fetch current 3-month T-bill rate as risk-free proxy."""
+    if fred_key:
+        df = fred_series("DTB3", fred_key, 5)
+        if df is not None and not df.empty:
+            return round(df["value"].iloc[-1] / 100, 4)
+    # Fallback: fetch from Yahoo Finance
     try:
-        val = st.secrets.get("api_keys", {}).get(name, None)
-        if val:
-            return str(val).strip()
+        h = yf.Ticker("^IRX").history(period="5d")
+        if not h.empty:
+            return round(h["Close"].iloc[-1] / 100, 4)
     except Exception:
         pass
-    return default
+    return 0.045   # final fallback
 
-WATCHLIST_FILE = pathlib.Path(".streamlit/watchlist.json")
+async def _fetch_yahoo_quotes_async(tickers):
+    loop = asyncio.get_running_loop()
+    tasks = [loop.run_in_executor(None, yahoo_quote, tkr) for tkr in tickers]
+    return await asyncio.gather(*tasks, return_exceptions=True)
 
-def _load_watchlist():
-    try:
-        if WATCHLIST_FILE.exists():
-            return json.loads(WATCHLIST_FILE.read_text())
-    except Exception:
-        pass
-    return ["SPY","QQQ","NVDA","AAPL","GLD","TLT","BTC-USD"]
-
-def _save_watchlist(wl):
-    try:
-        WATCHLIST_FILE.parent.mkdir(exist_ok=True)
-        WATCHLIST_FILE.write_text(json.dumps(wl))
-    except Exception:
-        pass
-
-DEFAULTS = {
-    "gemini_key": _get_secret("GEMINI_API_KEY"),
-    "fred_key": _get_secret("FRED_API_KEY"),
-    "finnhub_key": _get_secret("FINNHUB_API_KEY"),
-    "newsapi_key": _get_secret("NEWSAPI_KEY"),
-    "chat_history":[],
-    "watchlist": _load_watchlist(),
-    "macro_theses":"", "geo_watch":"",
-    "wl_add_input":"", "api_panel_open": True,
-}
-for k,v in DEFAULTS.items():
-    if k not in st.session_state: st.session_state[k]=v
-
-# ════════════════════════════════════════════════════════════════════
-# SIDEBAR
-# ════════════════════════════════════════════════════════════════════
-with st.sidebar:
-    st.markdown(f"""
-<div style="background:var(--org,#FF6600);padding:6px 10px;margin-bottom:10px">
-  <div style="color:#000;font-size:18px;font-weight:900;letter-spacing:4px;font-family:monospace">⚡ SENTINEL</div>
-  <div style="color:#000;font-size:9px;opacity:0.6">{now_pst()}</div>
-</div>""", unsafe_allow_html=True)
-
-    st.markdown('<div style="color:#FF6600;font-size:9px;letter-spacing:2px;font-weight:700">API STATUS</div>', unsafe_allow_html=True)
-
-    _alpaca_ok = bool(_get_secret("ALPACA_API_KEY")) and bool(_get_secret("ALPACA_SECRET_KEY"))
-    _keys_status = [
-        ("Yahoo Finance", True, "always on"),
-        ("Polymarket",    True, "always on"),
-        ("GDELT",         True, "always on"),
-        ("Alpaca (0DTE)", _alpaca_ok, "ALPACA_API_KEY"),
-        ("FRED",          bool(st.session_state.fred_key), "FRED_API_KEY"),
-        ("Finnhub",       bool(st.session_state.finnhub_key), "FINNHUB_API_KEY"),
-        ("NewsAPI",       bool(st.session_state.newsapi_key), "NEWSAPI_KEY"),
-        ("Gemini AI",     bool(st.session_state.gemini_key), "GEMINI_API_KEY"),
-        ("AISstream",     bool(_get_secret("AISSTREAM_API_KEY")), "AISSTREAM_API_KEY"),
-        ("Marinesia",     bool(_get_secret("MARINESIA_API_KEY")), "MARINESIA_API_KEY"),
+@st.cache_data(ttl=120)
+def get_futures():
+    FUTURES = [
+        ("ES=F", "S&P 500 Futures"), ("NQ=F", "Nasdaq 100 Futures"), ("YM=F", "Dow Jones Futures"),
+        ("RTY=F", "Russell 2000 Futures"), ("ZN=F", "10-Year Treasury Bond"), ("CL=F", "WTI Crude Oil"),
+        ("GC=F", "Gold Futures"), ("SI=F", "Silver Futures"), ("NG=F", "Natural Gas"),
+        ("ZW=F", "Wheat Futures"), ("ZC=F", "Corn Futures"), ("DX=F", "US Dollar Index"),
     ]
-    for api, ok, secret_name in _keys_status:
-        dot = "🟢" if ok else "🔴"
-        c = "#CCCCCC" if ok else "#555"
-        hint = "" if ok else f' <span style="color:#333;font-size:8px">[{secret_name}]</span>'
-        st.markdown(f'<div style="font-family:monospace;font-size:10px;padding:1px 0">{dot} <span style="color:{c}">{api}</span>{hint}</div>', unsafe_allow_html=True)
+    rows = []
+    try:
+        tickers = [t[0] for t in FUTURES]
+        results = run_async(_fetch_yahoo_quotes_async(tickers))
+        for (ticker, name), q in zip(FUTURES, results):
+            if isinstance(q, dict) and q:
+                rows.append({"ticker": ticker, "name": name, "price": q["price"],
+                             "change": q["change"], "pct": q["pct"]})
+    except Exception:
+        pass
+    return rows
 
-    st.markdown('<hr style="border-top:1px solid #222;margin:8px 0">', unsafe_allow_html=True)
-    st.markdown('<div style="color:#FF6600;font-size:9px;letter-spacing:2px;font-weight:700">API KEY OVERRIDES</div>', unsafe_allow_html=True)
-    st.markdown('<div style="color:#444;font-size:8px;font-family:monospace;margin-bottom:6px">Leave blank to use secrets.toml value</div>', unsafe_allow_html=True)
+@st.cache_resource(ttl=300)
+def get_heatmap_data():
+    SECTOR_STOCKS = {
+        "Technology": ["AAPL", "MSFT", "NVDA", "AVGO", "META", "ORCL", "AMD", "INTC", "QCOM", "TXN", "ADBE", "CRM", "INTU", "IBM", "ACN"],
+        "Healthcare": ["UNH", "JNJ", "LLY", "ABBV", "MRK", "TMO", "ABT", "PFE", "DHR", "BMY", "ISRG", "GILD", "MDT", "CVS", "CI"],
+        "Financials": ["JPM", "BAC", "WFC", "GS", "MS", "BLK", "C", "AXP", "COF", "PGR", "ICE", "CME", "SPGI", "V", "MA"],
+        "Consumer Disc": ["AMZN", "TSLA", "HD", "MCD", "NKE", "LOW", "BKNG", "TJX", "SBUX", "MAR", "TGT", "ROST", "ORLY", "DHI"],
+        "Comm Svcs": ["GOOGL", "META", "DIS", "NFLX", "T", "VZ", "CMCSA", "TMUS", "EA", "TTWO"],
+        "Industrials": ["GE", "RTX", "CAT", "HON", "UNP", "LMT", "DE", "WM", "NSC", "ITW", "ETN", "PH", "GD", "BA"],
+        "Energy": ["XOM", "CVX", "COP", "SLB", "EOG", "PSX", "MPC", "OXY", "VLO", "HAL", "DVN", "BKR"],
+        "Consumer Stap": ["WMT", "PG", "KO", "PEP", "PM", "MO", "CL", "GIS", "KHC", "KMB", "SYY"],
+        "Utilities": ["NEE", "DUK", "SO", "AEP", "D", "EXC", "PCG", "SRE", "XEL", "CEG"],
+        "Materials": ["LIN", "APD", "ECL", "SHW", "NEM", "FCX", "NUE", "VMC", "ALB", "MOS"],
+        "Real Estate": ["PLD", "AMT", "CCI", "EQIX", "PSA", "SPG", "WELL", "O", "DLR", "AVB"],
+    }
+    flat_jobs = [(sector, tkr) for sector, tickers in SECTOR_STOCKS.items() for tkr in tickers]
+    tickers = [tkr for _, tkr in flat_jobs]
+    
+    try:
+        results = run_async(_fetch_yahoo_quotes_async(tickers))
+        rows = []
+        for (sector, tkr), q in zip(flat_jobs, results):
+            if isinstance(q, dict) and q:
+                rows.append({"ticker": tkr, "sector": sector, "pct": q["pct"], "price": q["price"], "change": q["change"]})
+        return rows
+    except Exception as e:
+        logger.error({"error": str(e)}, "Heatmap Fetch Error")
+        return []
 
-    _fred_input = st.text_input("FRED API Key", value="", type="password", placeholder="paste key to override…", key="fred_override")
-    if _fred_input:
-        st.session_state.fred_key = _fred_input.strip()
-    _finnhub_input = st.text_input("Finnhub Key", value="", type="password", placeholder="paste key to override…", key="finnhub_override")
-    if _finnhub_input:
-        st.session_state.finnhub_key = _finnhub_input.strip()
+@st.cache_data(ttl=300)
+def multi_quotes(tickers):
+    return [q for t in tickers if (q := yahoo_quote(t))]
 
-    st.markdown('<hr style="border-top:1px solid #222;margin:8px 0">', unsafe_allow_html=True)
-    st.markdown('<div style="color:#FF6600;font-size:9px;letter-spacing:2px;font-weight:700">MY CONTEXT</div>', unsafe_allow_html=True)
-    st.session_state.macro_theses = st.text_area("Macro theses", value=st.session_state.macro_theses, placeholder="Watching Fed pivot...", height=55)
-    st.session_state.geo_watch    = st.text_area("Geo watch",    value=st.session_state.geo_watch,    placeholder="Red Sea, Taiwan...",   height=45)
+@st.cache_data(ttl=300)
+def vix_price():
+    try:
+        h = yf.Ticker("^VIX").history(period="5d")
+        return round(h["Close"].iloc[-1], 2) if not h.empty else None
+    except:
+        return None
 
-# ════════════════════════════════════════════════════════════════════
-# HEADER + TABS
-# ════════════════════════════════════════════════════════════════════
-st.markdown(f"""
-<div style="background:#FF6600;padding:5px 14px;display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-  <div style="display:flex;align-items:center;gap:14px">
-    <span style="font-size:20px;font-weight:900;letter-spacing:5px;color:#000;font-family:monospace">⚡ SENTINEL</span>
-    <span style="font-size:10px;color:#000;background:rgba(0,0,0,0.15);padding:2px 8px">PROFESSIONAL INTELLIGENCE</span>
-  </div>
-  <div style="font-size:10px;color:#000;opacity:0.75">{now_pst()} &nbsp;|&nbsp; LIVE</div>
-</div>""", unsafe_allow_html=True)
+@st.cache_data(ttl=3600)
+def vix_with_percentile():
+    try:
+        h = yf.Ticker("^VIX").history(period="1y")
+        if h.empty or len(h) < 20:
+            return None, None, None
+        current = h["Close"].iloc[-1]
+        pct_rank = (h["Close"] < current).mean() * 100   # percentile rank
+        # Posture based on percentile
+        if pct_rank < 30:   posture = "RISK-ON"
+        elif pct_rank < 65: posture = "NEUTRAL"
+        else:               posture = "RISK-OFF"
+        return round(current, 2), round(pct_rank, 1), posture
+    except Exception:
+        return None, None, None
 
-tabs = st.tabs(["BRIEF","MARKETS","SPX 0DTE","MACRO","CRYPTO","POLYMARKET","GEO","EARNINGS","SENTINEL AI"])
+@st.cache_data(ttl=600)
+def options_expiries(ticker):
+    try:
+        return list(yf.Ticker(ticker).options)
+    except:
+        return []
 
-# ════════════════════════════════════════════════════════════════════
-# TAB 0 — MORNING BRIEF
-# ════════════════════════════════════════════════════════════════════
-with tabs[0]:
-    st.markdown('<div class="bb-ph">⚡ SENTINEL MORNING BRIEF</div>', unsafe_allow_html=True)
+@st.cache_data(ttl=600)
+def options_chain(ticker, expiry=None):
+    try:
+        t = yf.Ticker(ticker)
+        exps = t.options
+        if not exps: return None, None, None
+        exp = expiry if expiry and expiry in exps else exps[0]
+        chain = t.option_chain(exp)
+        cols = ["strike", "lastPrice", "bid", "ask", "volume", "openInterest", "impliedVolatility"]
+        c = chain.calls[[x for x in cols if x in chain.calls.columns]]
+        p = chain.puts[[x for x in cols if x in chain.puts.columns]]
+        return c, p, exp
+    except:
+        return None, None, None
 
-    ref_col, mkt_col = st.columns([1, 1])
-    with ref_col:
-        if st.button("↺ REFRESH ALL DATA"):
-            st.cache_data.clear(); st.rerun()
-    with mkt_col:
-        mkt_status, mkt_color, mkt_detail = is_market_open()
-        st.markdown(
-            f'<div style="text-align:right;font-family:monospace;padding:4px 0">'
-            f'<span style="color:{mkt_color};font-size:14px;font-weight:900">● {mkt_status}</span>'
-            f' <span style="color:#555;font-size:10px">{mkt_detail}</span></div>',
-            unsafe_allow_html=True)
 
-    KEY_T = {"SPY":"S&P 500","QQQ":"Nasdaq 100","DIA":"Dow Jones","IWM":"Russell 2K",
-             "^TNX":"10Y Yield","DX-Y.NYB":"USD Index","GLD":"Gold","CL=F":"WTI Crude","BTC-USD":"Bitcoin"}
-    qs = multi_quotes(list(KEY_T.keys()))
-    cols = st.columns(len(qs))
-    for col, q in zip(cols, qs):
-        chg_str = f"{q['pct']:+.2f}% ({q['change']:+.2f})"
-        with col: st.metric(KEY_T.get(q["ticker"],q["ticker"]), fmt_p(q["price"]), delta=chg_str)
+def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=None):
+    import pandas as pd
+    result = {"top_calls": [], "top_puts": [], "unusual": None}
+    if calls_df is None or puts_df is None:
+        return result
+    if calls_df.empty and puts_df.empty:
+        return result
 
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-    L, R = st.columns([3,2])
+    w1, w2, w3 = 0.40, 0.30, 0.30
+    vix_val = float(vix) if vix is not None else 20.0
+    if vix_val > 25:
+        w3 += 0.15; w1 -= 0.075; w2 -= 0.075
+    elif vix_val < 15:
+        w1 += 0.15; w2 -= 0.075; w3 -= 0.075
 
-    with L:
-        st.markdown('<div class="bb-ph">⚡ MARKET SENTIMENT</div>', unsafe_allow_html=True)
-        s1,s2,s3 = st.columns(3)
-        v = vix_price()
-        vix_q = yahoo_quote("^VIX")
-        with s1:
-            if v:
-                lbl = "LOW FEAR" if v<15 else ("MODERATE" if v<25 else ("HIGH FEAR" if v<35 else "PANIC"))
-                vix_chg = f"{vix_q['pct']:+.2f}%" if vix_q else ""
-                vix_chg_c = pct_color(vix_q['pct']) if vix_q else "#888"
-                st.markdown(f'<div class="fg-gauge"><div class="fg-num">{v:.2f}</div><div class="fg-lbl" style="color:#FF8C00">{lbl}</div><div style="color:{vix_chg_c};font-size:13px;font-weight:700;margin-top:4px">{vix_chg}</div><div style="color:#555;font-size:8px;margin-top:2px">VIX</div></div>', unsafe_allow_html=True)
-        sfg_val, sfg_lbl = calc_stock_fear_greed()
-        with s2:
-            if sfg_val:
-                sfg_c = "#00CC44" if sfg_val>=55 else ("#FF4444" if sfg_val<35 else "#FF8C00")
-                st.markdown(f'<div class="fg-gauge"><div class="fg-num" style="color:{sfg_c}">{sfg_val}</div><div class="fg-lbl" style="color:{sfg_c}">{sfg_lbl}</div><div style="color:#555;font-size:8px;margin-top:2px">STOCK MARKET F&G</div></div>', unsafe_allow_html=True)
-        with s3:
-            vix_val, vix_pct, posture = vix_with_percentile()
-            if vix_val:
-                pc = {"RISK-ON": "#00CC44", "NEUTRAL": "#FF8C00", "RISK-OFF": "#FF4444"}[posture]
-                st.markdown(
-                    f'<div class="fg-gauge">'
-                    f'<div style="color:#888;font-size:9px">POSTURE</div>'
-                    f'<div class="fg-num" style="color:{pc};font-size:24px">{posture}</div>'
-                    f'<div style="color:#555;font-size:9px">VIX {vix_val:.1f} — {vix_pct:.0f}th pctile</div>'
-                    f'</div>', unsafe_allow_html=True)
+    def _score_side(df, side):
+        if df is None or df.empty:
+            return []
+        df = df.copy()
+        for col in ["strike", "volume", "openInterest", "impliedVolatility"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+        if current_price and "strike" in df.columns and len(df) > 30:
+            df["_dist"] = (df["strike"] - current_price).abs()
+            df = df.nsmallest(30, "_dist").drop(columns=["_dist"])
 
-        # ── Watchlist with full management
-        st.markdown('<div class="bb-ph">👁 WATCHLIST</div>', unsafe_allow_html=True)
+        if df.empty:
+            return []
 
-        wl_a, wl_b = st.columns([3,1])
-        with wl_a:
-            new_ticker = st.text_input("Add ticker", placeholder="e.g. TSLA", label_visibility="collapsed", key="wl_add")
-        with wl_b:
-            if st.button("＋ ADD", use_container_width=True):
-                t = new_ticker.upper().strip()
-                if t and t not in st.session_state.watchlist:
-                    st.session_state.watchlist.append(t)
-                    _save_watchlist(st.session_state.watchlist)
-                    st.rerun()
+        df["_voi"] = df.apply(lambda r: r.get("volume", 0) / max(r.get("openInterest", 1), 1), axis=1)
+        max_voi = df["_voi"].max()
+        df["_norm_voi"] = df["_voi"] / max_voi if max_voi > 0 else 0
 
-        wl_qs = multi_quotes(st.session_state.watchlist)
-
-        # ── FIX: Header uses same st.columns proportions as data rows
-        # Data row columns: [1.5, 2.0, 1.7, 1.7, 1.5, 0.8]
-        hdr_cols = st.columns([1.5, 2.0, 1.7, 1.7, 1.5, 0.8])
-        hdr_labels = ["TICKER", "PRICE", "CHG %", "CHG $", "VOLUME", "DEL"]
-        for hcol, hlbl in zip(hdr_cols, hdr_labels):
-            with hcol:
-                st.markdown(
-                    f'<div style="font-family:monospace;font-size:9px;color:#FF6600;'
-                    f'letter-spacing:1px;padding:4px 0;border-bottom:1px solid #FF6600;'
-                    f'font-weight:700">{hlbl}</div>',
-                    unsafe_allow_html=True)
-
-        st.markdown('<div style="margin-bottom:4px"></div>', unsafe_allow_html=True)
-
-        for q in wl_qs:
-            c = "#00CC44" if q["pct"]>=0 else "#FF4444"
-            arr = "▲" if q["pct"]>=0 else "▼"
-            # ── FIX: Volume color based on direction (bullish/bearish volume context)
-            vol_color = "#00CC44" if q["pct"] >= 0 else "#FF4444"
-            vol = f"{q['volume']/1e6:.1f}M" if q["volume"]>1e6 else f"{q['volume']/1e3:.0f}K"
-            chg_str = f"+{q['change']:.2f}" if q["change"]>=0 else f"{q['change']:.2f}"
-
-            crow = st.columns([1.5, 2.0, 1.7, 1.7, 1.5, 0.8])
-            with crow[0]:
-                st.markdown(
-                    f'<div style="color:#FF6600;font-weight:700;font-family:monospace;'
-                    f'font-size:13px;padding:5px 0">{q["ticker"]}</div>',
-                    unsafe_allow_html=True)
-            with crow[1]:
-                st.markdown(
-                    f'<div style="color:#FFF;font-family:monospace;font-size:13px;'
-                    f'font-weight:600;padding:5px 0">{fmt_p(q["price"])}</div>',
-                    unsafe_allow_html=True)
-            with crow[2]:
-                st.markdown(
-                    f'<div style="color:{c};font-family:monospace;font-size:13px;'
-                    f'font-weight:700;padding:5px 0">{arr} {abs(q["pct"]):.2f}%</div>',
-                    unsafe_allow_html=True)
-            with crow[3]:
-                st.markdown(
-                    f'<div style="color:{c};font-family:monospace;font-size:13px;'
-                    f'padding:5px 0">{chg_str}</div>',
-                    unsafe_allow_html=True)
-            with crow[4]:
-                # ── FIX: Volume same font size (13px), color based on daily direction
-                st.markdown(
-                    f'<div style="color:{vol_color};font-family:monospace;font-size:13px;'
-                    f'padding:5px 0;font-weight:500">{vol}</div>',
-                    unsafe_allow_html=True)
-            with crow[5]:
-                # ── FIX: Styled delete button using CSS class
-                st.markdown('<div class="wl-delete-col">', unsafe_allow_html=True)
-                if st.button("✕", key=f"rm_{q['ticker']}", help=f"Remove {q['ticker']}"):
-                    st.session_state.watchlist = [x for x in st.session_state.watchlist if x!=q["ticker"]]
-                    _save_watchlist(st.session_state.watchlist)
-                    st.rerun()
-                st.markdown('</div>', unsafe_allow_html=True)
-
-            st.markdown('<div style="border-bottom:1px solid #111;margin:0 0 2px 0"></div>', unsafe_allow_html=True)
-
-        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-        # ── Sector Pulse
-        st.markdown('<div class="bb-ph">🔄 SECTOR PULSE</div>', unsafe_allow_html=True)
-        sec_df = sector_etfs()
-        if not sec_df.empty:
-            for _, row in sec_df.sort_values("Pct",ascending=False).iterrows():
-                p = row["Pct"]; cls = "up" if p>=0 else "dn"; sign = "+" if p>=0 else ""
-                st.markdown(f'<div class="sec-cell {cls}"><span style="color:#FFF">{row["Sector"]}</span><span style="color:#888;font-size:11px">{row["ETF"]}</span><span style="color:{"#00CC44" if p>=0 else "#FF4444"};font-weight:700">{sign}{p:.2f}%</span></div>', unsafe_allow_html=True)
-
-    with R:
-        st.markdown('<div class="bb-ph">🎲 POLYMARKET ACTIVE MARKETS</div>', unsafe_allow_html=True)
-        with st.spinner("Loading markets…"):
-            poly = polymarket_events(30)
-        if poly:
-            active_poly = [e for e in poly if poly_status(e)[0]=="ACTIVE"]
-            closed_poly = [e for e in poly if poly_status(e)[0] in ("RESOLVED","CLOSED","EXPIRED (pending resolve)")]
-            # Filter: only show markets closed within the last 2 months
-            _cutoff = datetime.now(pytz.utc) - timedelta(days=60)
-            _recent_closed = []
-            for e in closed_poly:
-                end = e.get("endDate","") or e.get("resolvedAt","") or ""
-                if end:
-                    try:
-                        ed = datetime.fromisoformat(end.replace("Z","+00:00"))
-                        if ed >= _cutoff:
-                            _recent_closed.append(e)
-                    except Exception:
-                        pass
-            for e in active_poly[:5]:
-                st.markdown(render_poly_card(e), unsafe_allow_html=True)
-            if _recent_closed:
-                st.markdown('<div style="color:#FF6600;font-size:10px;letter-spacing:1px;margin:8px 0 4px">RECENTLY CLOSED</div>', unsafe_allow_html=True)
-                for e in _recent_closed[:3]:
-                    st.markdown(render_poly_card(e), unsafe_allow_html=True)
+        iv_col = "impliedVolatility"
+        if iv_col in df.columns:
+            iv_min, iv_max = df[iv_col].min(), df[iv_col].max()
+            iv_range = iv_max - iv_min
+            df["_iv_pct"] = (df[iv_col] - iv_min) / iv_range if iv_range > 0 else 0.5
         else:
-            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Could not reach Polymarket API. Check network connectivity.</p>', unsafe_allow_html=True)
+            df["_iv_pct"] = 0.5
 
-        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-        st.markdown('<div class="bb-ph">🌍 GEO WATCH</div>', unsafe_allow_html=True)
-        with st.spinner("Loading geo feed…"):
-            geo_arts = gdelt_news("geopolitical conflict oil market",8)
-        if geo_arts:
-            seen_titles = set()
-            for art in geo_arts[:8]:
-                t=art.get("title","")[:90]; u=art.get("url","#"); dom=art.get("domain","GDELT"); sd=art.get("seendate","")
-                t_key = t.strip().lower()
-                if t_key in seen_titles: continue
-                seen_titles.add(t_key)
-                if len(seen_titles) > 5: break
-                d=f"{sd[:4]}-{sd[4:6]}-{sd[6:8]}" if sd and len(sd)>=8 else ""
-                st.markdown(render_news_card(t,u,dom,d,"bb-news bb-news-geo"), unsafe_allow_html=True)
+        # Precise Delta using Black-Scholes Approximation
+        if expiry_date is not None:
+            try:
+                exp_dt = datetime.strptime(str(expiry_date), "%Y-%m-%d")
+                dte = max((exp_dt.date() - datetime.today().date()).days, 0)
+                T_approx = max(dte / 365.0, 1 / 365.0)   # min 1 day to avoid div/0
+            except Exception:
+                T_approx = 14 / 365.0
         else:
-            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">GDELT feed temporarily unavailable. Will auto-retry.</p>', unsafe_allow_html=True)
+            T_approx = 14 / 365.0
 
-# ════════════════════════════════════════════════════════════════════
-# TAB 1 — MARKETS
-# ════════════════════════════════════════════════════════════════════
-with tabs[1]:
-    st.markdown('<div class="bb-ph">📊 MARKETS — EQUITIES | OPTIONS | MOVERS | ROTATION</div>', unsafe_allow_html=True)
-
-    fc, _ = st.columns([2,3])
-    with fc:
-        flash_ticker = st.text_input("⚡ TICKER LOOKUP", placeholder="NVDA, AAPL, TSLA, SPY, GLD…", key="flash")
-
-    if flash_ticker:
-        tkr = flash_ticker.upper().strip()
-        q = yahoo_quote(tkr)
-        if q:
-            _prc = q["price"]
-            _chg = q["change"]
-            _pct = q["pct"]
-            _vol = q["volume"]
-            _up = _chg >= 0
-            _c = "#00CC44" if _up else "#FF4444"
-            _sign = "+" if _up else ""
-            _vol_c = "#00CC44" if _vol > 0 else "#888"
-            st.markdown(
-                f'<div style="display:flex;align-items:baseline;gap:14px;margin-bottom:10px">'
-                f'<span style="color:#FFF;font-size:28px;font-weight:700;font-family:monospace">{fmt_p(_prc)}</span>'
-                f'<span style="color:{_c};font-size:16px;font-weight:600;font-family:monospace">{_sign}{_pct:.2f}%</span>'
-                f'</div>', unsafe_allow_html=True)
-            m2, m3, m4 = st.columns(3)
-            _card = lambda label, val, color: (
-                f'<div style="background:#0A0A0A;border:1px solid #1A1A1A;border-top:2px solid {color};'
-                f'padding:10px 14px;font-family:monospace">'
-                f'<div style="color:#666;font-size:10px;letter-spacing:1px;margin-bottom:4px">{label}</div>'
-                f'<div style="color:{color};font-size:16px;font-weight:700">{val}</div></div>'
-            )
-            m2.markdown(_card("CHANGE", f"{_sign}{_chg:.2f}", _c), unsafe_allow_html=True)
-            m3.markdown(_card("VOLUME", f"{_vol:,}", _vol_c), unsafe_allow_html=True)
-            m4.markdown(_card("1D CHG%", f"{_sign}{_pct:.2f}%", _c), unsafe_allow_html=True)
-
-            TV_MAP = {"SPY":"AMEX:SPY","QQQ":"NASDAQ:QQQ","NVDA":"NASDAQ:NVDA","AAPL":"NASDAQ:AAPL",
-                      "TSLA":"NASDAQ:TSLA","MSFT":"NASDAQ:MSFT","GOOGL":"NASDAQ:GOOGL","AMZN":"NASDAQ:AMZN",
-                      "META":"NASDAQ:META","GLD":"AMEX:GLD","TLT":"NASDAQ:TLT","IWM":"AMEX:IWM",
-                      "BTC-USD":"COINBASE:BTCUSD","ETH-USD":"COINBASE:ETHUSD",
-                      "GC=F":"COMEX:GC1!","CL=F":"NYMEX:CL1!","^TNX":"TVC:TNX","^VIX":"TVC:VIX","DXY":"TVC:DXY"}
-            if tkr in TV_MAP:
-                tv_sym = TV_MAP[tkr]
-            else:
-                with st.spinner("Detecting exchange…"):
-                    tv_sym = get_ticker_exchange(tkr)
-            st.markdown('<div class="bb-ph" style="margin-top:8px">CHART — TRADINGVIEW (RSI + SMA)</div>', unsafe_allow_html=True)
-            components.html(tv_chart(tv_sym, 480), height=485, scrolling=False)
-
-            st.markdown('<div class="bb-ph">📋 OPTIONS INTELLIGENCE — ADAPTIVE SCORING ENGINE</div>', unsafe_allow_html=True)
-            expiries = options_expiries(tkr)
-            selected_exp = None
-            if not expiries:
-                options_expiries.clear(tkr)
-            else:
-                def _fmt_exp(d):
-                    try: return datetime.strptime(str(d), "%Y-%m-%d").strftime("%B %-d, %Y")
-                    except: return str(d)
-                selected_exp = st.selectbox("EXPIRY DATE", expiries, index=0, key=f"exp_{tkr}", format_func=_fmt_exp)
-            with st.spinner("Loading options…"):
-                calls, puts, exp_date = options_chain(tkr, selected_exp)
-            if calls is not None:
-                try:
-                    exp_dt = datetime.strptime(str(exp_date), "%Y-%m-%d")
-                    exp_fmt = exp_dt.strftime("%B %-d, %Y")
-                except:
-                    exp_fmt = str(exp_date)
-
-                try:
-                    current_vix = vix_price()
-                except:
-                    current_vix = 20.0
-
-                scored = score_options_chain(calls, puts, q["price"], vix=current_vix, expiry_date=selected_exp)
-
-                vix_str = f"{current_vix:.1f}" if current_vix else "N/A"
-                if current_vix and current_vix > 25:
-                    regime = f'<span style="color:#FF4444;font-weight:700">HIGH VOL (VIX {vix_str})</span> — Δ-weighted'
-                elif current_vix and current_vix < 15:
-                    regime = f'<span style="color:#00CC44;font-weight:700">LOW VOL (VIX {vix_str})</span> — Flow-weighted'
-                else:
-                    regime = f'<span style="color:#FF8C00;font-weight:700">NEUTRAL (VIX {vix_str})</span> — Balanced'
-
-                st.markdown(f'<div style="color:#888;font-size:11px;font-family:monospace;margin-bottom:6px">EXPIRY: {exp_fmt} | CURRENT: {fmt_p(q["price"])} | REGIME: {regime}</div>', unsafe_allow_html=True)
-
-                cc, pc = st.columns(2)
-                with cc:
-                    st.markdown('<div style="color:#00CC44;font-size:10px;font-weight:700;letter-spacing:2px">▲ TOP CALLS (by score)</div>', unsafe_allow_html=True)
-                    st.markdown(render_scored_options(scored["top_calls"], side="calls"), unsafe_allow_html=True)
-                with pc:
-                    st.markdown('<div style="color:#FF4444;font-size:10px;font-weight:700;letter-spacing:2px">▼ TOP PUTS (by score)</div>', unsafe_allow_html=True)
-                    st.markdown(render_scored_options(scored["top_puts"], side="puts"), unsafe_allow_html=True)
-
-                if scored.get("unusual"):
-                    st.markdown(render_unusual_trade(scored["unusual"], ticker=tkr, expiry=exp_fmt), unsafe_allow_html=True)
-                
-                with st.expander("🔧 TRUE BLACK-SCHOLES ENGINE (WHAT-IF)", expanded=False):
-                    from scipy.stats import norm
-                    import math
-                    st.markdown('<div style="color:#888;font-size:10px;margin-bottom:8px">Calculate Delta, Gamma, Theta locally bypassing Alpaca endpoint limits.</div>', unsafe_allow_html=True)
-                    wc1, wc2, wc3, wc4, wc5 = st.columns(5)
-                    with wc1: bs_s = st.number_input("Spot Price", value=float(q["price"]), format="%.2f", key=f"bs_s_{tkr}")
-                    with wc2: bs_k = st.number_input("Strike", value=float(q["price"]), format="%.2f", key=f"bs_k_{tkr}")
-                    with wc3:
-                        dt_exp = max((exp_dt.date() - datetime.today().date()).days, 1) if 'exp_dt' in locals() else 14
-                        bs_t = st.number_input("Days to Expire", value=float(dt_exp), format="%.1f", key=f"bs_t_{tkr}")
-                    with wc4:
-                        bs_v = st.number_input("Implied Vol (%)", value=float(current_vix) if current_vix else 20.0, format="%.1f", key=f"bs_v_{tkr}")
-                    with wc5: bs_side = st.selectbox("Type", ["call", "put"], key=f"bs_side_{tkr}")
-                    
-                    bs_res = bs_greeks_engine(bs_s, bs_k, bs_t / 365.0, 0.045, bs_v / 100.0, bs_side)
-                    rc1, rc2, rc3 = st.columns(3)
-                    rc1.metric("Delta", f"{bs_res['delta']:.4f}")
-                    rc2.metric("Gamma", f"{bs_res['gamma']:.6f}")
-                    rc3.metric("Theta (Daily)", f"{bs_res['theta']:.4f}")
-
-                with st.expander("📊 **FULL OPTIONS CHAIN**", expanded=False):
-                    fc, fp = st.columns(2)
-                    with fc:
-                        st.markdown('<div style="color:#00CC44;font-size:9px;font-weight:700;letter-spacing:2px">▲ ALL CALLS</div>', unsafe_allow_html=True)
-                        st.markdown(render_options_table(calls, "calls", q["price"]), unsafe_allow_html=True)
-                    with fp:
-                        st.markdown('<div style="color:#FF4444;font-size:9px;font-weight:700;letter-spacing:2px">▼ ALL PUTS</div>', unsafe_allow_html=True)
-                        st.markdown(render_options_table(puts, "puts", q["price"]), unsafe_allow_html=True)
-            else:
-                options_chain.clear(tkr, selected_exp)
-                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Options unavailable for this ticker.</p>', unsafe_allow_html=True)
-
-            st.markdown('<div class="bb-ph" style="margin-top:12px">🔍 INSIDER TRANSACTIONS</div>', unsafe_allow_html=True)
-            if st.session_state.finnhub_key:
-                with st.spinner("Loading insider data…"):
-                    ins = finnhub_insider(tkr, st.session_state.finnhub_key)
-                if ins:
-                    st.markdown(render_insider_cards(ins[:10], tkr, st.session_state.finnhub_key), unsafe_allow_html=True)
-                else:
-                    st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No recent insider transactions found.</p>', unsafe_allow_html=True)
-            else:
-                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Add Finnhub key in sidebar.</p>', unsafe_allow_html=True)
-
-            st.markdown('<div class="bb-ph" style="margin-top:12px">📉 SHORT VOLUME & DARK POOL PROXY (FINRA/YF)</div>', unsafe_allow_html=True)
-            finra = get_finra_short_volume(tkr)
-            if finra:
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Short % of Float", f"{finra['short_pct_float']}%")
-                c2.metric("Short Shares", f"{finra['short_shares']:,}")
-                c3.metric("Days to Cover", f"{finra['days_to_cover']}")
-            else:
-                st.markdown('<div style="color:#555;font-size:11px">Short volume data unavailable for this ticker.</div>', unsafe_allow_html=True)
-        else:
-            st.error(f"No data for '{tkr}'. Check ticker symbol.")
-
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-    st.markdown('<div class="bb-ph">📡 FUTURES — LIVE TRACKING</div>', unsafe_allow_html=True)
-    with st.spinner("Loading futures…"):
-        fut_data = get_futures()
-    if fut_data:
-        st.markdown(
-            '<div class="fut-row" style="color:#FF6600;font-size:9px;letter-spacing:1px;border-bottom:1px solid #FF6600">'
-            '<span>CONTRACT</span><span>NAME</span><span>PRICE</span><span>CHG%</span><span>CHG $</span><span>SIGNAL</span>'
-            '</div>', unsafe_allow_html=True)
-        for f in fut_data:
-            c = "#00CC44" if f["pct"]>=0 else "#FF4444"
-            arr = "▲" if f["pct"]>=0 else "▼"
-            sig_lbl = "BULL" if f["pct"]>=0.5 else ("BEAR" if f["pct"]<=-0.5 else "FLAT")
-            sig_c = "#00CC44" if sig_lbl=="BULL" else ("#FF4444" if sig_lbl=="BEAR" else "#555")
-            st.markdown(
-                f'<div class="fut-row">'
-                f'<span style="color:#FF6600;font-weight:700">{f["ticker"]}</span>'
-                f'<span style="color:#AAA;font-size:10px">{f["name"]}</span>'
-                f'<span style="color:#FFF;font-weight:600">{fmt_p(f["price"])}</span>'
-                f'<span style="color:{c};font-weight:700">{arr}{abs(f["pct"]):.2f}%</span>'
-                f'<span style="color:{c}">{"+"+str(f["change"]) if f["change"]>=0 else str(f["change"])}</span>'
-                f'<span style="color:{sig_c};font-size:10px;font-weight:700">{sig_lbl}</span>'
-                f'</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Futures data loading…</p>', unsafe_allow_html=True)
-
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-    st.markdown('<div class="bb-ph">🏆 TOP MOVERS — S&P 500 UNIVERSE</div>', unsafe_allow_html=True)
-    with st.spinner("Scanning S&P 500 for top movers…"):
-        gainers, losers = top_movers()
-    gco, lco = st.columns(2)
-    with gco:
-        st.markdown('<div style="color:#00CC44;font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:4px">▲ TOP GAINERS</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="mover-row" style="color:#FF6600;font-size:9px;letter-spacing:1px;border-bottom:1px solid #FF6600">'
-            '<span>TICKER</span><span>PRICE</span><span>CHG%</span><span>CHG $</span><span>VOLUME</span>'
-            '</div>', unsafe_allow_html=True)
-        for q in gainers:
-            vol = f"{q['volume']/1e6:.1f}M" if q["volume"]>1e6 else f"{q['volume']/1e3:.0f}K"
-            chg_str = f"+${q['change']:.2f}"
-            st.markdown(
-                f'<div class="mover-row">'
-                f'<span style="color:#FF6600;font-weight:700">{q["ticker"]}</span>'
-                f'<span style="color:#FFF;font-weight:600">{fmt_p(q["price"])}</span>'
-                f'<span class="up" style="font-weight:700">+{q["pct"]:.2f}%</span>'
-                f'<span style="color:#00CC44">{chg_str}</span>'
-                f'<span style="color:#555;font-size:10px">{vol}</span>'
-                f'</div>', unsafe_allow_html=True)
-    with lco:
-        st.markdown('<div style="color:#FF4444;font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:4px">▼ TOP LOSERS</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="mover-row" style="color:#FF6600;font-size:9px;letter-spacing:1px;border-bottom:1px solid #FF6600">'
-            '<span>TICKER</span><span>PRICE</span><span>CHG%</span><span>CHG $</span><span>VOLUME</span>'
-            '</div>', unsafe_allow_html=True)
-        for q in losers:
-            vol = f"{q['volume']/1e6:.1f}M" if q["volume"]>1e6 else f"{q['volume']/1e3:.0f}K"
-            chg_str = f"-${abs(q['change']):.2f}"
-            st.markdown(
-                f'<div class="mover-row">'
-                f'<span style="color:#FF6600;font-weight:700">{q["ticker"]}</span>'
-                f'<span style="color:#FFF;font-weight:600">{fmt_p(q["price"])}</span>'
-                f'<span class="dn" style="font-weight:700">{q["pct"]:.2f}%</span>'
-                f'<span style="color:#FF4444">{chg_str}</span>'
-                f'<span style="color:#555;font-size:10px">{vol}</span>'
-                f'</div>', unsafe_allow_html=True)
-
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-    st.markdown('<div class="bb-ph">⚖️ STATISTICAL ARBITRAGE (Cointegration Screener)</div>', unsafe_allow_html=True)
-    with st.spinner("Running Engle-Granger tests..."):
-        arb_df = stat_arb_screener()
-    if arb_df:
-        st.markdown(render_stat_arb_cards(arb_df), unsafe_allow_html=True)
-    else:
-        st.markdown('<div style="color:#555;font-size:11px">Stat Arb data unavailable (statsmodels missing or fetch failed).</div>', unsafe_allow_html=True)
-
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-    sec_df = sector_etfs()
-    if not sec_df.empty:
-        ss = sec_df.sort_values("Pct")
-        fig2 = go.Figure(go.Bar(x=ss["Pct"],y=ss["Sector"],orientation="h",
-            marker=dict(color=[pct_color(x) for x in ss["Pct"]],line=dict(width=0)),
-            text=ss["Pct"].apply(lambda x: f"{x:+.2f}%"),textposition="outside",
-            textfont=dict(color="#FF8C00",size=10)))
-        fig2.update_layout(**CHART_LAYOUT,height=350,xaxis_title="% Change",margin=dict(l=0,r=70,t=10,b=0))
-        st.plotly_chart(fig2, width="stretch")
-
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-    st.markdown('<div class="bb-ph">🗺 S&P 500 MARKET HEATMAP — FINVIZ STYLE</div>', unsafe_allow_html=True)
-    with st.spinner("Building heatmap (scanning ~120 stocks)…"):
-        hm_data = get_heatmap_data()
-    if hm_data:
-        hm_df = pd.DataFrame(hm_data)
-        hm_df["pct_capped"] = hm_df["pct"].clip(-5, 5)
-        hm_df["label"] = hm_df.apply(lambda r: f"{r['ticker']}<br>{r['pct']:+.2f}%", axis=1)
-
-        sectors = hm_df["sector"].unique().tolist()
-        sec_rows = pd.DataFrame({
-            "label": sectors, "sector": [""] * len(sectors),
-            "pct_capped": [0]*len(sectors), "values": [1]*len(sectors),
-            "ticker": sectors, "price": [0]*len(sectors),
-            "pct": [0]*len(sectors), "change": [0]*len(sectors),
-        })
-        stock_rows = hm_df.copy()
-        stock_rows["values"] = 1
-
-        all_labels    = list(sec_rows["label"]) + list(stock_rows["label"])
-        all_parents   = list(sec_rows["sector"]) + list(stock_rows["sector"])
-        all_values    = list(sec_rows["values"]) + list(stock_rows["values"])
-        all_colors    = [0.0]*len(sec_rows) + list(stock_rows["pct_capped"])
-        all_custom    = [[r, 0, 0, 0, r] for r in sectors] + list(stock_rows[["ticker","price","pct","change","sector"]].values.tolist())
-
-        fig_hm = go.Figure(go.Treemap(
-            labels=all_labels, parents=all_parents, values=all_values,
-            customdata=all_custom,
-            hovertemplate="<b>%{customdata[0]}</b><br>Price: $%{customdata[1]:.2f}<br>Change: %{customdata[2]:+.2f}%<br>$Change: %{customdata[3]:+.2f}<extra></extra>",
-            marker=dict(
-                colors=all_colors,
-                colorscale=[
-                    [0.0,  "#8B0000"],
-                    [0.3,  "#CC2222"],
-                    [0.45, "#441111"],
-                    [0.5,  "#111111"],
-                    [0.55, "#114411"],
-                    [0.7,  "#22AA44"],
-                    [1.0,  "#007A2F"],
-                ],
-                cmid=0, cmin=-5, cmax=5,
-                showscale=True,
-                colorbar=dict(
-                    title=dict(text="% CHG", font=dict(color="#FF6600",size=10)),
-                    tickfont=dict(color="#888",size=9),
-                    thickness=10, len=0.6, bgcolor="#050505", bordercolor="#333",
-                ),
-                line=dict(width=1, color="#1a1a1a"),
-            ),
-            textfont=dict(color="#FFFFFF", size=11),
-            tiling=dict(squarifyratio=1.618),
-            pathbar=dict(visible=False),
-        ))
-        fig_hm.update_layout(
-            paper_bgcolor="#000000", plot_bgcolor="#000000",
-            font=dict(color="#FF8C00", family="IBM Plex Mono"),
-            height=580, margin=dict(l=0,r=0,t=10,b=0),
-        )
-        st.plotly_chart(fig_hm, width="stretch")
-    else:
-        st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Heatmap data loading…</p>', unsafe_allow_html=True)
-
-    if st.session_state.finnhub_key:
-        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-        st.markdown('<div class="bb-ph">📰 MARKET NEWS — FINNHUB LIVE</div>', unsafe_allow_html=True)
-        with st.spinner("Loading news…"):
-            fn = finnhub_news(st.session_state.finnhub_key)
-        for art in fn[:8]:
-            title=art.get("headline","")[:100]; url=art.get("url","#"); src=art.get("source","")
-            ts=art.get("datetime",0)
-            d=datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else ""
-            st.markdown(render_news_card(title,url,src,d,"bb-news bb-news-macro"), unsafe_allow_html=True)
-
-# ════════════════════════════════════════════════════════════════════
-# TAB 2 — SPX 0DTE
-# ════════════════════════════════════════════════════════════════════
-with tabs[2]:
-    if "trade_log_0dte" not in st.session_state:
-        st.session_state.trade_log_0dte = []
-
-    _alpaca_present = bool(_get_secret("ALPACA_API_KEY")) and bool(_get_secret("ALPACA_SECRET_KEY"))
-    if not _alpaca_present:
-        st.markdown("""<div style="background:#1A0500;border:1px solid #FF6600;border-left:4px solid #FF6600;
-padding:16px;font-family:monospace;font-size:12px;color:#FF8C00">
-🔴 ALPACA API KEYS MISSING — Add ALPACA_API_KEY and ALPACA_SECRET_KEY to .streamlit/secrets.toml<br><br>
-<a href="https://app.alpaca.markets/signup" target="_blank" style="color:#FF6600">
-Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html=True)
-    else:
-        @st.fragment(run_every="10s")
-        def render_0dte_fragment():
-            _0dte_open, _0dte_msg = is_0dte_market_open()
-
-            # ── FIX: Market status alert auto-dismisses after 3 seconds via CSS animation
-            if _0dte_open:
-                st.markdown(
-                    '<div class="sentinel-alert-dismiss" style="font-family:monospace;font-size:12px;'
-                    'color:#00CC44;font-weight:700;background:#002200;border:1px solid #00CC44;'
-                    'padding:8px 14px;letter-spacing:1px;">'
-                    '⚡ ALPACA API ACTIVE: Institutional Real-Time Options Feed'
-                    '</div>', unsafe_allow_html=True)
-            else:
-                st.markdown(
-                    '<div class="sentinel-alert-dismiss" style="background:#220000;border:1px solid #FF4444;'
-                    'padding:12px 14px;font-family:monospace;font-size:13px;color:#FF4444;'
-                    'font-weight:700;letter-spacing:1px;">'
-                    '🛑 MARKET CLOSED: Showing latest available 0DTE chain.'
-                    f'<br><span style="color:#888;font-size:11px;font-weight:400">{_0dte_msg}</span>'
-                    '</div>', unsafe_allow_html=True)
-
-            st.markdown('<div class="bb-ph">⚡ SPX 0DTE — GAMMA EXPOSURE & TRADE ENGINE</div>', unsafe_allow_html=True)
-
-            _0dte_ref, _0dte_stat = st.columns([1, 4])
-            with _0dte_ref:
-                if st.button("↺ REFRESH 0DTE", key="refresh_0dte"):
-                    fetch_0dte_chain.clear()
-                    get_stock_snapshot.clear()
-                    fetch_vix_data.clear()
-                    st.rerun()
-            with _0dte_stat:
-                _now_pst_str = datetime.now(PST).strftime("%H:%M:%S PST")
-                st.markdown(f'<div style="text-align:right;font-family:monospace;padding:6px 0;color:#555;font-size:10px">'
-                            f'Last refresh: {_now_pst_str} | Auto-refresh: 30s cache</div>', unsafe_allow_html=True)
-
-            _spx = get_spx_metrics()
-            _vix_data = fetch_vix_data()
-            _0dte_chain, _chain_status = fetch_0dte_chain("SPY")
-
-            if _spx:
-                _spot, _vwap, _em = _spx["spot"], _spx["vwap"], round(_spx["high"] - _spx["low"], 1)
-                _m1, _m2, _m3, _m4 = st.columns(4)
-                with _m1: st.metric("SPX SPOT", f"${_spot:,.2f}")
-                with _m2: st.metric("EXPECTED MOVE", f"±{_em:.1f}")
-                with _m3:
-                    _vd = _spot - _vwap
-                    st.metric("VWAP", f"${_vwap:,.2f}", delta=f"{_vd:+.1f} vs Spot",
-                              delta_color="normal" if _vd >= 0 else "inverse")
-                with _m4: st.metric("CONTRACTS", f"{len(_0dte_chain)}",
-                                    delta=_chain_status if _chain_status != "OK" else "Live")
-            else:
-                st.markdown('<div style="color:#888;font-family:monospace;font-size:11px;padding:8px">'
-                            'SPX data unavailable — check Alpaca API connection.</div>', unsafe_allow_html=True)
-
-            _v1, _v2, _v3, _v4 = st.columns(4)
-            with _v1:
-                _vix_val = _vix_data.get("vix")
-                if _vix_val:
-                    _vl = "LOW" if _vix_val < 15 else ("MOD" if _vix_val < 25 else "HIGH")
-                    st.metric("VIX", f"{_vix_val:.2f}", delta=_vl)
-                else: st.metric("VIX", "—")
-            with _v2:
-                _v9d = _vix_data.get("vix9d")
-                st.metric("VIX9D", f"{_v9d:.2f}" if _v9d else "—")
-            with _v3:
-                _ctg = _vix_data.get("contango")
-                if _ctg is not None:
-                    st.metric("TERM STRUCTURE", "✅ Contango" if _ctg else "⚠️ Backwardation",
-                              delta_color="normal" if _ctg else "inverse")
-                else: st.metric("TERM STRUCTURE", "—")
-            with _v4:
-                _pcr = compute_pcr(_0dte_chain) if _0dte_chain else None
-                if _pcr is None:
-                    _cboe_spot_pcr, _cboe_opts_pcr = fetch_cboe_gex("SPX")
-                    _pcr = compute_cboe_pcr(_cboe_opts_pcr)
-                    _pcr_src = "CBOE" if _pcr is not None else None
-                else:
-                    _pcr_src = "0DTE"
-                if _pcr is not None:
-                    _pl = "Bullish" if _pcr < 0.8 else ("Bearish" if _pcr > 1.0 else "Neutral")
-                    st.metric("PUT/CALL RATIO", f"{_pcr:.2f}", delta=f"{_pl} ({_pcr_src})" if _pcr_src else _pl)
-                else: st.metric("PUT/CALL RATIO", "—")
-
-            st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-            with st.expander("⚡ AUTONOMOUS TRADE ANALYZER", expanded=False):
-                st.markdown('<div style="color:#888;font-family:monospace;font-size:10px;margin-bottom:8px">'
-                            'Automatically evaluates real-time VWAP, Gamma profile, PCR, and Volatility to generate '
-                            'a directional bias and trading target.</div>',
-                            unsafe_allow_html=True)
-
-                _ac, _cc = st.columns([1, 4])
-                with _ac: _analyze_clicked = st.button("⚡ ANALYZE NOW", key="analyze_0dte", use_container_width=True)
-                with _cc:
-                    if st.button("CLEAR LOG", key="clear_log_0dte"):
-                        st.session_state.trade_log_0dte = []
-                        st.rerun()
-
-                if _analyze_clicked:
-                    if not _0dte_chain:
-                        st.markdown('<div style="color:#FF4444;font-family:monospace;font-size:12px;padding:8px">'
-                                    '⚠️ No options data available.</div>',
-                                    unsafe_allow_html=True)
-                    else:
-                        _rec = generate_recommendation(_0dte_chain, _spx, _vix_data)
-                        if _rec:
-                            st.markdown(render_0dte_recommendation(_rec), unsafe_allow_html=True)
-                            if "NO TRADE" not in _rec['recommendation']:
-                                _log_time = datetime.now(PST).strftime("%I:%M %p PST")
-                                st.session_state.trade_log_0dte.append(
-                                    f"[{_log_time}] {_rec['recommendation'].replace('RECOMMENDATION: ', '')}")
-
-            if st.session_state.trade_log_0dte:
-                _log_entries = st.session_state.trade_log_0dte[-10:]
-                st.markdown(render_0dte_trade_log(_log_entries), unsafe_allow_html=True)
-
-            with st.expander("⚖️ KELLY CRITERION POSITION SIZING", expanded=False):
-                st.markdown('<div style="color:#888;font-family:monospace;font-size:10px;margin-bottom:8px">Institutional risk management optimal sizing calculator.</div>', unsafe_allow_html=True)
-                kc1, kc2, kc3 = st.columns(3)
-                with kc1: win_rate = st.number_input("Est. Win Rate (%)", min_value=1.0, max_value=99.0, value=55.0, step=1.0) / 100.0
-                with kc2: risk_reward = st.number_input("Risk/Reward Ratio", min_value=0.1, max_value=100.0, value=1.5, step=0.1)
-                with kc3: bankroll = st.number_input("Account Max Risk ($)", min_value=1.0, max_value=1000000000.0, value=10000.0, step=100.0)
-
-                kelly_pct = max(0.0, win_rate - ((1.0 - win_rate) / risk_reward))
-                half_kelly = kelly_pct / 2.0
-
-                st.markdown(f"""
-                <div style="padding:10px; background:#1A0500; border-left:4px solid #FF6600; margin-top:10px;">
-                    <span style="color:#FFF; font-weight:bold; font-family:monospace; font-size:14px;">Full Kelly: {kelly_pct*100:.2f}% | Half Kelly (Rec): {half_kelly*100:.2f}%</span><br>
-                    <span style="color:#00CC44; font-family:monospace; font-size:16px;">Recommended Max Capital Allocation: ${bankroll * half_kelly:.2f}</span>
-                </div>
-                """, unsafe_allow_html=True)
-
-            st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-            st.markdown('<div class="bb-ph">📊 GAMMA EXPOSURE (GEX) PROFILE</div>', unsafe_allow_html=True)
-
-            _exp_col, _range_col = st.columns([2, 2])
-            with _exp_col:
-                _exp_choice = st.selectbox(
-                    "Expiration Filter",
-                    options=["0DTE (Today Only)", "≤ 7 Days (Weekly)", "≤ 30 Days", "≤ 45 DTE", "All (≤ 1 Year)"],
-                    index=0,
-                    key="gex_exp_filter",
-                    help="Which expirations to include in the GEX calculation"
-                )
-            with _range_col:
-                _chart_range_pct = st.selectbox(
-                    "Chart Strike Range",
-                    options=["±2% (~±140 pts)", "±3% (~±210 pts)", "±5% (~±350 pts)", "±7% (~±490 pts)"],
-                    index=0,
-                    key="gex_range",
-                    help="Strike range displayed on the chart"
-                )
-
-            _exp_days_map = {
-                "0DTE (Today Only)": 1, "≤ 7 Days (Weekly)": 7,
-                "≤ 30 Days": 30, "≤ 45 DTE": 45, "All (≤ 1 Year)": 365,
-            }
-            _range_pct_map = {
-                "±2% (~±140 pts)": 0.02, "±3% (~±210 pts)": 0.03,
-                "±5% (~±350 pts)": 0.05, "±7% (~±490 pts)": 0.07,
-            }
-            _exp_limit = _exp_days_map.get(_exp_choice, 45)
-            _chart_pct = _range_pct_map.get(_chart_range_pct, 0.05)
-
-            _cboe_spot, _cboe_opts = fetch_cboe_gex("SPX")
-            _use_cboe = _cboe_spot is not None and _cboe_opts is not None
-
-            if _use_cboe:
-                _gex = compute_cboe_gex_profile(_cboe_spot, _cboe_opts,
-                                                 expiry_limit_days=_exp_limit,
-                                                 strike_pct=_chart_pct + 0.02)
-                _total_gex_bn = compute_cboe_total_gex(_cboe_spot, _cboe_opts)
-                _spy_spot_gex = _cboe_spot / 10
-                _gex_source = f"CBOE Delayed • {_exp_choice} • Spot: ${_cboe_spot:,.0f}"
-            elif _0dte_chain and _spx:
-                _spy_spot_gex = _spx["spot"] / 10
-                _gex = compute_gex_profile(_0dte_chain, _spy_spot_gex)
-                _total_gex_bn = None
-                _gex_source = "Alpaca 0DTE (CBOE unavailable)"
-            else:
-                _gex = {}
-                _total_gex_bn = None
-                _gex_source = ""
-
-            _gf_spy = find_gamma_flip(_gex) if _gex else None
-            _mp_spy = compute_max_pain(_0dte_chain) if _0dte_chain else None
-            _spot_for_chart = _cboe_spot if _use_cboe else (_spx["spot"] if _spx else None)
-
-            if _gex:
-                _src_html = (f'<div style="color:#555;font-family:monospace;font-size:10px;margin-bottom:4px">'
-                             f'Source: {_gex_source}')
-                if _total_gex_bn is not None:
-                    _gex_clr = "#00CC44" if _total_gex_bn >= 0 else "#FF4444"
-                    _src_html += (f' &nbsp;|&nbsp; Total Net GEX: '
-                                  f'<span style="color:{_gex_clr};font-weight:600">'
-                                  f'${_total_gex_bn:+.2f} Bn</span>')
-                _src_html += "</div>"
-                st.markdown(_src_html, unsafe_allow_html=True)
-
-                _gex_col, _info_col = st.columns([3, 2])
-                with _gex_col:
-                    _fig = render_0dte_gex_chart(_gex, _gf_spy, _mp_spy,
-                                                 spot_spx=_spot_for_chart,
-                                                 display_pct=_chart_pct)
-                    if _fig:
-                        st.plotly_chart(_fig, width="stretch", config={'displayModeBar': False})
-                    else:
-                        st.markdown('<div style="color:#555;font-family:monospace;font-size:11px">GEX data unavailable.</div>', unsafe_allow_html=True)
-                with _info_col:
-                    _wall_strike, _wall_gex = None, 0
-                    for _wk, _wv in _gex.items():
-                        if abs(_wv) > abs(_wall_gex):
-                            _wall_gex, _wall_strike = _wv, _wk
-                    _wall_spx = f"${_wall_strike * 10:,.0f}" if _wall_strike else "—"
-                    _wall_dir = "Call Wall" if _wall_gex >= 0 else "Put Wall"
-                    st.markdown(render_0dte_gex_decoder(
-                        _gf_spy, _mp_spy, _wall_spx, _wall_dir,
-                        spot_spx=_spot_for_chart,
-                        wall_gex_m=abs(_wall_gex) if _wall_gex else None
-                    ), unsafe_allow_html=True)
-            else:
-                st.markdown('<div style="color:#555;font-family:monospace;font-size:11px;padding:20px;text-align:center">'
-                            '📊 GEX Profile unavailable — CBOE could not be fetched and no 0DTE chain loaded.</div>',
-                            unsafe_allow_html=True)
-
-        render_0dte_fragment()
-
-# ════════════════════════════════════════════════════════════════════
-# TAB 3 — MACRO
-# ════════════════════════════════════════════════════════════════════
-with tabs[3]:
-    st.markdown('<div class="bb-ph">📈 MACRO — FRED DATA DASHBOARD</div>', unsafe_allow_html=True)
-
-    if not st.session_state.fred_key:
-        st.markdown("""<div style="background:#0A0500;border:1px solid #FF6600;border-left:4px solid #FF6600;
-padding:16px;font-family:monospace;font-size:12px;color:#FF8C00">
-⚠️ FRED API key required for macro data.<br><br>
-<a href="https://fred.stlouisfed.org/docs/api/api_key.html" target="_blank" style="color:#FF6600">
-Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
-    else:
-        # ════════════════════════════════════════
-        # MACRO OVERVIEW — AI-style environment scorecard
-        # ════════════════════════════════════════
-        st.markdown('<div class="bb-ph">🧠 US MACRO ENVIRONMENT OVERVIEW</div>', unsafe_allow_html=True)
-        with st.spinner("Computing macro environment…"):
-            macro_ov = get_macro_overview(st.session_state.fred_key)
-
-        if macro_ov:
-            _env_label = macro_ov["env_label"]
-            _env_color = macro_ov["env_color"]
-            _env_desc  = macro_ov["env_desc"]
-            _signals   = macro_ov["signals"]
-            _pct       = macro_ov["pct"]
-            _total     = macro_ov["total_score"]
-            _max       = macro_ov["max_score"]
-
-            # Big environment banner with trade implications
-            _trade_guidance = {
-                "EXPANSIONARY 🟢": "Favor: Equities (cyclicals, tech, small-caps) · Long risk-assets · Steepener trades · Commodities on reflation",
-                "MIXED / NEUTRAL 🟡": "Favor: Quality large-caps · Sector-selective · Hedge with Treasuries · Reduce leverage · Watch credit spreads",
-                "CAUTIONARY ⚠️": "Favor: Defensives (staples, healthcare, utilities) · Short duration · Gold hedge · Reduce cyclicals exposure",
-                "CONTRACTIONARY 🔴": "Favor: Cash/T-Bills · Gold · Short equities (SPY puts) · Long USD · Avoid junk credit · Recession playbook",
-            }
-            _guidance = _trade_guidance.get(_env_label, "")
-            st.markdown(
-                f'<div style="background:#0A0A0A;border:1px solid {_env_color};border-left:5px solid {_env_color};'
-                f'padding:14px 18px;font-family:monospace;margin-bottom:10px">'
-                f'<div style="display:flex;justify-content:space-between;align-items:flex-start">'
-                f'<div style="flex:1">'
-                f'<div style="color:{_env_color};font-size:18px;font-weight:900;letter-spacing:2px">{_env_label}</div>'
-                f'<div style="color:#AAA;font-size:11px;margin-top:4px;line-height:1.6">{_env_desc}</div>'
-                f'<div style="color:{_env_color};font-size:10px;margin-top:8px;border-top:1px solid #1A1A1A;padding-top:8px;">'
-                f'<span style="color:#555">TRADE POSITIONING →</span> {_guidance}</div>'
-                f'</div>'
-                f'<div style="text-align:right;min-width:90px;margin-left:16px">'
-                f'<div style="color:{_env_color};font-size:30px;font-weight:900">{_total:+d}</div>'
-                f'<div style="color:#555;font-size:10px">of ±{_max} pts</div>'
-                f'</div>'
-                f'</div></div>', unsafe_allow_html=True)
-
-            # Signal grid — always 4 columns, signals wrap into new rows naturally
-            _sig_list = list(_signals.items())
-            _n_rows = (len(_sig_list) + 3) // 4
-            for _row in range(_n_rows):
-                _row_items = _sig_list[_row * 4 : _row * 4 + 4]
-                _row_cols = st.columns(4)
-                for _ci, (sig_name, sig) in enumerate(_row_items):
-                    with _row_cols[_ci]:
-                        _sc = sig["color"]
-                        _arrow = "▲" if sig["score"] > 0 else ("▼" if sig["score"] < 0 else "─")
-                        _score_dots = "●" * abs(sig["score"]) + "○" * (2 - abs(sig["score"]))
-                        st.markdown(
-                            f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:3px solid {_sc};'
-                            f'padding:12px;font-family:monospace;height:80px;display:flex;flex-direction:column;justify-content:space-between">'
-                            f'<div style="color:#555;font-size:9px;letter-spacing:1px">{sig_name.upper()}</div>'
-                            f'<div style="color:{_sc};font-size:12px;font-weight:700;line-height:1.3">{_arrow} {sig["label"]}</div>'
-                            f'<div style="color:{_sc};font-size:9px;opacity:0.6">{_score_dots}</div>'
-                            f'</div>', unsafe_allow_html=True)
-                # spacer between rows
-                if _row < _n_rows - 1:
-                    st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
-        else:
-            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Macro overview loading…</p>', unsafe_allow_html=True)
-
-        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-        # ════════════════════════════════════════
-        # MACRO CALENDAR — Upcoming economic events
-        # ════════════════════════════════════════
-        st.markdown('<div class="bb-ph">📅 MACRO ECONOMIC CALENDAR — UPCOMING RELEASES</div>', unsafe_allow_html=True)
-        with st.spinner("Loading macro calendar…"):
-            macro_cal = get_macro_calendar(st.session_state.fred_key)
-
-        if macro_cal:
-            from datetime import date as _today_date
-            _today = _today_date.today()
-            _cal_hdr = (
-                '<div style="display:grid;grid-template-columns:100px 1fr 90px;gap:8px;'
-                'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
-                'font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
-                '<span>DATE</span><span>EVENT</span><span>IMPORTANCE</span></div>'
-            )
-            st.markdown(_cal_hdr, unsafe_allow_html=True)
-            for evt in macro_cal[:20]:
-                _ed = evt["date"]
-                _days_away = (_ed - _today).days
-                _date_str = _ed.strftime("%b %d, %Y")
-                _badge = "TODAY" if _days_away == 0 else (f"IN {_days_away}D" if _days_away > 0 else "PAST")
-                _imp = evt.get("importance", "MEDIUM")
-                _imp_c = "#FF4444" if _imp == "HIGH" else "#FF8C00"
-                _row_bg = "background:rgba(255,102,0,0.05);" if _days_away <= 2 else ""
-                st.markdown(
-                    f'<div style="display:grid;grid-template-columns:100px 1fr 90px;gap:8px;'
-                    f'padding:6px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:12px;{_row_bg}">'
-                    f'<span style="color:#888">{_date_str}</span>'
-                    f'<span style="color:#CCC">{evt["name"]} '
-                    f'<span style="color:#555;font-size:10px">({_badge})</span></span>'
-                    f'<span style="color:{_imp_c};font-weight:700;font-size:10px">{_imp}</span>'
-                    f'</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(
-                '<div style="background:#080808;border-left:3px solid #FF6600;padding:10px 14px;'
-                'font-family:monospace;font-size:11px;color:#888">'
-                'Economic calendar requires FRED API key. Releases shown include: CPI, Jobs Report, '
-                'FOMC decisions, PCE, GDP, Retail Sales, PPI, PMIs, and more.</div>',
-                unsafe_allow_html=True)
-
-        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-        mc1, mc2 = st.columns([2, 2])
-        with mc1:
-            st.markdown('<div class="bb-ph">📉 YIELD CURVE (LIVE FROM FRED)</div>', unsafe_allow_html=True)
-            with st.spinner("Loading yield curve…"):
-                fig_yc = yield_curve_chart(st.session_state.fred_key, 260)
-            if fig_yc:
-                st.plotly_chart(fig_yc, width="stretch")
-                df_2y = fred_series("DGS2", st.session_state.fred_key, 3)
-                df_10y = fred_series("DGS10", st.session_state.fred_key, 3)
-                if df_2y is not None and df_10y is not None and not df_2y.empty and not df_10y.empty:
-                    sp = round(df_10y["value"].iloc[-1] - df_2y["value"].iloc[-1], 2)
-                    if sp < 0:
-                        st.markdown(f'<div style="background:#1A0000;border-left:3px solid #FF0000;padding:8px 12px;font-family:monospace;font-size:11px;color:#FF8C00">⚠️ INVERTED: 10Y-2Y = {sp:.2f}%. Recession lead: 12-18 months avg.</div>', unsafe_allow_html=True)
-                    else:
-                        st.markdown(f'<div style="background:#001A00;border-left:3px solid #00CC44;padding:8px 12px;font-family:monospace;font-size:11px;color:#CCC">✅ NORMAL: 10Y-2Y = +{sp:.2f}%</div>', unsafe_allow_html=True)
-
-                st.markdown('<div class="bb-ph" style="margin-top:8px">📊 CPI vs FED FUNDS vs CORE PCE</div>', unsafe_allow_html=True)
-                with st.spinner("Loading inflation data…"):
-                    fig_cpi = cpi_vs_rates_chart(st.session_state.fred_key, 250)
-                if fig_cpi:
-                    st.plotly_chart(fig_cpi, width="stretch")
-            else:
-                st.markdown('<p style="color:#555;font-family:monospace">Yield data loading…</p>', unsafe_allow_html=True)
-
-        with mc2:
-            st.markdown('<div class="bb-ph">📊 KEY MACRO INDICATORS</div>', unsafe_allow_html=True)
-            MACRO = {"CPI":"CPIAUCSL","Core PCE":"PCEPILFE","Fed Funds":"FEDFUNDS",
-                     "Unemployment":"UNRATE","U6 Rate":"U6RATE","M2 Supply":"M2SL",
-                     "HY Spread":"BAMLH0A0HYM2"}
-            for name, code in MACRO.items():
-                df = fred_series(code, st.session_state.fred_key, 3)
-                if df is not None and not df.empty:
-                    val = round(df["value"].iloc[-1], 2)
-                    prev = round(df["value"].iloc[-2], 2) if len(df)>1 else val
-                    chg = round(val-prev, 2)
-                    st.metric(name, f"{val:.2f}", delta=f"{chg:+.2f}")
-
-        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-        st.markdown('<div class="bb-ph">📈 MULTI-MATURITY YIELD HISTORY — 3 YEARS (LIVE FRED)</div>', unsafe_allow_html=True)
-        with st.spinner("Loading yield history…"):
-            fig_hist = yield_history_chart(st.session_state.fred_key, 240)
-        if fig_hist:
-            st.plotly_chart(fig_hist, width="stretch")
-        else:
-            st.markdown('<p style="color:#555;font-family:monospace">Yield history data loading…</p>', unsafe_allow_html=True)
-
-        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-        st.markdown('<div class="bb-ph">USD INDEX — DXY (YAHOO FINANCE)</div>', unsafe_allow_html=True)
-        dxy_q = yahoo_quote("DX-Y.NYB")
-        if dxy_q:
-            dxy_c = pct_color(dxy_q["pct"])
-            st.markdown(f'<div style="background:#0D0D0D;border:1px solid #222;border-top:2px solid #FF6600;padding:14px;font-family:monospace">'
-                        f'<div style="color:#FF6600;font-size:10px;letter-spacing:1px">DXY — US DOLLAR INDEX</div>'
-                        f'<div style="color:#FFF;font-size:28px;font-weight:700;margin-top:4px">{dxy_q["price"]:.2f}</div>'
-                        f'<div style="color:{dxy_c};font-size:14px;font-weight:600;margin-top:2px">{dxy_q["pct"]:+.2f}% ({dxy_q["change"]:+.2f})</div></div>', unsafe_allow_html=True)
-        else:
-            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">DXY data unavailable</p>', unsafe_allow_html=True)
-
-# ════════════════════════════════════════════════════════════════════
-# TAB 4 — CRYPTO
-# ════════════════════════════════════════════════════════════════════
-with tabs[4]:
-    st.markdown('<div class="bb-ph">💰 CRYPTO — COINGECKO + TRADINGVIEW</div>', unsafe_allow_html=True)
-
-    with st.spinner("Loading crypto globals…"):
-        gdata = crypto_global()
-    if gdata:
-        g1,g2,g3,g4 = st.columns(4)
-        total_cap = gdata.get("total_market_cap",{}).get("usd",0)
-        btc_dom   = gdata.get("market_cap_percentage",{}).get("btc",0)
-        eth_dom   = gdata.get("market_cap_percentage",{}).get("eth",0)
-        fv, fl = fear_greed_crypto()
-        g1.metric("Total Mkt Cap",  f"${total_cap/1e12:.2f}T")
-        g2.metric("BTC Dominance",  f"{btc_dom:.1f}%")
-        g3.metric("ETH Dominance",  f"{eth_dom:.1f}%")
-        if fv:
-            cfg_c = "#00CC44" if fv>=55 else ("#FF4444" if fv<35 else "#FF8C00")
-            with g4:
-                st.markdown(f'<div class="fg-gauge"><div class="fg-num" style="color:{cfg_c}">{fv}</div><div class="fg-lbl" style="color:{cfg_c}">{fl}</div><div style="color:#555;font-size:8px;margin-top:2px">CRYPTO FEAR & GREED</div></div>', unsafe_allow_html=True)
-
-        if btc_dom > 55:
-            st.markdown('<div style="background:#1A0000;border-left:3px solid #FF4444;padding:8px 12px;font-family:monospace;font-size:11px;color:#FF8C00">⚠️ BTC Dominance >55% — Altcoin pressure. Risk-off within crypto.</div>', unsafe_allow_html=True)
-        elif btc_dom < 45:
-            st.markdown('<div style="background:#001A00;border-left:3px solid #00CC44;padding:8px 12px;font-family:monospace;font-size:11px;color:#CCC">✅ BTC Dominance <45% — Altcoin season conditions.</div>', unsafe_allow_html=True)
-
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-    cr1, cr2 = st.columns([3,3])
-
-    with cr1:
-        st.markdown('<div class="bb-ph">💹 TOP 20 BY MARKET CAP</div>', unsafe_allow_html=True)
-        with st.spinner("Loading crypto markets…"):
-            cdata = crypto_markets()
-        if cdata and isinstance(cdata, list):
-            st.markdown(
-                '<div style="display:grid;grid-template-columns:80px 130px 90px 110px;gap:8px;'
-                'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
-                'font-size:10px;color:#FF6600;letter-spacing:1px;margin-bottom:3px">'
-                '<span>SYMBOL</span><span>PRICE</span><span>24H %</span><span>MKT CAP</span></div>',
-                unsafe_allow_html=True)
-            for c in cdata:
-                if not isinstance(c, dict) or not c.get("current_price"): continue
-                pct = c.get("price_change_percentage_24h",0) or 0; color = pct_color(pct)
-                sign = "+" if pct>=0 else ""
-                st.markdown(
-                    f'<div style="display:grid;grid-template-columns:80px 130px 90px 110px;gap:8px;'
-                    f'padding:6px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:13px;align-items:center">'
-                    f'<span style="color:#FF6600;font-weight:700">{c["symbol"].upper()}</span>'
-                    f'<span style="color:#FFF;font-weight:600">{fmt_p(c["current_price"])}</span>'
-                    f'<span style="color:{color};font-weight:700">{sign}{pct:.2f}%</span>'
-                    f'<span style="color:#777">${c["market_cap"]/1e9:.1f}B</span></div>', unsafe_allow_html=True)
-        else:
-            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">CoinGecko data unavailable. Rate limits may apply — try again in a minute.</p>', unsafe_allow_html=True)
-
-    with cr2:
-        st.markdown('<div class="bb-ph">📈 BTC/USD — TRADINGVIEW</div>', unsafe_allow_html=True)
-        components.html(tv_chart("COINBASE:BTCUSD", 460), height=465, scrolling=False)
-
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-    st.markdown('<div class="bb-ph">📈 ETH/USD — TRADINGVIEW</div>', unsafe_allow_html=True)
-    components.html(tv_chart("COINBASE:ETHUSD", 320), height=325, scrolling=False)
-
-    # ── Institutional BTC ETF Flows ───────────────────────────────────
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-    st.markdown('<div class="bb-ph">📊 INSTITUTIONAL BTC ETF FLOWS — DAILY NET</div>', unsafe_allow_html=True)
-    with st.spinner("Loading ETF flow data…"):
-        _etf_df = fetch_btc_etf_flows()
-        _etf_estimated = False
-        if _etf_df is None or _etf_df.empty:
-            _etf_df = fetch_btc_etf_flows_fallback()
-            _etf_estimated = True
-    if _etf_df is not None and not _etf_df.empty:
-        _etf_fig = render_crypto_etf_chart(_etf_df, is_estimated=_etf_estimated)
-        if _etf_fig:
-            st.plotly_chart(_etf_fig, use_container_width=True, config={'displayModeBar': False})
-        if _etf_estimated:
-            st.markdown(
-                '<div style="background:#0A0500;border-left:3px solid #FF8C00;padding:8px 12px;'
-                'font-family:monospace;font-size:10px;color:#FF8C00">⚠️ Data estimated from yfinance '
-                'volume × price action. Actual fund flow data from Farside Investors was unavailable.</div>',
-                unsafe_allow_html=True
-            )
-
-        # ── Mini summary dashboard for latest day ──────────────────────
         try:
-            _latest = _etf_df.iloc[-1]
-            _etf_only = {k: v for k, v in _latest.items() if k != "Total" and k in _ETF_TICKERS}
-            _net = _latest.get("Total", sum(_etf_only.values()))
-            _inflows = {k: v for k, v in _etf_only.items() if v > 0}
-            _outflows = {k: v for k, v in _etf_only.items() if v < 0}
-            _top_name, _top_val = max(_etf_only.items(), key=lambda x: abs(x[1])) if _etf_only else ("—", 0)
-            _net_color = "#00CC44" if _net >= 0 else "#FF4444"
-            _net_sign = "+" if _net >= 0 else ""
-            _top_color = "#00CC44" if _top_val >= 0 else "#FF4444"
-            _top_sign = "+" if _top_val >= 0 else ""
-            _date_str = _etf_df.index[-1].strftime("%b %d, %Y")
+            fred_key = st.session_state.get("fred_key")
+        except:
+            fred_key = None
+        r_risk_free = get_risk_free_rate(fred_key)        
+        def _bs_delta(S, K, T, r, sigma, side):
+            if S <= 0 or K <= 0 or T <= 0 or sigma <= 0: return 0.5
+            d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+            return norm.cdf(d1) if side == "call" else norm.cdf(d1) - 1.0
 
-            st.markdown(
-                f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;'
-                f'background:#060606;border:1px solid #1A1A1A;border-radius:4px;padding:10px 14px;'
-                f'margin:6px 0;font-family:\'IBM Plex Mono\',monospace">'
-                # Net Flow
-                f'<div style="text-align:center">'
-                f'<div style="color:#555;font-size:9px;letter-spacing:1px">NET FLOW</div>'
-                f'<div style="color:{_net_color};font-size:16px;font-weight:700">{_net_sign}${abs(_net):,.0f}M</div>'
-                f'<div style="color:#444;font-size:8px">{_date_str}</div>'
-                f'</div>'
-                # Inflows
-                f'<div style="text-align:center">'
-                f'<div style="color:#555;font-size:9px;letter-spacing:1px">INFLOWS</div>'
-                f'<div style="color:#00CC44;font-size:16px;font-weight:700">{len(_inflows)}</div>'
-                f'<div style="color:#444;font-size:8px">ETFs positive</div>'
-                f'</div>'
-                # Outflows
-                f'<div style="text-align:center">'
-                f'<div style="color:#555;font-size:9px;letter-spacing:1px">OUTFLOWS</div>'
-                f'<div style="color:#FF4444;font-size:16px;font-weight:700">{len(_outflows)}</div>'
-                f'<div style="color:#444;font-size:8px">ETFs negative</div>'
-                f'</div>'
-                # Top Mover
-                f'<div style="text-align:center">'
-                f'<div style="color:#555;font-size:9px;letter-spacing:1px">TOP MOVER</div>'
-                f'<div style="color:{_top_color};font-size:16px;font-weight:700">{_top_name}</div>'
-                f'<div style="color:{_top_color};font-size:9px">{_top_sign}${abs(_top_val):,.0f}M</div>'
-                f'</div>'
-                f'</div>',
-                unsafe_allow_html=True
+        if current_price and current_price > 0 and "strike" in df.columns:
+            df["_delta_proxy"] = df.apply(
+                lambda r: abs(_bs_delta(current_price, r.get("strike", current_price), T_approx, r_risk_free, max(r.get("impliedVolatility", 0.2), 0.01), side)), axis=1
             )
+        else:
+            df["_delta_proxy"] = 0.5
+
+        df["_score"] = (df["_norm_voi"] * w1 + df["_iv_pct"] * w2 - (df["_delta_proxy"] - 0.5).abs() * w3)
+
+        rows = []
+        for _, r in df.iterrows():
+            rows.append({
+                "strike": float(r.get("strike", 0)),
+                "lastPrice": float(r.get("lastPrice", 0)),
+                "bid": float(r.get("bid", 0)),
+                "ask": float(r.get("ask", 0)),
+                "volume": int(r.get("volume", 0)),
+                "openInterest": int(r.get("openInterest", 0)),
+                "iv": float(r.get("impliedVolatility", 0)),
+                "voi": round(float(r.get("_voi", 0)), 2),
+                "score": round(float(r.get("_score", 0)), 4),
+                "side": side,
+            })
+        return rows
+
+    call_rows = _score_side(calls_df, "call")
+    put_rows = _score_side(puts_df, "put")
+
+    call_rows.sort(key=lambda r: r["score"], reverse=True)
+    put_rows.sort(key=lambda r: r["score"], reverse=True)
+    result["top_calls"] = call_rows[:2]
+    result["top_puts"] = put_rows[:2]
+
+    all_rows = call_rows + put_rows
+    if all_rows:
+        result["unusual"] = max(all_rows, key=lambda r: r["voi"])
+
+    return result
+
+def bs_price(S, K, T, r, sigma, side="call"):
+    """Calculate theoretical option price using Black-Scholes."""
+    try:
+        # Prevent math domain errors on edge cases
+        if T <= 0 or sigma <= 0 or S <= 0 or K <= 0: return 0.0
+        d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+        d2 = d1 - sigma * math.sqrt(T)
+        if side == "call":
+            p = S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
+        else:
+            p = K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+        return max(p, 0.0)
+    except Exception:
+        return 0.0
+
+def get_iv_newton(S, K, T, r, target_price, side="call"):
+    """Newton-Raphson root solver to back out Implied Volatility from market price."""
+    from scipy.optimize import newton
+    if target_price <= 0 or S <= 0 or K <= 0 or T <= 0: return 0.0
+    
+    def objective(sigma):
+        return bs_price(S, K, T, r, sigma, side) - target_price
+        
+    try:
+        # Newton solver with an initial guess of 20% IV
+        iv = newton(objective, x0=0.20, tol=1e-4, maxiter=50)
+        return float(max(iv, 0.0))
+    except Exception:
+        # Fallback to 0 if solver fails to converge (e.g. deep OTM)
+        return 0.0
+
+def bs_greeks_engine(S, K, T, r, sigma, side="call"):
+    """True Black-Scholes Greeks Engine computing Delta, Gamma, Theta locally for 'what-if' shifting."""
+    if S <= 0 or K <= 0 or T <= 0 or sigma <= 0:
+        return {"delta": 0.5 if side == "call" else -0.5, "gamma": 0.0, "theta": 0.0}
+    try:
+        d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+        d2 = d1 - sigma * math.sqrt(T)
+        N_d1 = norm.cdf(d1)
+        N_d2 = norm.cdf(d2)
+        n_d1 = norm.pdf(d1)
+        
+        delta = N_d1 if side == "call" else N_d1 - 1.0
+        gamma = n_d1 / (S * sigma * math.sqrt(T))
+        
+        theta_d1 = -(S * n_d1 * sigma) / (2 * math.sqrt(T))
+        if side == "call":
+            theta = (theta_d1 - r * K * math.exp(-r * T) * N_d2) / 365.0
+        else:
+            theta = (theta_d1 + r * K * math.exp(-r * T) * norm.cdf(-d2)) / 365.0
+            
+        return {"delta": round(delta, 4), "gamma": round(gamma, 6), "theta": round(theta, 4)}
+    except Exception:
+        return {"delta": 0.0, "gamma": 0.0, "theta": 0.0}
+
+@st.cache_data(ttl=21600)
+def get_finra_short_volume(ticker):
+    """Free Short Volume Data via FINRA/yfinance fallback."""
+    try:
+        t = yf.Ticker(ticker)
+        i = t.fast_info
+        # Attempt to get short data via ticker info
+        info = t.info
+        s_pct = info.get("shortPercentOfFloat", 0)
+        s_shares = info.get("sharesShort", 0)
+        s_ratio = info.get("shortRatio", 0)
+        if s_pct or s_shares:
+            return {
+                "short_pct_float": round(float(s_pct)*100, 2) if s_pct else 0,
+                "short_shares": s_shares,
+                "days_to_cover": s_ratio
+            }
+    except Exception:
+        pass
+    return None
+
+@st.cache_data(ttl=3600)
+def stat_arb_screener(pairs=None):
+    """Statistical Arbitrage Screener using Engle-Granger Cointegration & OLS Half-Life."""
+    try:
+        import statsmodels.api as sm
+        from statsmodels.tsa.stattools import coint
+        import numpy as np
+    except ImportError:
+        return None
+        
+    if not pairs:
+        pairs = [("GLD", "GDX"), ("XOM", "CVX"), ("JPM", "BAC"), ("QQQ", "XLK"), ("SPY", "TLT")]
+    
+    results = []
+    end = datetime.today()
+    start = end - timedelta(days=252)
+    
+    for t1, t2 in pairs:
+        try:
+            stk1 = yf.download(t1, start=start, end=end, progress=False)["Close"].dropna()
+            stk2 = yf.download(t2, start=start, end=end, progress=False)["Close"].dropna()
+            if isinstance(stk1, pd.DataFrame): stk1 = stk1.iloc[:, 0]
+            if isinstance(stk2, pd.DataFrame): stk2 = stk2.iloc[:, 0]
+            
+            df = pd.DataFrame({t1: stk1, t2: stk2}).dropna()
+            if len(df) < 100:
+                continue
+                
+            # Engle-Granger Cointegration Test
+            score, pvalue, _ = coint(df[t1], df[t2])
+            
+            # OLS for Hedge Ratio (Beta)
+            Y = df[t1]
+            X = sm.add_constant(df[t2])
+            model = sm.OLS(Y, X).fit()
+            beta = model.params.iloc[1]
+            
+            # Spread = Y - beta * X
+            spread = df[t1] - beta * df[t2]
+            mean_spread = spread.mean()
+            std_spread = spread.std()
+            z_score = (spread.iloc[-1] - mean_spread) / std_spread
+            
+            # Ornstein-Uhlenbeck Process for Half-Life
+            spread_lag = spread.shift(1).dropna()
+            spread_diff = spread.diff().dropna()
+            lag_with_const = sm.add_constant(spread_lag)
+            ou_model = sm.OLS(spread_diff, lag_with_const).fit()
+            ou_lambda = -ou_model.params.iloc[1]
+            half_life = np.log(2) / ou_lambda if ou_lambda > 0 else float('inf')
+            
+            signal = "Neutral"
+            if z_score < -2: signal = "Long T1 / Short T2"
+            elif z_score > 2: signal = "Short T1 / Long T2"
+            elif z_score < -1: signal = "Leaning Long T1"
+            elif z_score > 1: signal = "Leaning Short T1"
+            
+            results.append({
+                "t1": t1, "t2": t2,
+                "pvalue": round(float(pvalue), 4),
+                "zscore": round(float(z_score), 2),
+                "half_life": round(float(half_life), 1),
+                "beta": round(float(beta), 3),
+                "coint": pvalue < 0.05,
+                "signal": signal
+            })
+        except Exception:
+            continue
+            
+    if results:
+        results.sort(key=lambda x: abs(x["zscore"]), reverse=True)
+        return results
+    return None
+
+@st.cache_data(ttl=600)
+def sector_etfs():
+    S = {"Technology": "XLK", "Financials": "XLF", "Energy": "XLE", "Healthcare": "XLV",
+         "Consumer Staples": "XLP", "Utilities": "XLU", "Consumer Discretionary": "XLY", "Materials": "XLB",
+         "Communication Services": "XLC", "Real Estate": "XLRE", "Industrials": "XLI"}
+    rows = []
+    for name, tkr in S.items():
+        q = yahoo_quote(tkr)
+        if q: rows.append({"Sector": name, "ETF": tkr, "Price": q["price"], "Pct": q["pct"]})
+    return pd.DataFrame(rows)
+
+@st.cache_data(ttl=300)
+def top_movers():
+    UNIVERSE = [
+        "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","AVGO","ORCL","CRM",
+        "AMD","INTC","QCOM","TXN","ADI","AMAT","LRCX","KLAC","MRVL","SNPS","CDNS",
+        "ADBE","INTU","NOW","PANW","CRWD","ZS","FTNT","ANSS","EPAM",
+        "JPM","BAC","WFC","GS","MS","BLK","C","AXP","COF","PGR",
+        "ICE","CME","SPGI","MCO","V","MA","PYPL","FIS","FISV","WEX",
+        "UNH","JNJ","LLY","ABBV","MRK","TMO","ABT","PFE","DHR","BMY",
+        "HD","MCD","NKE","LOW","BKNG","TJX","SBUX","MAR",
+        "WMT","PG","KO","PEP","PM","MO","CL","GIS","KHC","KMB",
+        "GE","RTX","CAT","HON","UNP","LMT","DE","WM","NSC","ITW",
+        "XOM","CVX","COP","SLB","EOG","PSX","MPC","OXY","VLO","HAL",
+        "LIN","APD","ECL","SHW","NEM","FCX","NUE","VMC","ALB","MOS",
+        "PLD","AMT","CCI","EQIX","PSA","SPG","WELL","O","DLR","AVB",
+        "NEE","DUK","SO","AEP","D","EXC","PCG","SRE","XEL","CEG",
+    ]
+    seen = set()
+    UNIVERSE = [x for x in UNIVERSE if not (x in seen or seen.add(x))]
+
+    try:
+        raw_results = run_async(_fetch_yahoo_quotes_async(UNIVERSE))
+        results = [q for q in raw_results if isinstance(q, dict) and q]
+        sorted_q = sorted(results, key=lambda x: x["pct"], reverse=True)
+        return sorted_q[:10], sorted_q[-10:]
+    except Exception as e:
+        logger.error({"error": str(e)}, "Top Movers Error")
+        return [], []
+
+
+def calc_stock_fear_greed():
+    """5-signal Fear & Greed: VIX, Momentum, Safe Haven, PCR, Junk Demand."""
+    try:
+        scores = []
+
+        # --- Signal 1: VIX Level (market volatility) ---
+        v = yahoo_quote("^VIX")
+        if v:
+            vix = v["price"]
+            # VIX 10=100 (extreme greed), VIX 40=0 (extreme fear), linear
+            vix_score = max(0, min(100, 100 - (vix - 10) / 30 * 100))
+            scores.append(("VIX", vix_score))
+
+        # --- Signal 2: Market Momentum (SPY vs 125-day MA) ---
+        try:
+            h = yf.Ticker("SPY").history(period="7mo")
+            if len(h) >= 125:
+                current = h["Close"].iloc[-1]
+                ma125 = h["Close"].iloc[-125:].mean()
+                # How far above/below MA, mapped 0-100
+                pct_above = (current / ma125 - 1) * 100
+                mom_score = max(0, min(100, 50 + pct_above * 5))
+                scores.append(("Momentum", mom_score))
         except Exception:
             pass
 
+        # --- Signal 3: Safe Haven Demand (TLT vs SPY 20-day relative perf) ---
+        try:
+            tlt = yahoo_quote("TLT")
+            spy = yahoo_quote("SPY")
+            if tlt and spy:
+                # Positive TLT outperformance = fear; underperformance = greed
+                relative = tlt["pct"] - spy["pct"]
+                # TLT outperforms by >1% → fear (score 0-30); underperforms → greed (70-100)
+                sh_score = max(0, min(100, 50 - relative * 15))
+                scores.append(("SafeHaven", sh_score))
+        except Exception:
+            pass
+
+        # --- Signal 4: Put/Call Ratio (equity options) ---
+        try:
+            # Use SPY options PCR as proxy
+            t = yf.Ticker("SPY")
+            opts = t.options
+            if opts:
+                chain = t.option_chain(opts[0])
+                call_vol = chain.calls["volume"].sum()
+                put_vol = chain.puts["volume"].sum()
+                pcr = put_vol / call_vol if call_vol > 0 else 1.0
+                # PCR 0.5 = extreme greed (100), PCR 1.5 = extreme fear (0)
+                pcr_score = max(0, min(100, (1.5 - pcr) / 1.0 * 100))
+                scores.append(("PCR", pcr_score))
+        except Exception:
+            pass
+
+        # --- Signal 5: Junk Bond Demand (HYG vs LQD spread proxy) ---
+        try:
+            hyg = yahoo_quote("HYG")
+            lqd = yahoo_quote("LQD")
+            if hyg and lqd:
+                # HYG outperforming LQD = risk-on = greed
+                spread = hyg["pct"] - lqd["pct"]
+                junk_score = max(0, min(100, 50 + spread * 20))
+                scores.append(("Junk", junk_score))
+        except Exception:
+            pass
+
+        if not scores:
+            return None, None
+
+        # Equal-weight composite
+        total = sum(s for _, s in scores) / len(scores)
+        score = int(total)
+
+        if score >= 75:   label = "Extreme Greed"
+        elif score >= 55: label = "Greed"
+        elif score >= 45: label = "Neutral"
+        elif score >= 25: label = "Fear"
+        else:             label = "Extreme Fear"
+
+        return score, label
+    except Exception:
+        return None, None
+
+def market_snapshot_str():
+    try:
+        pst = pytz.timezone("US/Pacific")
+        now_str = datetime.now(pytz.utc).astimezone(pst).strftime("%A, %B %d, %Y %H:%M PST")
+        spx_q  = yahoo_quote("^GSPC")
+        spy_q  = yahoo_quote("SPY")
+        qs     = multi_quotes(["QQQ", "IWM", "DX-Y.NYB", "GLD", "TLT", "BTC-USD", "CL=F"])
+        v      = vix_price()
+
+        parts = []
+        if spx_q: parts.append(f"SPX: {spx_q['price']:,.2f} ({spx_q['pct']:+.2f}%)")
+        if spy_q: parts.append(f"SPY: ${spy_q['price']:,.2f} ({spy_q['pct']:+.2f}%)")
+        parts += [f"{q['ticker']}: ${q['price']:,.2f} ({q['pct']:+.2f}%)" for q in qs]
+        if v: parts.append(f"VIX: {v}")
+
+        prices = " | ".join(parts)
+        return "CURRENT DATE/TIME: " + now_str + "\nLIVE MARKET DATA: " + prices
+    except Exception:
+        return ""
+
+
+@st.cache_data(ttl=300)
+def build_brief_context():
+    """Assembles the enriched context for /brief and /geo."""
+    GEO_QUERY = (
+        "war OR strike OR attack OR sanctions OR geopolitical OR crisis "
+        "OR central bank OR interest rate OR oil OR tariff OR embargo "
+        "OR Israel OR Iran OR Hamas OR Hezbollah OR Ukraine OR Russia "
+        "OR Taiwan OR China OR Red Sea OR Houthi OR Gaza OR nuclear "
+        "OR missile OR airstrike OR invasion OR ceasefire"
+    )
+
+    def _fetch_geo():
+        try:
+            r = requests.get(
+                "https://api.gdeltproject.org/api/v2/doc/doc",
+                params={"query": GEO_QUERY + " sourcelang:english", "mode": "artlist",
+                        "maxrecords": 20, "format": "json", "timespan": "72h"},
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"},
+                timeout=8,
+            )
+            if r.status_code != 200: return []
+            arts = [a for a in r.json().get("articles", []) if _is_english(a.get("title", ""))]
+            lines, seen = [], set()
+            for a in arts:
+                title = a.get("title", "").strip()
+                if not title or title in seen: continue
+                seen.add(title)
+                domain = a.get("domain", "")
+                sd = a.get("seendate", "")
+                date_str = f"{sd[:4]}-{sd[4:6]}-{sd[6:8]}" if sd and len(sd) >= 8 else ""
+                lines.append(f"  • [{date_str}] {title} ({domain})")
+            return lines
+        except Exception:
+            return []
+
+    # Simple sequential wait since we got rid of ThreadPoolExecutor entirely
+    base = market_snapshot_str()
+    geo_headlines = _fetch_geo()
+
+    if geo_headlines:
+        headlines_block = "LIVE GEOPOLITICAL & MACRO HEADLINES (last 72h, via GDELT):\n" + "\n".join(geo_headlines[:20])
     else:
-        st.markdown(
-            '<p style="color:#555;font-family:monospace;font-size:11px">'
-            'ETF flow data unavailable. Both Farside and yfinance sources failed.</p>',
-            unsafe_allow_html=True
-        )
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-    st.markdown('<div class="bb-ph">🐋 WHALE FLOWS — LARGE TRADES (≥$500K) + EXCHANGE NETFLOW</div>', unsafe_allow_html=True)
+        headlines_block = "LIVE GEO HEADLINES: unavailable (GDELT timeout — use model knowledge for recent conflicts)"
 
-    whale_col, exch_col = st.columns([3, 2])
+    try:
+        macro_qs = multi_quotes(["^TNX", "^TYX", "DX-Y.NYB", "GC=F", "CL=F", "TLT", "GLD", "UUP", "HYG", "LQD"])
+        macro_lines = []
+        labels = {"^TNX": "10Y Yield", "^TYX": "30Y Yield", "DX-Y.NYB": "DXY",
+                  "GC=F": "Gold", "CL=F": "WTI Crude", "TLT": "TLT (20Y Bond)",
+                  "GLD": "GLD ETF", "UUP": "Dollar ETF", "HYG": "HY Credit", "LQD": "IG Credit"}
+        for q in macro_qs:
+            lbl = labels.get(q["ticker"], q["ticker"])
+            macro_lines.append(f"  {lbl}: {q['price']:,.2f} ({q['pct']:+.2f}%)")
+        macro_block = "MACRO & RATES DATA (for trade context):\n" + "\n".join(macro_lines)
+    except Exception:
+        macro_block = ""
 
-    with whale_col:
-        whale_asset = st.radio("Asset", ["BTCUSDT", "ETHUSDT"], horizontal=True, key="whale_asset")
-        with st.spinner("Loading whale trades…"):
-            whales = get_whale_trades(whale_asset)
-        if whales:
-            total_buy = sum(t["usd"] for t in whales if t["side"] == "BUY")
-            total_sell = sum(t["usd"] for t in whales if t["side"] == "SELL")
-            net = total_buy - total_sell
-            net_c = "#00CC44" if net >= 0 else "#FF4444"
-            net_lbl = "NET BUY" if net >= 0 else "NET SELL"
-            st.markdown(
-                f'<div style="display:flex;gap:18px;margin-bottom:8px;font-family:monospace;font-size:12px">'
-                f'<span style="color:#00CC44;font-weight:700">BUY: ${total_buy:,.0f}</span>'
-                f'<span style="color:#FF4444;font-weight:700">SELL: ${total_sell:,.0f}</span>'
-                f'<span style="color:{net_c};font-weight:700">{net_lbl}: ${abs(net):,.0f}</span>'
-                f'</div>', unsafe_allow_html=True)
-            hdr = ('<div style="display:grid;grid-template-columns:70px 55px 100px 110px 100px;gap:6px;'
-                   'padding:4px 8px;border-bottom:1px solid #FF6600;font-family:monospace;'
-                   'font-size:9px;color:#FF6600;letter-spacing:1px">'
-                   '<span>TIME</span><span>SIDE</span><span>AMOUNT</span><span>USD VALUE</span><span>PRICE</span></div>')
-            st.markdown(hdr, unsafe_allow_html=True)
-            for t in whales:
-                sc = "#00CC44" if t["side"] == "BUY" else "#FF4444"
-                st.markdown(
-                    f'<div style="display:grid;grid-template-columns:70px 55px 100px 110px 100px;gap:6px;'
-                    f'padding:4px 8px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:12px">'
-                    f'<span style="color:#888">{t["time"]}</span>'
-                    f'<span style="color:{sc};font-weight:700">{t["side"]}</span>'
-                    f'<span style="color:#FFF">{t["qty"]:,.4f}</span>'
-                    f'<span style="color:{sc};font-weight:600">${t["usd"]:,.0f}</span>'
-                    f'<span style="color:#888">${t["price"]:,.2f}</span></div>', unsafe_allow_html=True)
-        else:
-            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No whale trades detected in recent window.</p>', unsafe_allow_html=True)
+    sections = [base, headlines_block]
+    if macro_block: sections.append(macro_block)
+    return "\n\n".join(s for s in sections if s)
 
-    with exch_col:
-        st.markdown('<div style="color:#FF6600;font-size:10px;letter-spacing:1px;margin-bottom:6px;font-family:monospace">EXCHANGE BTC VOLUME (24H)</div>', unsafe_allow_html=True)
-        with st.spinner("Loading exchanges…"):
-            exchanges = get_exchange_netflow()
-        if exchanges:
-            names = [e["name"][:15] for e in exchanges]
-            vols = [e["btc_vol_24h"] for e in exchanges]
-            trusts = [e["trust_score"] for e in exchanges]
-            colors = ["#FF6600" if t >= 8 else "#AA3300" if t >= 5 else "#442200" for t in trusts]
-            fig_ex = dark_fig(340)
-            fig_ex.add_trace(go.Bar(
-                x=vols, y=names, orientation="h",
-                marker=dict(color=colors, line=dict(width=0)),
-                text=[f"{v:,.0f} BTC (Trust:{t})" for v, t in zip(vols, trusts)],
-                textposition="outside",
-                textfont=dict(size=9, color="#FF8C00"),
-            ))
-            fig_ex.update_layout(
-                margin=dict(l=0, r=100, t=10, b=0), height=340,
-                xaxis=dict(showgrid=False, color="#444"),
-                yaxis=dict(autorange="reversed", tickfont=dict(size=10, color="#CCC")),
-            )
-            st.plotly_chart(fig_ex, width="stretch")
-        else:
-            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Exchange data unavailable.</p>', unsafe_allow_html=True)
-
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-    st.markdown('<div class="bb-ph">💥 LIQUIDATION HEATMAP + CRYPTO RISK DASHBOARD</div>', unsafe_allow_html=True)
-
-    liq_col, risk_col = st.columns([3, 2])
-
-    with liq_col:
-        with st.spinner("Loading liquidations…"):
-            liqs = get_liquidations()
-        if liqs:
-            coins_l = list(liqs.keys())
-            long_vals = [liqs[c]["long_liq"] / 1e6 for c in coins_l]
-            short_vals = [liqs[c]["short_liq"] / 1e6 for c in coins_l]
-            fig_liq = dark_fig(280)
-            fig_liq.add_trace(go.Bar(name="Long Liqs", x=coins_l, y=long_vals,
-                                     marker_color="#FF4444", text=[f"${v:.1f}M" for v in long_vals],
-                                     textposition="outside", textfont=dict(size=9, color="#FF4444")))
-            fig_liq.add_trace(go.Bar(name="Short Liqs", x=coins_l, y=short_vals,
-                                     marker_color="#00CC44", text=[f"${v:.1f}M" for v in short_vals],
-                                     textposition="outside", textfont=dict(size=9, color="#00CC44")))
-            fig_liq.update_layout(
-                barmode="group", margin=dict(l=0, r=0, t=30, b=0), height=280,
-                title=dict(text="LIQUIDATIONS ($M) — LONG vs SHORT", font=dict(size=11, color="#FF6600"), x=0),
-                xaxis=dict(color="#666"), yaxis=dict(showgrid=False, color="#444"),
-                legend=dict(font=dict(size=9, color="#888"), bgcolor="rgba(0,0,0,0)"),
-            )
-            st.plotly_chart(fig_liq, width="stretch")
-        else:
-            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Liquidation data unavailable.</p>', unsafe_allow_html=True)
-
-        with st.spinner("Loading open interest…"):
-            oi_data = get_open_interest()
-        if oi_data:
-            oi_coins = [o["symbol"] for o in oi_data]
-            oi_vals = [o["oi_usd"] / 1e9 for o in oi_data]
-            fig_oi = dark_fig(250)
-            fig_oi.add_trace(go.Bar(
-                x=oi_coins, y=oi_vals,
-                marker_color="#FF8C00",
-                text=[f"${v:.2f}B" for v in oi_vals],
-                textposition="outside",
-                textfont=dict(size=9, color="#FF8C00"),
-            ))
-            fig_oi.update_layout(
-                margin=dict(l=0, r=0, t=30, b=0), height=250,
-                title=dict(text="OPEN INTEREST ($B)", font=dict(size=11, color="#FF6600"), x=0),
-                xaxis=dict(color="#666"), yaxis=dict(showgrid=False, color="#444"),
-            )
-            st.plotly_chart(fig_oi, width="stretch")
-
-    with risk_col:
-        with st.spinner("Loading funding rates…"):
-            funding = get_funding_rates()
-        if funding:
-            st.markdown(
-                '<div style="display:grid;grid-template-columns:55px 75px 80px 100px;gap:6px;'
-                'padding:4px 8px;border-bottom:1px solid #FF6600;font-family:monospace;'
-                'font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
-                '<span>COIN</span><span>RATE 8H</span><span>RATE ANN</span><span>SIGNAL</span></div>',
-                unsafe_allow_html=True)
-            for f in funding:
-                rate = f["rate_pct"]
-                if rate > 0.05: sig, sig_c = "OVER-LONG", "#FF4444"
-                elif rate > 0.01: sig, sig_c = "LONG SKEW", "#FF8C00"
-                elif rate < -0.05: sig, sig_c = "OVER-SHORT", "#00CC44"
-                elif rate < -0.01: sig, sig_c = "SHORT SKEW", "#4488FF"
-                else: sig, sig_c = "NEUTRAL", "#666"
-                rc = "#00CC44" if rate < 0 else "#FF4444" if rate > 0.03 else "#FF8C00"
-                st.markdown(
-                    f'<div style="display:grid;grid-template-columns:55px 75px 80px 100px;gap:6px;'
-                    f'padding:5px 8px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:12px">'
-                    f'<span style="color:#FF6600;font-weight:700">{f["symbol"]}</span>'
-                    f'<span style="color:{rc};font-weight:600">{rate:+.4f}%</span>'
-                    f'<span style="color:#888">{f["rate_ann"]:+.1f}%</span>'
-                    f'<span style="color:{sig_c};font-weight:700;font-size:10px">{sig}</span></div>',
-                    unsafe_allow_html=True)
-
-            avg_rate = sum(f["rate_pct"] for f in funding) / len(funding) if funding else 0
-            if avg_rate > 0.03: agg_sig, agg_c, agg_bg = "⚠️ MARKET OVER-LEVERAGED LONG", "#FF4444", "#1A0000"
-            elif avg_rate > 0.005: agg_sig, agg_c, agg_bg = "📊 MILD LONG BIAS", "#FF8C00", "#0A0500"
-            elif avg_rate < -0.03: agg_sig, agg_c, agg_bg = "⚠️ MARKET OVER-LEVERAGED SHORT", "#00CC44", "#001A00"
-            elif avg_rate < -0.005: agg_sig, agg_c, agg_bg = "📊 MILD SHORT BIAS", "#4488FF", "#000A1A"
-            else: agg_sig, agg_c, agg_bg = "✅ NEUTRAL — NO EXTREME POSITIONING", "#888", "#0A0A0A"
-            st.markdown(
-                f'<div style="background:{agg_bg};border:1px solid {agg_c};border-left:4px solid {agg_c};'
-                f'padding:10px 14px;margin:10px 0;font-family:monospace;font-size:12px;color:{agg_c};font-weight:700">'
-                f'{agg_sig}<br><span style="font-size:10px;font-weight:400;color:#888">Avg Funding: {avg_rate:+.4f}%</span></div>',
-                unsafe_allow_html=True)
-
-            total_liq = sum(liqs[c]["total"] for c in liqs) if liqs else 0
-            btc_oi = next((o["oi_usd"] for o in oi_data if o["symbol"] == "BTC"), 0) if oi_data else 0
-
-            risk_factors = 0
-            if abs(avg_rate) > 0.03: risk_factors += 1
-            if total_liq > 50_000_000: risk_factors += 1
-            if btc_oi > 10_000_000_000: risk_factors += 1
-
-            if risk_factors >= 2: risk_lvl, risk_c = "HIGH", "#FF4444"
-            elif risk_factors == 1: risk_lvl, risk_c = "MEDIUM", "#FF8C00"
-            else: risk_lvl, risk_c = "LOW", "#00CC44"
-
-            st.markdown(
-                f'<div style="background:#0A0A0A;border:1px solid {risk_c};border-left:4px solid {risk_c};'
-                f'padding:14px 16px;margin:8px 0;font-family:monospace">'
-                f'<div style="color:{risk_c};font-size:14px;font-weight:700;letter-spacing:1px;margin-bottom:8px">'
-                f'🛡️ CRYPTO RISK LEVEL: {risk_lvl}</div>'
-                f'<div style="font-size:11px;color:#888;line-height:1.8">'
-                f'Funding: <span style="color:{"#FF4444" if abs(avg_rate)>0.03 else "#00CC44"}">{"ELEVATED" if abs(avg_rate)>0.03 else "NORMAL"}</span><br>'
-                f'Liquidations: <span style="color:{"#FF4444" if total_liq>50e6 else "#00CC44"}">${total_liq/1e6:.1f}M {"(HIGH)" if total_liq>50e6 else "(NORMAL)"}</span><br>'
-                f'BTC OI: <span style="color:{"#FF4444" if btc_oi>10e9 else "#00CC44"}">${btc_oi/1e9:.1f}B {"(CROWDED)" if btc_oi>10e9 else "(HEALTHY)"}</span>'
-                f'</div></div>', unsafe_allow_html=True)
-        else:
-            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Funding rate data unavailable.</p>', unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════
-# TAB 5 — POLYMARKET
+# FRED
 # ════════════════════════════════════════════════════════════════════
-with tabs[5]:
-    st.markdown('<div class="bb-ph">🎲 POLYMARKET — PREDICTION INTELLIGENCE & UNUSUAL FLOW</div>', unsafe_allow_html=True)
 
-    with st.spinner("Loading Polymarket…"):
-        all_poly   = polymarket_events(100)
-        all_mkts   = polymarket_markets(100)
-
-    if not all_poly:
-        st.markdown('<div style="background:#0A0500;border-left:4px solid #FF6600;padding:12px;font-family:monospace;font-size:12px;color:#FF8C00">⚠️ Could not reach Polymarket API.</div>', unsafe_allow_html=True)
-    else:
-        from datetime import timezone as _tz
-        _now_utc = datetime.now(_tz.utc)
-        _two_months_ago = _now_utc - timedelta(days=60)
-
-        def is_active(e):
-            if e.get("closed", False) or e.get("resolved", False): return False
-            end = e.get("endDate","") or ""
-            if end:
-                try:
-                    ed = datetime.fromisoformat(end.replace("Z","+00:00"))
-                    if ed < _now_utc: return False
-                except: pass
-            return True
-
-        def is_recently_closed(e):
-            """Only show closed markets resolved within last 60 days."""
-            if not (e.get("closed", False) or e.get("resolved", False)): return False
-            end = e.get("endDate","") or e.get("resolvedAt","") or ""
-            if end:
-                try:
-                    ed = datetime.fromisoformat(end.replace("Z","+00:00"))
-                    return ed >= _two_months_ago
-                except: pass
-            return False
-
-        active_events = [e for e in all_poly if is_active(e)]
-        active_events.sort(key=lambda e: _safe_float(e.get("volume",0)), reverse=True)
-        top10 = active_events[:10]
-
-        poly_search = st.text_input("🔍 SEARCH ALL ACTIVE EVENTS", placeholder="Fed rate, oil, Taiwan, BTC…", key="ps")
-        if poly_search:
-            top10 = [e for e in active_events if poly_search.lower() in str(e.get("title","")).lower()][:10]
-
-        def _event_lead_prob(evt):
-            markets = evt.get("markets", [])
-            if not markets: return 50.0
-            best = 0.0
-            for mk in markets:
-                pp = _parse_poly_field(mk.get("outcomePrices", []))
-                p = _safe_float(pp[0]) if pp else 0.0
-                if p > best: best = p
-            return max(0.0, min(100.0, best * 100))
-
-        # ═══════════════════════════════════════════════════════
-        # SECTION 1: MISPRICING SCANNER (main alpha tool)
-        # ═══════════════════════════════════════════════════════
-        st.markdown('<div class="bb-ph" style="margin-top:4px">🔬 MISPRICING SCANNER — ALGORITHMIC ALPHA DETECTOR</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div style="color:#555;font-family:monospace;font-size:10px;margin-bottom:8px">'
-            'Finds markets where crowd pricing appears unreliable due to low liquidity, '
-            'herd behavior, or extreme probability with thin volume. '
-            '<b style="color:#FF8C00">FADE</b> = bet against crowd. '
-            '<b style="color:#00CC44">RIDE</b> = crowd is right. '
-            '<b style="color:#888">MONITOR</b> = watch for entry.</div>', unsafe_allow_html=True)
-
-        if all_mkts:
-            mispriced = score_poly_mispricing(all_mkts)
-            if mispriced:
-                # Table header
-                st.markdown(
-                    '<div style="display:grid;grid-template-columns:1fr 70px 70px 70px 70px 80px 80px;gap:6px;'
-                    'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;font-size:9px;'
-                    'color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
-                    '<span>MARKET</span><span>RAW %</span><span>ADJ %</span><span>LIQUIDITY</span>'
-                    '<span>ACTIVITY</span><span>EDGE</span><span>SIGNAL</span></div>',
-                    unsafe_allow_html=True)
-
-                for mp in mispriced[:12]:
-                    liq_c  = "#00CC44" if mp["liq_score"] >= 0.7 else ("#FF8C00" if mp["liq_score"] >= 0.4 else "#FF4444")
-                    raw_c  = "#00CC44" if mp["raw_yes"] >= 50 else "#FF4444"
-                    adj_c  = "#00CC44" if mp["adj_yes"] >= 50 else "#FF4444"
-                    edge_c = "#FF6600" if mp["edge"] > 0.15 else "#888"
-                    poly_link = f"https://polymarket.com/event/{mp['url']}" if mp['url'] else "#"
-                    spread_info = f' [{mp["spread"]}]' if mp["spread"] else ""
-                    st.markdown(
-                        f'<div style="display:grid;grid-template-columns:1fr 70px 70px 70px 70px 80px 80px;gap:6px;'
-                        f'padding:6px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px;align-items:center">'
-                        f'<span><a href="{poly_link}" target="_blank" style="color:#CCC;text-decoration:none">{_esc(mp["title"])}</a></span>'
-                        f'<span style="color:{raw_c};font-weight:700">{mp["raw_yes"]}%</span>'
-                        f'<span style="color:{adj_c}">{mp["adj_yes"]}%</span>'
-                        f'<span style="color:{liq_c};font-size:10px;font-weight:700">{mp["liq_tier"]}{spread_info}</span>'
-                        f'<span style="color:#888;font-size:10px">{mp["activity_ratio"]*100:.0f}%</span>'
-                        f'<span style="color:{edge_c};font-weight:700">{mp["edge"]:.3f}</span>'
-                        f'<span style="color:{mp["signal_color"]};font-weight:700;font-size:10px">{mp["signal"]}</span>'
-                        f'</div>', unsafe_allow_html=True)
-
-                # ── Mispricing score bar chart — color = signal color, labeled clearly
-                top8_mis = mispriced[:8]
-                mis_labels = [m["title"][:45]+"…" if len(m["title"])>45 else m["title"] for m in top8_mis]
-                mis_scores = [m["mispricing_score"]*1000 for m in top8_mis]
-                mis_colors = [m["signal_color"] for m in top8_mis]
-                mis_hover  = [f"Signal: {m['signal']}<br>Edge: {m['edge']:.3f}<br>Liq: {m['liq_tier']}<br>Raw: {m['raw_yes']}% → Adj: {m['adj_yes']}%"
-                              for m in top8_mis]
-
-                fig_mis = dark_fig(300)
-                fig_mis.add_trace(go.Bar(
-                    x=mis_scores, y=mis_labels, orientation="h",
-                    marker=dict(color=mis_colors, line=dict(width=0), opacity=0.85),
-                    hovertext=mis_hover, hoverinfo="text+x",
-                    # No textposition="outside" — use annotations instead to avoid overlap
-                ))
-                # Add signal labels as annotations at right edge of each bar
-                for i, (score, sig_label, color) in enumerate(zip(mis_scores, [m["signal"] for m in top8_mis], mis_colors)):
-                    fig_mis.add_annotation(
-                        x=score, y=i,
-                        text=f"  {sig_label}",
-                        showarrow=False,
-                        xanchor="left", yanchor="middle",
-                        font=dict(size=9, color=color, family="IBM Plex Mono"),
-                    )
-                fig_mis.update_layout(
-                    margin=dict(l=10, r=160, t=32, b=0), height=300,
-                    title=dict(text="MISPRICING SCORE — Color: 🔴 FADE · 🟢 RIDE · 🟠 MONITOR", font=dict(size=10, color="#FF6600"), x=0),
-                    xaxis=dict(showgrid=False, color="#333", title=None),
-                    yaxis=dict(autorange="reversed", tickfont=dict(size=9, color="#CCC"), title=None),
-                )
-                st.plotly_chart(fig_mis, width="stretch")
-
-        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-        # ═══════════════════════════════════════════════════════
-        # SECTION 2: DASHBOARD PANEL — Probability + Volume stacked vertically for readability
-        # ═══════════════════════════════════════════════════════
-        st.markdown('<div class="bb-ph">📊 TOP 10 ACTIVE EVENTS — PROBABILITY & VOLUME</div>', unsafe_allow_html=True)
-
-        if top10:
-            def _event_best_outcome(evt):
-                """Return (leading_outcome_name, probability_0_to_100) for the best sub-market."""
-                markets = evt.get("markets", [])
-                best_name, best_p = "YES", 50.0
-                for mk in markets:
-                    pp = _parse_poly_field(mk.get("outcomePrices", []))
-                    outcomes = _parse_poly_field(mk.get("outcomes", []))
-                    if pp:
-                        p = _safe_float(pp[0]) * 100
-                        if p > best_p:
-                            best_p = p
-                            # Use groupItemTitle (the multi-outcome participant name) if available
-                            candidate = mk.get("groupItemTitle") or (outcomes[0] if outcomes else None) or mk.get("question","")
-                            best_name = str(candidate)[:35] if candidate else "YES"
-                # Fallback to event-level outcomes
-                if best_p == 50.0:
-                    pp = _parse_poly_field(evt.get("outcomePrices", []))
-                    outcomes = _parse_poly_field(evt.get("outcomes", []))
-                    if pp and outcomes:
-                        p0 = _safe_float(pp[0]) * 100
-                        best_p = max(0.0, min(100.0, p0))
-                        best_name = str(outcomes[0])[:35] if outcomes else "YES"
-                return best_name, round(best_p, 1)
-
-            event_urls   = [poly_url(e) for e in top10]
-            event_titles = [e.get("title", e.get("question",""))[:38] for e in top10]
-            outcomes_data = [_event_best_outcome(e) for e in top10]
-            outcome_names = [o[0] for o in outcomes_data]
-            y_probs       = [o[1] for o in outcomes_data]
-            vols    = [_safe_float(e.get("volume",0))/1e6 for e in top10]
-            vols24  = [_safe_float(e.get("volume24hr",0))/1e6 for e in top10]  # in $M directly
-
-            # ── Chart 1: Probability — full width, showing event title + leading outcome
-            # Y-axis label = "Event title  →  Leading outcome"
-            prob_labels = [f"{t}  →  {o}" for t, o in zip(event_titles, outcome_names)]
-            prob_colors = ["#00CC44" if p >= 65 else "#FF8C00" if p >= 50 else "#FF4444" for p in y_probs]
-            prob_hover  = [f"<b>{e.get('title','')}</b><br>Leading: {o} @ {p:.1f}%<br><a href='{u}'>Open on Polymarket ↗</a>"
-                           for e, o, p, u in zip(top10, outcome_names, y_probs, event_urls)]
-
-            fig_prob = dark_fig(360)
-            fig_prob.add_trace(go.Bar(
-                x=y_probs, y=prob_labels, orientation="h",
-                marker=dict(color=prob_colors, line=dict(width=0), opacity=0.85),
-                hovertext=prob_hover, hoverinfo="text",
-            ))
-            for i, (p, c, o) in enumerate(zip(y_probs, prob_colors, outcome_names)):
-                fig_prob.add_annotation(
-                    x=p + 1.5, y=i,
-                    text=f"<b>{p:.0f}%</b>",
-                    showarrow=False, xanchor="left", yanchor="middle",
-                    font=dict(size=10, color=c, family="IBM Plex Mono"),
-                )
-            fig_prob.add_vline(x=50, line_dash="dash", line_color="#2A2A2A", line_width=1)
-            fig_prob.add_vline(x=70, line_dash="dot",  line_color="#1A1A1A", line_width=1)
-            fig_prob.update_layout(
-                margin=dict(l=10, r=80, t=36, b=10), height=360,
-                title=dict(text="LEADING OUTCOME PROBABILITY  (event → outcome name)",
-                           font=dict(size=10, color="#FF6600"), x=0),
-                xaxis=dict(range=[0, 115], showgrid=False, color="#333", showticklabels=False),
-                yaxis=dict(autorange="reversed", tickfont=dict(size=9, color="#AAA")),
-            )
-            st.plotly_chart(fig_prob, width="stretch")
-
-            # ── Clickable event link list under chart
-            st.markdown('<div style="font-family:monospace;font-size:9px;color:#444;margin-bottom:4px">CLICK TO OPEN ON POLYMARKET ↗</div>', unsafe_allow_html=True)
-            link_html = "".join(
-                f'<a href="{u}" target="_blank" style="display:inline-block;margin:2px 4px 2px 0;'
-                f'padding:3px 8px;background:#0D0D0D;border:1px solid #1A1A1A;color:#FF6600;'
-                f'font-family:monospace;font-size:10px;text-decoration:none;white-space:nowrap">'
-                f'{t[:30]}{"…" if len(t)>30 else ""} ↗</a>'
-                for t, u in zip(event_titles, event_urls)
-            )
-            st.markdown(f'<div style="line-height:2">{link_html}</div>', unsafe_allow_html=True)
-
-            st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
-
-            # ── Chart 2: Volume — both in $M, clean overlay
-            def _fmt_m(v):
-                if v >= 1.0:   return f"${v:.2f}M"
-                if v >= 0.001: return f"${v*1000:.0f}K"
-                return f"${v*1e6:.0f}"
-
-            vol_hover_t = [f"<b>{e.get('title','')}</b><br>Total Vol: {_fmt_m(v)}" for e, v in zip(top10, vols)]
-            vol_hover_h = [f"<b>{e.get('title','')}</b><br>24H Vol: {_fmt_m(v)}"   for e, v in zip(top10, vols24)]
-
-            fig_vol = dark_fig(360)
-            fig_vol.add_trace(go.Bar(
-                name="Total Volume", x=vols, y=event_titles, orientation="h",
-                marker=dict(color="#3D1500", line=dict(color="#662200", width=1)),
-                hovertext=vol_hover_t, hoverinfo="text",
-            ))
-            fig_vol.add_trace(go.Bar(
-                name="24H Volume", x=vols24, y=event_titles, orientation="h",
-                marker=dict(color="#FF6600", opacity=0.9, line=dict(width=0)),
-                hovertext=vol_hover_h, hoverinfo="text",
-            ))
-            # Annotations — only on bars wide enough to label
-            max_vol = max(vols) if vols else 1
-            for i, (tv, hv) in enumerate(zip(vols, vols24)):
-                if tv / max_vol > 0.08:
-                    fig_vol.add_annotation(
-                        x=tv / 2, y=i, text=_fmt_m(tv),
-                        showarrow=False, xanchor="center", yanchor="middle",
-                        font=dict(size=8, color="#FF8C00", family="IBM Plex Mono"),
-                    )
-                if hv > 0.001 and hv / max_vol > 0.02:
-                    fig_vol.add_annotation(
-                        x=hv, y=i, text=f"  {_fmt_m(hv)}",
-                        showarrow=False, xanchor="left", yanchor="middle",
-                        font=dict(size=8, color="#FFAA44", family="IBM Plex Mono"),
-                    )
-            fig_vol.update_layout(
-                barmode="overlay", margin=dict(l=10, r=100, t=36, b=10), height=360,
-                title=dict(text="VOLUME  ▓ Total ($M)  ▓ 24H Activity ($M)  — hover for details",
-                           font=dict(size=10, color="#FF6600"), x=0),
-                xaxis=dict(showgrid=False, color="#333", tickprefix="$", ticksuffix="M",
-                           tickfont=dict(size=8, color="#444")),
-                yaxis=dict(autorange="reversed", tickfont=dict(size=10, color="#CCC")),
-                legend=dict(font=dict(size=9, color="#888"), bgcolor="rgba(0,0,0,0)",
-                            orientation="h", x=0, y=1.06),
-            )
-            st.plotly_chart(fig_vol, width="stretch")
-
-        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-        # ═══════════════════════════════════════════════════════
-        # SECTION 3: EVENT CARDS + HOW-TO GUIDE
-        # ═══════════════════════════════════════════════════════
-        poly_col, guide_col = st.columns([3, 1])
-        with poly_col:
-            st.markdown(f'<div class="bb-ph">📋 TOP ACTIVE EVENTS ({len(active_events)} total active)</div>', unsafe_allow_html=True)
-            for e in top10:
-                st.markdown(render_poly_card(e), unsafe_allow_html=True)
-
-        with guide_col:
-            st.markdown("""<div style="background:#080808;border:1px solid #1A1A1A;padding:14px;font-family:monospace;font-size:10px;color:#888;line-height:2.0">
-<span style="color:#FF6600;font-weight:700">HOW TO TRADE</span><br><br>
-<span style="color:#FF4444">FADE YES</span><br>
-Low-liq + crowd piled in<br>
-→ Bet NO (buy cheap)<br><br>
-<span style="color:#00CC44">FADE NO</span><br>
-Low-liq + crowd fading<br>
-→ Bet YES (buy cheap)<br><br>
-<span style="color:#00CC44">RIDE YES</span><br>
-Deep market confirms high<br>
-probability → trend trade<br><br>
-<span style="color:#888">MONITOR</span><br>
-Mixed signals — wait<br>for volume confirmation<br><br>
-<span style="color:#FF6600">EDGE</span> = post-discount<br>deviation from 50/50<br>
-Higher = more asymmetric<br><br>
-<span style="color:#FF4444">ILLIQ</span> crowd unreliable<br>
-<span style="color:#FF8C00">THIN</span> use with caution<br>
-<span style="color:#888">MED</span> decent accuracy<br>
-<span style="color:#00CC44">DEEP</span> crowd is sharp<br><br>
-<span style="color:#444">⚠️ Crowd odds only.<br>Not financial advice.</span>
-</div>""", unsafe_allow_html=True)
+@st.cache_data(ttl=600)
+def fred_series(series_id, key, limit=36):
+    if not key: return None
+    try:
+        data = _fetch_robust_json("https://api.stlouisfed.org/fred/series/observations",
+            params={"series_id": series_id, "api_key": key, "sort_order": "desc",
+                    "limit": limit, "file_type": "json"}, timeout=10)
+        df = pd.DataFrame(data.get("observations", []))
+        df["value"] = pd.to_numeric(df["value"], errors="coerce")
+        df["date"] = pd.to_datetime(df["date"])
+        return df.dropna(subset=["value"]).sort_values("date")
+    except:
+        return None
 
 # ════════════════════════════════════════════════════════════════════
-# TAB 6 — GEO (lazy-loaded: only fetches data when user clicks in)
+# POLYMARKET
 # ════════════════════════════════════════════════════════════════════
-with tabs[6]:
-    if "geo_tab_active" not in st.session_state:
-        st.session_state.geo_tab_active = False
 
-    _geo_col_a, _geo_col_b = st.columns([4, 1])
-    with _geo_col_a:
-        if not st.session_state.geo_tab_active:
-            st.markdown(
-                '<div class="bb-ph">🌍 GEOPOLITICAL INTELLIGENCE</div>',
-                unsafe_allow_html=True,
-            )
-    with _geo_col_b:
-        if st.session_state.geo_tab_active:
-            if st.button("🔄 REFRESH DATA", key="geo_refresh", use_container_width=True):
-                # Clear cached geo data to force fresh fetch
-                from data_fetchers import (
-                    fetch_conflict_events_json, fetch_military_aircraft_json,
-                    fetch_satellite_positions_json, fetch_ais_vessels,
-                )
-                for fn in [fetch_conflict_events_json, fetch_military_aircraft_json,
-                           fetch_satellite_positions_json, fetch_ais_vessels]:
-                    fn.clear()
-        else:
-            if st.button("▶ LOAD GEO INTEL", key="geo_load", use_container_width=True):
-                st.session_state.geo_tab_active = True
-                st.rerun()
+@st.cache_data(ttl=300)
+def polymarket_events(limit=60):
+    try:
+        return _fetch_robust_json("https://gamma-api.polymarket.com/events",
+            params={"limit": limit, "order": "volume", "ascending": "false", "active": "true"}, timeout=10)
+    except:
+        return []
 
-    if st.session_state.geo_tab_active:
-        render_geo_tab()
+@st.cache_data(ttl=300)
+def polymarket_markets(limit=60):
+    try:
+        return _fetch_robust_json("https://gamma-api.polymarket.com/markets",
+            params={"limit": limit, "order": "volume24hr", "ascending": "false", "active": "true"}, timeout=10)
+    except:
+        return []
+
+def detect_unusual_poly(markets):
+    out = []
+    for m in markets:
+        try:
+            v24 = _safe_float(m.get("volume24hr", 0))
+            vtot = _safe_float(m.get("volume", 0))
+            if vtot > 0 and v24 / vtot > 0.38 and v24 > 5000: out.append(m)
+        except:
+            pass
+    return out[:6]
+
+def _parse_poly_field(field):
+    if not field: return []
+    if isinstance(field, str):
+        try: return json.loads(field)
+        except: return []
+    return field if isinstance(field, list) else []
+
 # ════════════════════════════════════════════════════════════════════
-# TAB 7 — EARNINGS TRACKER
+# CRYPTO
 # ════════════════════════════════════════════════════════════════════
-with tabs[7]:
-    st.markdown('<div class="bb-ph">📅 EARNINGS TRACKER — UPCOMING & RECENT</div>', unsafe_allow_html=True)
 
-    ec1, ec2 = st.columns([3,2])
-    with ec1:
-        st.markdown('<div class="bb-ph">UPCOMING EARNINGS CALENDAR</div>', unsafe_allow_html=True)
-        with st.spinner("Fetching earnings calendar (this may take 20-30s)…"):
-            _today_key = datetime.now().strftime("%Y-%m-%d")  # cache busts at midnight
-            earn_df = get_earnings_calendar(_today_key)
-        if earn_df.empty:
-            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No upcoming earnings found. Yahoo Finance may be rate-limiting. Try again shortly.</p>', unsafe_allow_html=True)
-        else:
-            today = datetime.now().date()
-            for _, row in earn_df.iterrows():
-                ed = row["EarningsDate"]
-                days = (ed - today).days  # can be negative (past), 0 (today), or positive (future)
-                if days == 0:
-                    badge, bc, bc_bg = "TODAY", "#FF6600", "rgba(255,102,0,0.08)"
-                elif days > 0 and days <= 1:
-                    badge, bc, bc_bg = "TOMORROW", "#00AAFF", "rgba(0,170,255,0.06)"
-                elif days > 0 and days < 7:
-                    badge, bc, bc_bg = f"IN {days}D", "#00AAFF", "rgba(0,170,255,0.04)"
-                elif days > 0:
-                    badge, bc, bc_bg = f"IN {days}D", "#555", "transparent"
-                elif days >= -3:
-                    badge, bc, bc_bg = "RECENT", "#888", "transparent"
+@st.cache_data(ttl=300)
+def fear_greed_crypto():
+    try:
+        d = _fetch_robust_json("https://api.alternative.me/fng/?limit=1", timeout=8)
+        return int(d["data"][0]["value"]), d["data"][0]["value_classification"]
+    except:
+        return None, None
+
+@st.cache_data(ttl=600)
+def crypto_markets():
+    try:
+        data = _fetch_robust_json("https://api.coingecko.com/api/v3/coins/markets",
+            params={"vs_currency": "usd", "order": "market_cap_desc", "per_page": 20,
+                    "page": 1, "price_change_percentage": "24h"}, timeout=15)
+        if isinstance(data, list):
+            return data
+    except:
+        return []
+
+@st.cache_data(ttl=600)
+def crypto_global():
+    try:
+        return _fetch_robust_json("https://api.coingecko.com/api/v3/global", timeout=8).get("data", {})
+    except:
+        return {}
+
+
+# ════════════════════════════════════════════════════════════════════
+# NEWS
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=600)
+def gdelt_news(query, max_rec=15):
+    endpoints = [
+        {"url": "https://api.gdeltproject.org/api/v2/doc/doc",
+         "params": {"query": query + " sourcelang:english", "mode": "artlist", "maxrecords": max_rec, "format": "json", "timespan": "72h"}},
+        {"url": "https://api.gdeltproject.org/api/v2/doc/doc",
+         "params": {"query": query, "mode": "artlist", "maxrecords": max_rec, "format": "json", "timespan": "168h"}},
+    ]
+    for ep in endpoints:
+        try:
+            data = _fetch_robust_json(ep["url"], params=ep["params"], timeout=8)
+            arts = data.get("articles", [])
+            if arts:
+                filtered = [a for a in arts if _is_english(a.get("title", ""))][:max_rec]
+                if filtered: return filtered
+        except Exception:
+            continue
+    return []
+
+@st.cache_data(ttl=300)
+def newsapi_headlines(key, query="stock market finance"):
+    if not key: return []
+    try:
+        return _fetch_robust_json("https://newsapi.org/v2/everything",
+            params={"q": query, "language": "en", "sortBy": "publishedAt", "pageSize": 10, "apiKey": key}, timeout=10).get("articles", [])
+    except:
+        return []
+
+@st.cache_data(ttl=300)
+def finnhub_news(key):
+    if not key: return []
+    try:
+        return _fetch_robust_json("https://finnhub.io/api/v1/news",
+            params={"category": "general", "token": key}, timeout=10)[:12]
+    except:
+        return []
+
+@st.cache_data(ttl=600)
+def finnhub_insider(ticker, key):
+    if not key: return []
+    try:
+        return _fetch_robust_json("https://finnhub.io/api/v1/stock/insider-transactions",
+            params={"symbol": ticker, "token": key}, timeout=10).get("data", [])[:15]
+    except:
+        return []
+
+@st.cache_data(ttl=1800)
+def finnhub_officers(ticker, key):
+    role_map = {}
+    if key:
+        try:
+            data = _fetch_robust_json("https://finnhub.io/api/v1/stock/executive",
+                params={"symbol": ticker, "token": key}, timeout=10)
+            for o in data.get("executive", []) or []:
+                name = str(o.get("name", "")).strip()
+                title = str(o.get("position", "") or o.get("title", "") or "")
+                if not name or not title: continue
+                name_upper = name.upper()
+                role_map[name_upper] = title
+                parts = name.split()
+                if len(parts) >= 2:
+                    last_first = (parts[-1] + " " + " ".join(parts[:-1])).upper()
+                    role_map[last_first] = title
+                    role_map[(parts[-1] + " " + parts[0]).upper()] = title
+        except:
+            pass
+
+    if not role_map:
+        try:
+            officers = yf.Ticker(ticker).info.get("companyOfficers", [])
+            for o in officers:
+                name = str(o.get("name", "")).strip()
+                title = str(o.get("title", "")).strip()
+                if not name or not title: continue
+                
+                clean_name = name.upper().replace(".", "").replace(",", "")
+                for pfx in ["MR ", "MS ", "MRS ", "DR ", "PROF "]:
+                    if clean_name.startswith(pfx):
+                        clean_name = clean_name[len(pfx):].strip()
+                role_map[clean_name] = title
+        except:
+            pass
+
+    return role_map
+
+
+# ════════════════════════════════════════════════════════════════════
+# EARNINGS
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=86400)
+def get_earnings_calendar(today_str=None):
+    MAJOR = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "JPM", "GS", "BAC",
+             "NFLX", "AMD", "INTC", "CRM", "ORCL", "V", "MA", "WMT", "XOM", "CVX", "UNH",
+             "JNJ", "PFE", "ABBV", "LLY", "BRK-B", "HD", "DIS", "SHOP", "PLTR", "SNOW"]
+    rows = []
+    for tkr in MAJOR:
+        try:
+            t = yf.Ticker(tkr)
+            info = t.info
+            cal = t.calendar
+            if cal is not None and not (cal.empty if hasattr(cal, "empty") else False):
+                if isinstance(cal, pd.DataFrame):
+                    if "Earnings Date" in cal.index:
+                        ed = cal.loc["Earnings Date"]
+                        ed = ed.iloc[0] if hasattr(ed, "iloc") else ed
+                        eps = float(cal.loc["EPS Estimate"].iloc[0]) if "EPS Estimate" in cal.index else None
+                    else:
+                        continue
+                elif isinstance(cal, dict):
+                    ed = cal.get("Earnings Date", [None])
+                    ed = ed[0] if isinstance(ed, list) else ed
+                    eps = cal.get("EPS Estimate", None)
                 else:
-                    continue  # skip anything older than 3 days
-                eps_str = f"${row['EPS Est']:.2f}" if row.get("EPS Est") is not None else "—"
-                ed_fmt = ed.strftime("%b %d") if hasattr(ed, "strftime") else str(ed)
-                company = str(row.get('Company',''))
-                sector = str(row.get('Sector','—'))
-                st.markdown(f"""<div class="earn-card" style="background:{bc_bg}">
-  <span class="earn-ticker">{row['Ticker']}</span>
-  <div style="min-width:0">
-    <div style="color:#CCCCCC;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{company}</div>
-    <div style="color:#FF6600;font-size:10px;margin-top:2px;letter-spacing:1px">{sector.upper()}</div>
-  </div>
-  <span style="color:{bc};font-size:10px;font-weight:700;letter-spacing:1px;white-space:nowrap">{badge}</span>
-  <span class="earn-date" style="white-space:nowrap">{ed_fmt}</span>
-  <span style="color:#888;font-size:11px;white-space:nowrap">EPS: <span style="color:#FFCC00;font-weight:700">{eps_str}</span></span>
-</div>""", unsafe_allow_html=True)
+                    continue
+                if ed is None: continue
+                rows.append({
+                    "Ticker": tkr,
+                    "Company": info.get("shortName", tkr)[:22],
+                    "EarningsDate": pd.to_datetime(ed).date(),
+                    "EPS Est": round(float(eps), 2) if eps else None,
+                    "Sector": info.get("sector", "—"), 
+                })
+        except:
+            pass
+    if not rows: return pd.DataFrame()
+    return pd.DataFrame(rows).dropna(subset=["EarningsDate"]).sort_values("EarningsDate")
 
-    with ec2:
-        st.markdown('<div class="bb-ph">📈 QUICK EARNINGS CHART</div>', unsafe_allow_html=True)
-        earn_tkr = st.text_input("Ticker for chart", placeholder="NVDA, AAPL…", key="ec")
-        if earn_tkr:
-            et = earn_tkr.upper().strip()
-            with st.spinner("Detecting exchange…"):
-                tv_sym_earn = get_ticker_exchange(et)
-            components.html(tv_chart(tv_sym_earn,320), height=325, scrolling=False)
-            try:
-                with st.spinner("Loading financials…"):
-                    fin_data = get_full_financials(et)
-                if fin_data:
-                    st.markdown('<div class="bb-ph" style="margin-top:10px">📊 QUARTERLY FINANCIALS</div>', unsafe_allow_html=True)
+# ════════════════════════════════════════════════════════════════════
+# 0DTE — ALPACA REST API 
+# ════════════════════════════════════════════════════════════════════
 
-                    # Header row
-                    quarters_sorted = sorted(fin_data.keys(), reverse=True)
-                    hdr_str = "".join(f'<span style="color:#FF6600;font-weight:700">{q}</span>' for q in quarters_sorted)
-                    st.markdown(
-                        f'<div style="display:grid;grid-template-columns:130px repeat({len(quarters_sorted)},1fr);'
-                        f'gap:6px;padding:5px 8px;border-bottom:1px solid #FF6600;font-family:monospace;font-size:10px;color:#FF6600;letter-spacing:1px">'
-                        f'<span>METRIC</span>{hdr_str}</div>', unsafe_allow_html=True)
+def _alpaca_headers():
+    try:
+        return {
+            "APCA-API-KEY-ID": st.secrets["ALPACA_API_KEY"],
+            "APCA-API-SECRET-KEY": st.secrets["ALPACA_SECRET_KEY"],
+            "Accept": "application/json",
+        }
+    except (KeyError, FileNotFoundError):
+        return None
 
-                    def _fmt_val(v, unit="M", decimals=1):
-                        if v is None: return '<span style="color:#444">—</span>'
-                        if unit == "B": v_disp = v / 1e9; suffix = "B"
-                        elif unit == "M": v_disp = v / 1e6; suffix = "M"
-                        elif unit == "%": return f'<span style="color:#CCC">{v:.1f}%</span>'
-                        else: return f'<span style="color:#CCC">{v:.2f}</span>'
-                        color = "#00CC44" if v >= 0 else "#FF4444"
-                        return f'<span style="color:{color};font-weight:600">{v_disp:,.{decimals}f}{suffix}</span>'
+@st.cache_data(ttl=30)
+def get_stock_snapshot(symbol="SPY"):
+    headers = _alpaca_headers()
+    if not headers: return None
+    try:
+        data = _fetch_robust_json(f"https://data.alpaca.markets/v2/stocks/{symbol}/snapshot", headers=headers, timeout=10)
+        latest_trade = data.get("latestTrade", {})
+        daily_bar = data.get("dailyBar", {})
+        minute_bar = data.get("minuteBar", {})
+        return {
+            "price": _safe_float(latest_trade.get("p")),
+            "vwap": _safe_float(daily_bar.get("vw")),
+            "open": _safe_float(daily_bar.get("o")),
+            "high": _safe_float(daily_bar.get("h")),
+            "low": _safe_float(daily_bar.get("l")),
+            "close": _safe_float(daily_bar.get("c")),
+            "volume": int(_safe_float(daily_bar.get("v"))),
+            "minute_vwap": _safe_float(minute_bar.get("vw")),
+        }
+    except Exception:
+        return None
 
-                    METRICS = [
-                        ("Revenue",      "revenue",       "B"),
-                        ("Gross Profit", "gross_profit",  "B"),
-                        ("Op. Income",   "op_income",     "B"),
-                        ("Net Income",   "net_income",    "B"),
-                        ("EBITDA",       "ebitda",        "B"),
-                        ("Free CF",      "free_cashflow", "B"),
-                        ("Op. CF",       "op_cashflow",   "B"),
-                        ("Gross Margin", "gross_margin",  "%"),
-                        ("Op. Margin",   "op_margin",     "%"),
-                        ("Net Margin",   "net_margin",    "%"),
-                        ("Total Debt",   "total_debt",    "B"),
-                        ("Cash",         "cash",          "B"),
-                        ("EPS (Dil.)",   "eps",           "raw"),
-                    ]
+def get_spx_metrics():
+    spy_snap = get_stock_snapshot("SPY")
+    try:
+        spx_q = yahoo_quote("^GSPC")
+        spx_price = round(spx_q["price"], 2) if spx_q and spx_q.get("price", 0) > 0 else None
+    except Exception:
+        spx_price = None
 
-                    for label, key, unit in METRICS:
-                        cells = "".join(
-                            f'<span style="text-align:right">{_fmt_val(fin_data.get(q, {}).get(key), unit)}</span>'
-                            for q in quarters_sorted
-                        )
-                        row_bg = "background:#050505;" if METRICS.index((label, key, unit)) % 2 == 0 else ""
-                        st.markdown(
-                            f'<div style="display:grid;grid-template-columns:130px repeat({len(quarters_sorted)},1fr);'
-                            f'gap:6px;padding:5px 8px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px;{row_bg}">'
-                            f'<span style="color:#888">{label}</span>{cells}</div>', unsafe_allow_html=True)
-            except Exception:
-                pass
+    if spy_snap:
+        spot = spx_price if spx_price else round(spy_snap["price"] * 10, 2)
+        return {
+            "spot": spot,
+            "vwap": round(spy_snap["vwap"] * 10, 2),
+            "open": round(spy_snap["open"] * 10, 2),
+            "high": round(spy_snap["high"] * 10, 2),
+            "low": round(spy_snap["low"] * 10, 2),
+            "volume": spy_snap["volume"],
+        }
+    elif spx_price:
+        return {"spot": spx_price, "vwap": spx_price, "open": 0, "high": 0, "low": 0, "volume": 0}
+    return None
 
-            # ── Stock-specific news ──
-            st.markdown('<div class="bb-ph" style="margin-top:10px">📰 NEWS — {}</div>'.format(et), unsafe_allow_html=True)
-            with st.spinner("Loading stock news…"):
-                stock_news = get_stock_news(
-                    et,
-                    finnhub_key=st.session_state.get("finnhub_key"),
-                    newsapi_key=st.session_state.get("newsapi_key"),
-                )
-            if stock_news:
-                for art in stock_news:
-                    st.markdown(render_news_card(art["title"], art["url"], art["source"], art["date"], "bb-news"), unsafe_allow_html=True)
+def _parse_strike_from_symbol(sym):
+    try: return int(sym[-8:]) / 1000.0
+    except Exception: return 0.0
+
+def _parse_type_from_symbol(sym):
+    try:
+        for i, ch in enumerate(sym):
+            if ch in ("C", "P") and i > 3:
+                return "call" if ch == "C" else "put"
+        return "unknown"
+    except Exception: return "unknown"
+
+@st.cache_resource(ttl=30)
+def fetch_0dte_chain(underlying="SPY"):
+    headers = _alpaca_headers()
+    if not headers: return [], "No Alpaca API keys configured"
+
+    snap = get_stock_snapshot(underlying)
+    if not snap or snap["price"] <= 0: return [], "Could not fetch spot price"
+    spot = snap["price"]
+    today_str = datetime.today().strftime("%Y-%m-%d")
+
+    try:
+        c_data = _fetch_robust_json("https://paper-api.alpaca.markets/v2/options/contracts", 
+                                    headers=headers, params={"underlying_symbols": underlying, "status": "active", "limit": 1000}, timeout=10)
+        dates = [c.get("expiration_date") for c in c_data.get("option_contracts", []) if c.get("expiration_date") and c.get("expiration_date") >= today_str]
+        if not dates: return [], "No active option contracts found"
+        target_expiry = sorted(list(set(dates)))[0]
+    except Exception as e:
+        return [], f"Error locating expiry: {str(e)}"
+
+    try:
+        url = f"https://data.alpaca.markets/v1beta1/options/snapshots/{underlying}"
+        params = {"feed": "indicative", "limit": 250, "expiration_date": target_expiry}
+        data = _fetch_robust_json(url, headers=headers, params=params, timeout=15)
+        snapshots = data.get("snapshots", {})
+        seen_tokens = set()
+        pages = 0
+
+        while data.get("next_page_token") and pages < 10:
+            token = data["next_page_token"]
+            if token in seen_tokens:
+                break
+            seen_tokens.add(token)
+            params["page_token"] = token
+            data = _fetch_robust_json(url, headers=headers, params=params, timeout=15)
+            snapshots.update(data.get("snapshots", {}))
+            pages += 1
+
+        chain = []
+        lower_bound, upper_bound = spot * 0.98, spot * 1.02
+
+        for sym, snap_data in snapshots.items():
+            greeks = snap_data.get("greeks", {})
+            quote = snap_data.get("latestQuote", {})
+            trade = snap_data.get("latestTrade", {})
+            strike = _parse_strike_from_symbol(sym)
+            opt_type = _parse_type_from_symbol(sym)
+
+            if strike <= 0 or strike < lower_bound or strike > upper_bound: continue
+            bid = _safe_float(quote.get("bp"))
+            ask = _safe_float(quote.get("ap"))
+            last = _safe_float(trade.get("p"))
+            mid = round((bid + ask) / 2, 2) if (bid + ask) > 0 else last
+            
+            # Use Newton-Raphson dynamically if mid price is available
+            r_rate = 0.045
+            T_val = 0.5 / 365.0  # Appx half a trading day for 0DTE flow
+            
+            calculated_iv = get_iv_newton(spot, strike, T_val, r_rate, mid, opt_type)
+            if calculated_iv > 0:
+                bs_override = bs_greeks_engine(spot, strike, T_val, r_rate, calculated_iv, opt_type)
+                final_iv = calculated_iv
+                final_delta = bs_override["delta"]
+                final_gamma = bs_override["gamma"]
+                final_theta = bs_override["theta"]
             else:
-                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No recent news found. Add Finnhub or NewsAPI key for richer coverage.</p>', unsafe_allow_html=True)
+                final_iv = _safe_float(snap_data.get("impliedVolatility"))
+                final_delta = _safe_float(greeks.get("delta"))
+                final_gamma = _safe_float(greeks.get("gamma"))
+                final_theta = _safe_float(greeks.get("theta"))
+
+            chain.append({
+                "symbol": sym, "strike": strike, "type": opt_type,
+                "bid": bid, "ask": ask, "mid": mid, "last": last,
+                "iv": final_iv,
+                "delta": final_delta, "gamma": final_gamma,
+                "theta": final_theta, "vega": _safe_float(greeks.get("vega")),
+                "oi": int(_safe_float(snap_data.get("openInterest", 0))), "volume": int(_safe_float(trade.get("s", 0))),
+            })
+        chain.sort(key=lambda x: x["strike"])
+        return chain, "OK"
+    except Exception as e:
+        return [], f"Error: {str(e)}"
+
+def compute_gex_profile(chain, spot):
+    """Local DuckDB Time-Series Engine for instantaneous querying of aggregations."""
+    gex = {}
+    if spot <= 0 or not chain: return gex
+    
+    try:
+        import duckdb
+        import pandas as pd
+        df = pd.DataFrame(chain)
+        if "gamma" not in df.columns or "oi" not in df.columns or "strike" not in df.columns:
+            raise ValueError("Missing columns")
+            
+        con = duckdb.connect(database=':memory:')
+        con.execute("CREATE TABLE options_chain AS SELECT * FROM df")
+        
+        query = f"""
+            SELECT strike, 
+                   SUM(CASE WHEN type = 'call' THEN 1 ELSE -1 END * oi * 100 * ABS(gamma) * POWER({spot}, 2) * 0.01 / 1000000) as gex
+            FROM options_chain
+            GROUP BY strike
+            ORDER BY strike
+        """
+        res = con.execute(query).df()
+        gex = {row['strike']: row['gex'] for _, row in res.iterrows()}
+        return gex
+    except Exception as e:
+        logger.error({"error": str(e)}, "DuckDB Engine Error")
+        # fallback
+        for opt in chain:
+            k = opt["strike"]
+            oi = opt.get("oi", 0)
+            gamma = abs(opt.get("gamma", 0))
+            raw_gex = oi * 100 * gamma * (spot ** 2) * 0.01
+            sign = 1.0 if opt["type"] == "call" else -1.0
+            gex[k] = gex.get(k, 0) + sign * raw_gex / 1_000_000
+        return dict(sorted(gex.items()))
+
+def find_gamma_flip(gex_profile):
+    if not gex_profile: return None
+    strikes = sorted(gex_profile.keys())
+    for i in range(1, len(strikes)):
+        if gex_profile[strikes[i - 1]] <= 0 and gex_profile[strikes[i]] > 0: return strikes[i]
+    vals = list(gex_profile.values())
+    return strikes[0] if all(v >= 0 for v in vals) else strikes[-1]
+
+
+def compute_max_pain(chain):
+    """O(N) prefix-sum max pain using Kahan Summation."""
+    if not chain: return None
+    strikes = sorted(set(opt["strike"] for opt in chain))
+    if not strikes: return None
+    
+    call_oi, put_oi = {}, {}
+    for opt in chain:
+        k = opt["strike"]
+        if opt["type"] == "call": call_oi[k] = call_oi.get(k, 0) + opt.get("oi", 0)
+        else: put_oi[k] = put_oi.get(k, 0) + opt.get("oi", 0)
+
+    s0 = strikes[0]
+    pain = 0.0
+    pain_c = 0.0
+    for k in strikes:
+        c, p = call_oi.get(k, 0), put_oi.get(k, 0)
+        val = 0
+        if s0 > k: val = c * (s0 - k)
+        if s0 < k: val = p * (k - s0)
+        y = val - pain_c
+        t = pain + y
+        pain_c = (t - pain) - y
+        pain = t
+
+    min_pain, mp_strike = pain, s0
+    cum_call_left = call_oi.get(s0, 0)
+    total_put = sum(put_oi.values())
+    cum_put_left = put_oi.get(s0, 0)
+
+    for i in range(1, len(strikes)):
+        gap = strikes[i] - strikes[i - 1]
+        put_right = total_put - cum_put_left
+        val = (gap * cum_call_left) - (gap * put_right)
+        y = val - pain_c
+        t = pain + y
+        pain_c = (t - pain) - y
+        pain = t
+
+        if pain < min_pain:
+            min_pain = pain
+            mp_strike = strikes[i]
+
+        cum_call_left += call_oi.get(strikes[i], 0)
+        cum_put_left += put_oi.get(strikes[i], 0)
+
+    return mp_strike
+
+
+def compute_pcr(chain):
+    call_oi = sum(o.get("oi", 0) for o in chain if o["type"] == "call")
+    put_oi = sum(o.get("oi", 0) for o in chain if o["type"] == "put")
+    return round(put_oi / call_oi, 2) if call_oi > 0 else None
 
 # ════════════════════════════════════════════════════════════════════
-# TAB 8 — SENTINEL AI
+# CBOE GEX 
 # ════════════════════════════════════════════════════════════════════
-with tabs[8]:
-    st.markdown('<div class="bb-ph">🤖 SENTINEL AI — POWERED BY GOOGLE GEMINI</div>', unsafe_allow_html=True)
 
-    if not st.session_state.gemini_key:
-        st.markdown("""<div style="background:#0A0500;border:1px solid #FF6600;border-left:4px solid #FF6600;
-padding:16px;font-family:monospace;font-size:12px;color:#FF8C00">
-⚠️ Gemini API key required to activate SENTINEL AI.<br><br>
-<a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:#FF6600">Get a free key at Google AI Studio →</a><br><br>
-<span style="color:#555">Once activated, SENTINEL AI provides:<br>
-• /brief — Morning intelligence briefing<br>
-• /flash NVDA — Rapid stock analysis<br>
-• /geo Red Sea — Geopolitical dashboard<br>
-• /scenario Gold — Bull/base/bear scenarios<br>
-• /poly Fed — Polymarket analysis<br>
-• /rotate — Sector rotation read<br>
-• /earnings — Earnings calendar analysis</span></div>""", unsafe_allow_html=True)
+@st.cache_data(ttl=300)
+def fetch_cboe_gex(ticker="SPX"):
+    urls = [
+        f"https://cdn.cboe.com/api/global/delayed_quotes/options/_{ticker}.json",
+        f"https://cdn.cboe.com/api/global/delayed_quotes/options/{ticker}.json",
+    ]
+    for url in urls:
+        try:
+            data = _fetch_robust_json(url, timeout=15)
+            raw = pd.DataFrame.from_dict(data)
+            spot = float(raw.loc["current_price", "data"])
+            opts = pd.DataFrame(raw.loc["options", "data"])
+
+            opts["type"] = opts["option"].str.extract(r"\d([A-Z])\d")
+            opts["strike"] = opts["option"].str.extract(r"\d[A-Z](\d+)\d\d\d").astype(float)
+            opts["expiration"] = pd.to_datetime(opts["option"].str.extract(r"[A-Z](\d+)")[0], format="%y%m%d")
+
+            for col in ("gamma", "open_interest", "iv", "delta", "theta", "vega"):
+                if col in opts.columns:
+                    opts[col] = pd.to_numeric(opts[col], errors="coerce").fillna(0)
+
+            return spot, opts
+        except Exception:
+            continue
+    return None, None
+
+def compute_cboe_gex_profile(spot, option_df, expiry_limit_days=365, strike_pct=0.05):
+    if option_df is None or option_df.empty or spot <= 0: return {}
+    df = option_df.copy()
+    cutoff = pd.Timestamp("today") + pd.Timedelta(days=expiry_limit_days)
+    lo, hi = spot * (1 - strike_pct), spot * (1 + strike_pct)
+
+    df = df[(df["expiration"] <= cutoff) & (df["strike"] >= lo) & (df["strike"] <= hi) & (df["gamma"] > 0) & (df["open_interest"] > 0)]
+    if df.empty: return {}
+
+    df["gex"] = spot * df["gamma"] * df["open_interest"] * 100 * spot * 0.01
+    df["gex"] = df.apply(lambda r: -r["gex"] if r["type"] == "P" else r["gex"], axis=1)
+
+    by_strike = df.groupby("strike")["gex"].sum() / 1_000_000
+    return {k / 10: v for k, v in by_strike.items()}
+
+def compute_cboe_total_gex(spot, option_df):
+    if option_df is None or option_df.empty or spot <= 0: return None
+    df = option_df.copy()
+    df["gex"] = spot * df["gamma"] * df["open_interest"] * 100 * spot * 0.01
+    df["gex"] = df.apply(lambda r: -r["gex"] if r["type"] == "P" else r["gex"], axis=1)
+    return round(df["gex"].sum() / 1_000_000_000, 4)
+
+def compute_cboe_pcr(option_df):
+    if option_df is None or option_df.empty: return None
+    if "type" not in option_df.columns or "open_interest" not in option_df.columns: return None
+    call_oi = option_df[option_df["type"] == "C"]["open_interest"].sum()
+    put_oi  = option_df[option_df["type"] == "P"]["open_interest"].sum()
+    return round(put_oi / call_oi, 2) if call_oi > 0 else None
+
+@st.cache_resource(ttl=60)
+def fetch_vix_data():
+    result = {"vix": None, "vix9d": None, "contango": None}
+    if yf is None: return result
+    try:
+        h = yf.Ticker("^VIX").history(period="5d")
+        if not h.empty: result["vix"] = round(h["Close"].iloc[-1], 2)
+    except Exception: pass
+    try:
+        h9 = yf.Ticker("^VIX9D").history(period="5d")
+        if not h9.empty: result["vix9d"] = round(h9["Close"].iloc[-1], 2)
+    except Exception: pass
+    if result["vix"] is not None and result["vix9d"] is not None:
+        result["contango"] = result["vix"] > result["vix9d"]
+    return result
+
+
+def _score_option(opt, chain_ivs, spot_spy, dte=0):
+    """Score a single option contract for 0DTE selection."""
+    import sys
+    W1, W2, W3, W4, W5 = 0.25, 0.25, 0.20, 0.15, 0.15
+    _EPS = sys.float_info.epsilon
+
+    abs_delta = abs(opt.get("delta", 0))
+    gamma     = abs(opt.get("gamma", 0))
+    theta     = abs(opt.get("theta", 0))
+    iv        = opt.get("iv", 0)
+    bid, ask  = opt.get("bid", 0), opt.get("ask", 0)
+    mid       = opt.get("mid", 0)
+    vol, oi   = opt.get("volume", 0), max(opt.get("oi", 1), 1)
+
+    # DTE-aware delta target: 0DTE wants 0.35-0.45, longer-dated 0.25-0.35
+    if dte == 0:
+        target_delta, sigma_delta = 0.40, 0.08
+    elif dte <= 7:
+        target_delta, sigma_delta = 0.35, 0.09
     else:
-        if st.button("🔍 LIST AVAILABLE GEMINI MODELS"):
-            with st.spinner("Fetching model list…"):
-                mlist = list_gemini_models(st.session_state.gemini_key)
-            for m in mlist:
-                st.markdown(f'<div style="font-family:monospace;font-size:11px;padding:2px 0;color:#FF8C00">{m}</div>', unsafe_allow_html=True)
-            st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+        target_delta, sigma_delta = 0.30, 0.10
 
-        if not st.session_state.chat_history:
-            st.markdown("""<div style="background:#001A00;border:1px solid #1A1A1A;border-left:4px solid #00CC44;
-padding:14px;font-family:monospace;font-size:12px;color:#CCC;line-height:1.8">
-⚡ SENTINEL AI ONLINE — Live market data injected.<br><br>
-Try: <span style="color:#FF6600">/brief</span> &nbsp;
-<span style="color:#FF6600">/flash NVDA</span> &nbsp;
-<span style="color:#FF6600">/scenario Gold</span> &nbsp;
-<span style="color:#FF6600">/geo Red Sea</span> &nbsp;
-<span style="color:#FF6600">/poly Fed</span>
-</div>""", unsafe_allow_html=True)
+    f1 = math.exp(-((abs_delta - target_delta) ** 2) / (2 * sigma_delta ** 2))
 
-        for msg in st.session_state.chat_history:
-            if msg["role"]=="user":
-                st.markdown(f'<div class="chat-user">▶ &nbsp;{_esc(msg["content"])}</div>', unsafe_allow_html=True)
+    gt_ratio = (gamma / theta) if theta > _EPS else 0.0
+    f2 = 1 - 1 / (1 + gt_ratio)
+
+    spread = ask - bid
+    spread_pct = spread / mid if mid > 0 else 1.0
+    f3 = max(0, 1 - spread_pct * 5)
+
+    flow = vol / oi if oi > 0 else 0
+    f4 = min(flow, 1.0)
+
+    median_iv = sorted(chain_ivs)[len(chain_ivs) // 2] if chain_ivs else iv
+    f5 = max(0, min(1, 2 - (iv / median_iv))) if median_iv > 0 else 0.5
+
+    total = W1*f1 + W2*f2 + W3*f3 + W4*f4 + W5*f5
+
+    breakdown = {
+        "delta_score": round(f1, 3), "gt_score": round(f2, 3),
+        "liq_score": round(f3, 3), "flow_score": round(f4, 3),
+        "iv_score": round(f5, 3), "total": round(total, 4),
+        "gt_ratio": round(gt_ratio, 2),
+        "spread_pct": round(spread_pct * 100, 1),
+        "flow_ratio": round(flow, 2),
+    }
+    return total, breakdown
+
+def find_target_strike(chain, bias, dte=0):
+    if bias == "bull": cands = [o for o in chain if o["type"] == "call" and 0.10 < o.get("delta", 0) < 0.50]
+    else: cands = [o for o in chain if o["type"] == "put" and -0.50 < o.get("delta", 0) < -0.10]
+    cands = [o for o in cands if o.get("mid", 0) > 0 and abs(o.get("gamma", 0)) > 0]
+    if not cands: return None
+
+    chain_ivs = [o["iv"] for o in chain if o.get("iv", 0) > 0]
+    spot_spy = cands[0]["strike"]
+
+    scored = []
+    for o in cands:
+        s, bd = _score_option(o, chain_ivs, spot_spy, dte)
+        o_copy = dict(o)
+        o_copy["_score"] = s
+        o_copy["_breakdown"] = bd
+        scored.append(o_copy)
+    scored.sort(key=lambda x: x["_score"], reverse=True)
+    return scored[0]
+
+def parse_trade_input(text):
+    text_lower = text.lower().strip()
+    result = {"bias": None, "price_ref": None, "raw": text}
+    if "bull" in text_lower: result["bias"] = "bull"
+    elif "bear" in text_lower: result["bias"] = "bear"
+    m = re.search(r'@(\d+\.?\d*)', text)
+    if m: result["price_ref"] = float(m.group(1))
+    return result
+
+def generate_recommendation(chain, spx_metrics, vix_data):
+    if not chain or not spx_metrics:
+        return None
+    spot = spx_metrics["spot"]
+    vwap = spx_metrics["vwap"]
+    vix_val = vix_data.get("vix") or 20.0
+    pcr = compute_pcr(chain)
+    gex_profile = compute_gex_profile(chain, spot / 10)
+    gamma_flip_spy = find_gamma_flip(gex_profile)
+    gamma_flip = gamma_flip_spy * 10 if gamma_flip_spy else None
+    max_pain_spy = compute_max_pain(chain)
+    max_pain = max_pain_spy * 10 if max_pain_spy else None
+    contango = vix_data.get("contango")
+
+    # --- Time-of-day gating ---
+    PST = pytz.timezone("US/Pacific")
+    now_pst = datetime.now(PST)
+    hour_et = now_pst.hour + 3   # PST → ET offset
+    if hour_et >= 15:   # After 3 PM ET — no new 0DTE entries
+        return {
+            "recommendation": "NO TRADE — Too Late in Session",
+            "rationale": "0DTE entries after 3 PM ET carry excessive theta risk.",
+            "stats": "", "action": "", "conditions_met": [], "conditions_failed": [],
+            "confidence": "LOW", "strike_spx": 0, "opt_type": "", "mid_price": 0
+        }
+
+    # --- Expected Move check ---
+    # VIX → 1-day expected move for SPX
+    daily_em = spot * (vix_val / 100) / (252 ** 0.5)
+    
+    # --- Weighted Signal Scoring (max ±10) ---
+    score = 0.0
+    met, failed = [], []
+
+    # VWAP: highest weight — institutional anchor
+    vwap_dev = (spot - vwap) / vwap * 100
+    if vwap_dev > 0.1:
+        score += 3.0; met.append(f"Spot {vwap_dev:+.2f}% above VWAP")
+    elif vwap_dev < -0.1:
+        score -= 3.0; failed.append(f"Spot {vwap_dev:+.2f}% below VWAP")
+    # else: flat VWAP — neutral, no score
+
+    # Gamma Flip: second highest
+    if gamma_flip:
+        gf_dev = (spot - gamma_flip) / spot * 100
+        if spot > gamma_flip:
+            score += 2.5; met.append(f"Spot {gf_dev:+.1f}% above Gamma Flip ({int(gamma_flip)})")
+        else:
+            score -= 2.5; failed.append(f"Spot {gf_dev:+.1f}% below Gamma Flip ({int(gamma_flip)})")
+
+    # PCR
+    if pcr is not None:
+        if pcr < 0.7:
+            score += 2.0; met.append(f"PCR {pcr:.2f} — Strong Bullish Skew")
+        elif pcr < 0.85:
+            score += 1.0; met.append(f"PCR {pcr:.2f} — Mild Bullish Skew")
+        elif pcr > 1.2:
+            score -= 2.0; failed.append(f"PCR {pcr:.2f} — Strong Bearish Skew")
+        elif pcr > 1.0:
+            score -= 1.0; failed.append(f"PCR {pcr:.2f} — Mild Bearish Skew")
+
+    # VIX term structure
+    if contango is not None:
+        if contango:
+            score += 1.5; met.append("VIX Contango — Regime Stable")
+        else:
+            score -= 1.5; failed.append("VIX Backwardation — Regime Unstable")
+
+    # Max Pain gravity: if spot far from max pain, fade the move
+    if max_pain:
+        mp_dist = spot - max_pain
+        mp_pct = mp_dist / spot * 100
+        if abs(mp_pct) > 0.5:
+            # Spot will be pulled back toward max pain at expiry — fade
+            if mp_pct > 0:
+                score -= 1.0
+                failed.append(f"Max Pain gravity {int(max_pain)} ({mp_pct:+.1f}% below spot)")
             else:
-                # Clean Gemini markdown artifacts, then render with proper line breaks
-                import re as _re
-                raw = msg["content"]
-                raw = _re.sub(r'`([^`\n]+)`', r'\1', raw)          # strip backtick code spans
-                raw = _re.sub(r'\*\*([^*]+)\*\*', r'\1', raw)    # strip bold **
-                raw = _re.sub(r'\*([^*\n]+)\*', r'\1', raw)       # strip italic *
-                raw = raw.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-                content = raw.replace("\n", "<br>")
-                st.markdown(f'<div class="chat-ai">⚡ SENTINEL<br><br>{content}</div>', unsafe_allow_html=True)
+                score += 1.0
+                met.append(f"Max Pain gravity {int(max_pain)} ({mp_pct:+.1f}% above spot)")
 
-        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+    # --- Decision thresholds ---
+    BULL_THRESHOLD = 4.0   # need strong confluence to trade
+    BEAR_THRESHOLD = -4.0
 
-        ic, bc = st.columns([5,1])
-        with ic:
-            user_input = st.text_input("QUERY…",
-                placeholder="/brief | /flash TSLA | /scenario Gold | /geo Red Sea | or plain English",
-                key="chat_inp", label_visibility="collapsed")
-        with bc:
-            send = st.button("⚡ SEND", use_container_width=True)
+    if score >= BULL_THRESHOLD:
+        bias, direction = "bull", "bullish"
+    elif score <= BEAR_THRESHOLD:
+        bias, direction = "bear", "bearish"
+        met, failed = failed, met
+    else:
+        return {
+            "recommendation": f"NO TRADE — Weak Confluence (score: {score:+.1f})",
+            "rationale": f"Weighted score {score:+.1f} is below ±{BULL_THRESHOLD} threshold. Wait for cleaner setup.",
+            "stats": f"Expected 1-day move: ±${daily_em:.1f} pts",
+            "action": "Stand aside. Monitor for VIX expansion or VWAP reclaim.",
+            "conditions_met": met, "conditions_failed": failed,
+            "confidence": "LOW", "strike_spx": 0, "opt_type": "", "mid_price": 0
+        }
 
-        st.markdown('<div style="color:#555;font-size:9px;font-family:monospace;margin-bottom:4px">QUICK COMMANDS</div>', unsafe_allow_html=True)
-        qb = st.columns(7)
-        QUICK = {"BRIEF":"/brief","ROTATE":"/rotate","SENTIMENT":"/sentiment",
-                 "POLY FED":"/poly Fed rate","RED SEA":"/geo Red Sea",
-                 "BTC SCEN":"/scenario Bitcoin","EARNINGS":"/earnings"}
-        for col,(lbl,cmd) in zip(qb,QUICK.items()):
-            with col:
-                if st.button(lbl,use_container_width=True,key=f"qb_{lbl}"):
-                    st.session_state.chat_history.append({"role":"user","content":cmd})
-                    # Use enriched context (with geo headlines + macro rates) for /brief and /geo
-                    _is_brief_geo = cmd.startswith("/brief") or cmd.startswith("/geo")
-                    _ctx = build_brief_context() if _is_brief_geo else market_snapshot_str()
-                    with st.spinner("⚡ SENTINEL processing…"):
-                        resp = gemini_response(cmd,st.session_state.chat_history[:-1],_ctx)
-                    st.session_state.chat_history.append({"role":"assistant","content":resp})
-                    st.rerun()
+    target = find_target_strike(chain, bias, dte=0)
+    if not target:
+        return {
+            "recommendation": f"NO TRADE — No Suitable Option",
+            "rationale": f"No viable {bias} options passed liquidity filters.",
+            "stats": "", "action": "", "conditions_met": met, "conditions_failed": failed,
+            "confidence": "LOW", "strike_spx": 0, "opt_type": "", "mid_price": 0
+        }
 
-        if st.button("🗑 CLEAR CHAT"):
-            st.session_state.chat_history = []; st.rerun()
+    strike_spx = round(target["strike"] * 10, 0)
+    mid = target.get("mid", 0)
 
-        if (send or user_input) and user_input:
-            st.session_state.chat_history.append({"role":"user","content":user_input})
-            # Use enriched context (geo headlines + macro rates) for /brief and /geo commands
-            _ui_lower = user_input.strip().lower()
-            _is_brief_geo = _ui_lower.startswith("/brief") or _ui_lower.startswith("/geo")
-            _ctx = build_brief_context() if _is_brief_geo else market_snapshot_str()
-            with st.spinner("⚡ SENTINEL processing…"):
-                resp = gemini_response(user_input,st.session_state.chat_history[:-1],_ctx)
-            st.session_state.chat_history.append({"role":"assistant","content":resp})
-            st.rerun()
+    # --- Expected move sanity: don't buy if strike is beyond 1 daily EM ---
+    dist_to_strike = abs(strike_spx - spot)
+    if dist_to_strike > daily_em * 1.5:
+        return {
+            "recommendation": f"NO TRADE — Strike Too Far OTM",
+            "rationale": f"Strike {int(strike_spx)} is ${dist_to_strike:.0f} from spot, "
+                         f"exceeding 1.5× daily EM (${daily_em:.0f}). Low P(ITM).",
+            "stats": f"Daily EM: ±${daily_em:.1f} | Strike dist: ${dist_to_strike:.0f}",
+            "action": "Choose a closer strike or wait for spot to move toward target.",
+            "conditions_met": met, "conditions_failed": failed,
+            "confidence": "LOW", "strike_spx": 0, "opt_type": "", "mid_price": 0
+        }
+
+    opt_label = "CALL" if target["type"] == "call" else "PUT"
+    bd = target.get("_breakdown", {})
+    delta_pct = round(abs(target["delta"]) * 100)
+
+    # --- Find hedge wall ---
+    hedge_wall = None
+    if gex_profile:
+        for gk, gv in sorted(gex_profile.items(), key=lambda x: abs(x[1]), reverse=True):
+            gk_spx = gk * 10
+            if (bias == "bull" and gk_spx > strike_spx) or (bias == "bear" and gk_spx < strike_spx):
+                hedge_wall = gk_spx
+                break
+
+    abs_score = abs(score)
+    if abs_score >= 7.5:   confidence = "HIGH"
+    elif abs_score >= 5.0: confidence = "MODERATE"
+    else:                  confidence = "LOW"
+
+    target_pts = abs(int(hedge_wall - strike_spx)) if hedge_wall else max(int(daily_em * 0.5), 5)
+    stop_pts = max(int(mid * 0.5 / 10), 5)   # Stop at 50% of premium paid, in SPX pts
+
+    target_desc = f"Target {int(hedge_wall)} GEX Wall (+{target_pts}pts)" if hedge_wall else f"Target +{target_pts}pts (0.5× daily EM)"
+    stop_desc = f"Stop at 50% premium loss (−${mid/2:.2f} on the option)"
+
+    stats_text = (
+        f"Weighted Score: {score:+.1f}/±10 | Daily EM: ±${daily_em:.1f}\n"
+        f"Greeks: Δ={target['delta']:+.3f} Γ={target['gamma']:.4f} Θ={target['theta']:.4f} V={target['vega']:.4f} IV={target['iv']:.1%}\n"
+        f"Stats: ~{delta_pct}% P(ITM) | Γ/Θ: {bd.get('gt_ratio', 0):.1f}x | Spread: {bd.get('spread_pct', 0):.1f}% | Flow: {bd.get('flow_ratio', 0):.2f}× OI\n"
+        f"Score Breakdown: Δ:{bd.get('delta_score',0):.2f} Γ/Θ:{bd.get('gt_score',0):.2f} Liq:{bd.get('liq_score',0):.2f} Flow:{bd.get('flow_score',0):.2f} IV:{bd.get('iv_score',0):.2f}"
+    )
+
+    return {
+        "recommendation": f"RECOMMENDATION: BUY {int(strike_spx)} {opt_label}",
+        "rationale": f"Weighted confluence score {score:+.1f}. " + " | ".join(met) + ".",
+        "stats": stats_text,
+        "action": f"Enter at market. {target_desc}. {stop_desc}.",
+        "confidence": confidence,
+        "conditions_met": met,
+        "conditions_failed": failed,
+        "strike_spx": strike_spx,
+        "opt_type": opt_label,
+        "mid_price": mid,
+    }
+
 
 # ════════════════════════════════════════════════════════════════════
-# FOOTER
+# CRYPTO WHALE FLOWS & ON-CHAIN DATA
 # ════════════════════════════════════════════════════════════════════
-st.markdown('<hr style="border-top:1px solid #1A1A1A;margin:16px 0">', unsafe_allow_html=True)
-st.markdown(f"""<div style="font-family:monospace;font-size:9px;color:#333;text-align:center;letter-spacing:1px">
-SENTINEL TERMINAL &nbsp;|&nbsp; {now_pst()} &nbsp;|&nbsp;
-Yahoo Finance · FRED · Polymarket · GDELT · CoinGecko · Finnhub · NewsAPI · TradingView · Gemini<br>
-For research purposes only. Not financial advice.
-</div>""", unsafe_allow_html=True)
+
+_COINBASE_MAP = {"BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD"}
+
+@st.cache_data(ttl=120)
+def get_whale_trades(symbol="BTCUSDT", min_usd=500_000):
+    product = _COINBASE_MAP.get(symbol, "BTC-USD")
+    try:
+        trades = _fetch_robust_json(f"https://api.exchange.coinbase.com/products/{product}/trades", params={"limit": 1000}, timeout=10)
+        result = []
+        for t in trades:
+            price, qty = float(t.get("price", "0")), float(t.get("size", "0"))
+            usd = price * qty
+            if usd < min_usd: continue
+            side = "BUY" if t.get("side", "") == "buy" else "SELL"
+            iso = t.get("time", "")
+            try: time_str = datetime.fromisoformat(iso.replace("Z", "+00:00")).strftime("%H:%M:%S")
+            except: time_str = str(iso)[:8]
+            result.append({"time": time_str, "side": side, "qty": round(qty, 4), "usd": round(usd, 2), "price": round(price, 2)})
+        result.sort(key=lambda x: x["usd"], reverse=True)
+        return result[:25]
+    except:
+        return []
+
+@st.cache_data(ttl=600)
+def get_exchange_netflow():
+    import time
+    try:
+        time.sleep(1)
+        data = _fetch_robust_json("https://api.coingecko.com/api/v3/exchanges", params={"per_page": 10, "page": 1}, timeout=10)
+        result = [{"name": ex.get("name", ""), "btc_vol_24h": float(ex.get("trade_volume_24h_btc", 0) or 0), "trust_score": int(ex.get("trust_score", 0) or 0)} for ex in data]
+        result.sort(key=lambda x: x["btc_vol_24h"], reverse=True)
+        return result
+    except:
+        return []
+
+_FUNDING_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "MATICUSDT", "ADAUSDT"]
+
+@st.cache_data(ttl=120)
+def get_funding_rates():
+    try:
+        data = _fetch_robust_json("https://api.bybit.com/v5/market/tickers", params={"category": "linear"}, timeout=10)
+        tickers = data.get("result", {}).get("list", [])
+        lookup = {t["symbol"]: t for t in tickers if t.get("symbol") in _FUNDING_SYMBOLS}
+        result = []
+        for sym in _FUNDING_SYMBOLS:
+            t = lookup.get(sym)
+            if not t: continue
+            rate, mark = float(t.get("fundingRate", "0") or "0"), float(t.get("markPrice", "0") or "0")
+            rate_pct = round(rate * 100, 4)
+            result.append({"symbol": sym.replace("USDT", ""), "rate_pct": rate_pct, "rate_ann": round(rate_pct * 3 * 365, 2), "mark_price": round(mark, 2)})
+        result.sort(key=lambda x: abs(x["rate_pct"]), reverse=True)
+        return result
+    except:
+        return []
+
+_OI_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "AVAXUSDT"]
+
+@st.cache_data(ttl=120)
+def get_open_interest():
+    try:
+        data = _fetch_robust_json("https://api.bybit.com/v5/market/tickers", params={"category": "linear"}, timeout=10)
+        tickers = data.get("result", {}).get("list", [])
+        marks = {t["symbol"]: float(t.get("markPrice", "0") or "0") for t in tickers}
+        result = []
+        for sym in _OI_SYMBOLS:
+            try:
+                oi_data = _fetch_robust_json("https://api.bybit.com/v5/market/open-interest", params={"category": "linear", "symbol": sym, "intervalTime": "5min", "limit": 1}, timeout=8)
+                items = oi_data.get("result", {}).get("list", [])
+                if not items: continue
+                oi_coins = float(items[0].get("openInterest", "0") or "0")
+                result.append({"symbol": sym.replace("USDT", ""), "oi_coins": round(oi_coins, 4), "oi_usd": round(oi_coins * marks.get(sym, 0), 2)})
+            except:
+                continue
+        result.sort(key=lambda x: x["oi_usd"], reverse=True)
+        return result
+    except:
+        return []
+
+_LIQ_COINS = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]
+
+@st.cache_data(ttl=180)
+def get_liquidations():
+    result = {}
+    for coin in _LIQ_COINS:
+        try:
+            r = requests.get("https://open-api.coinglass.com/public/v2/liquidation_chart", params={"ex": "Bybit", "pair": f"{coin}USDT", "interval": "0"}, headers={"Accept": "application/json"}, timeout=10)
+            if r.status_code in (403, 429):
+                result[coin] = {"long_liq": 0, "short_liq": 0, "total": 0}; continue
+            data = r.json().get("data", {})
+            long_liq, short_liq = float(data.get("longLiquidationUsd", 0) or 0), float(data.get("shortLiquidationUsd", 0) or 0)
+            result[coin] = {"long_liq": round(long_liq, 2), "short_liq": round(short_liq, 2), "total": round(long_liq + short_liq, 2)}
+        except:
+            result[coin] = {"long_liq": 0, "short_liq": 0, "total": 0}
+    return result
+
+# ════════════════════════════════════════════════════════════════════
+# MACRO OVERVIEW & CALENDAR
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=3600)
+def get_macro_overview(fred_key):
+    if not fred_key: return None
+    signals = {}
+
+    try:
+        df_cpi = fred_series("CPIAUCSL", fred_key, 24)
+        if df_cpi is not None and len(df_cpi) >= 13:
+            cpi_yoy = round((df_cpi["value"].iloc[-1] / df_cpi["value"].iloc[-13] - 1) * 100, 2)
+            if cpi_yoy < 2.5: cpi_score, cpi_label, cpi_color = 2, f"Cooling ({cpi_yoy:.1f}%)", "#00CC44"
+            elif cpi_yoy < 3.5: cpi_score, cpi_label, cpi_color = 1, f"Elevated ({cpi_yoy:.1f}%)", "#FF8C00"
+            elif cpi_yoy < 5.0: cpi_score, cpi_label, cpi_color = -1, f"High ({cpi_yoy:.1f}%)", "#FF4444"
+            else: cpi_score, cpi_label, cpi_color = -2, f"Very High ({cpi_yoy:.1f}%)", "#FF0000"
+            signals["CPI Inflation"] = {"score": cpi_score, "label": cpi_label, "color": cpi_color, "val": cpi_yoy}
+    except Exception: pass
+
+    try:
+        df_pce = fred_series("PCEPILFE", fred_key, 24)
+        if df_pce is not None and len(df_pce) >= 13:
+            pce_yoy = round((df_pce["value"].iloc[-1] / df_pce["value"].iloc[-13] - 1) * 100, 2)
+            if pce_yoy < 2.5: pce_score, pce_label, pce_color = 2, f"Near Target ({pce_yoy:.1f}%)", "#00CC44"
+            elif pce_yoy < 3.0: pce_score, pce_label, pce_color = 1, f"Slightly Elevated ({pce_yoy:.1f}%)", "#FF8C00"
+            else: pce_score, pce_label, pce_color = -1, f"Above Target ({pce_yoy:.1f}%)", "#FF4444"
+            signals["Core PCE"] = {"score": pce_score, "label": pce_label, "color": pce_color, "val": pce_yoy}
+    except Exception: pass
+
+    try:
+        df_unemp = fred_series("UNRATE", fred_key, 6)
+        if df_unemp is not None and not df_unemp.empty:
+            urate = df_unemp["value"].iloc[-1]
+            trend = "↑" if urate > (df_unemp["value"].iloc[-2] if len(df_unemp) > 1 else urate) else "↓"
+            if urate < 4.0: u_score, u_label, u_color = 2, f"Full Employment ({urate:.1f}% {trend})", "#00CC44"
+            elif urate < 4.5: u_score, u_label, u_color = 1, f"Near Full Emp. ({urate:.1f}% {trend})", "#FF8C00"
+            elif urate < 5.5: u_score, u_label, u_color = -1, f"Rising ({urate:.1f}% {trend})", "#FF4444"
+            else: u_score, u_label, u_color = -2, f"High Unemployment ({urate:.1f}% {trend})", "#FF0000"
+            signals["Unemployment"] = {"score": u_score, "label": u_label, "color": u_color, "val": urate}
+    except Exception: pass
+
+    try:
+        df_2y, df_10y = fred_series("DGS2", fred_key, 3), fred_series("DGS10", fred_key, 3)
+        if df_2y is not None and df_10y is not None and not df_2y.empty and not df_10y.empty:
+            spread = round(df_10y["value"].iloc[-1] - df_2y["value"].iloc[-1], 2)
+            if spread > 0.5: yc_score, yc_label, yc_color = 2, f"Steep (+{spread:.2f}% — Growth)", "#00CC44"
+            elif spread > 0: yc_score, yc_label, yc_color = 1, f"Flat (+{spread:.2f}%)", "#FF8C00"
+            elif spread > -0.5: yc_score, yc_label, yc_color = -1, f"Inverted ({spread:.2f}%)", "#FF4444"
+            else: yc_score, yc_label, yc_color = -2, f"Deep Inversion ({spread:.2f}%)", "#FF0000"
+            signals["Yield Curve (10-2Y)"] = {"score": yc_score, "label": yc_label, "color": yc_color, "val": spread}
+    except Exception: pass
+
+    try:
+        df_ff = fred_series("FEDFUNDS", fred_key, 6)
+        if df_ff is not None and not df_ff.empty:
+            ffr = df_ff["value"].iloc[-1]
+            prev_ffr = df_ff["value"].iloc[-2] if len(df_ff) > 1 else ffr
+            ff_trend = "cutting" if ffr < prev_ffr else ("hiking" if ffr > prev_ffr else "hold")
+            if ff_trend == "cutting" and ffr < 4.0: ff_score, ff_label, ff_color = 2, f"Easing ({ffr:.2f}% — {ff_trend.upper()})", "#00CC44"
+            elif ff_trend == "cutting": ff_score, ff_label, ff_color = 1, f"Beginning Cuts ({ffr:.2f}%)", "#FF8C00"
+            elif ff_trend == "hiking": ff_score, ff_label, ff_color = -1, f"Tightening ({ffr:.2f}% — {ff_trend.upper()})", "#FF4444"
+            elif ffr > 5.0: ff_score, ff_label, ff_color = -1, f"Restrictive ({ffr:.2f}% — HOLD)", "#FF4444"
+            else: ff_score, ff_label, ff_color = 1, f"Neutral ({ffr:.2f}% — HOLD)", "#FF8C00"
+            signals["Fed Funds Rate"] = {"score": ff_score, "label": ff_label, "color": ff_color, "val": ffr}
+    except Exception: pass
+
+    try:
+        df_hy = fred_series("BAMLH0A0HYM2", fred_key, 6)
+        if df_hy is not None and not df_hy.empty:
+            hy = df_hy["value"].iloc[-1]
+            hy_trend = "↑" if hy > (df_hy["value"].iloc[-2] if len(df_hy) > 1 else hy) else "↓"
+            if hy < 3.5: hy_score, hy_label, hy_color = 2, f"Tight ({hy:.2f}% {hy_trend} — Risk-On)", "#00CC44"
+            elif hy < 4.5: hy_score, hy_label, hy_color = 1, f"Normal ({hy:.2f}% {hy_trend})", "#FF8C00"
+            elif hy < 6.0: hy_score, hy_label, hy_color = -1, f"Wide ({hy:.2f}% {hy_trend} — Stress)", "#FF4444"
+            else: hy_score, hy_label, hy_color = -2, f"Very Wide ({hy:.2f}% {hy_trend} — Crisis)", "#FF0000"
+            signals["HY Credit Spread"] = {"score": hy_score, "label": hy_label, "color": hy_color, "val": hy}
+    except Exception: pass
+
+    try:
+        df_m2 = fred_series("M2SL", fred_key, 18)
+        if df_m2 is not None and len(df_m2) >= 13:
+            m2_yoy = round((df_m2["value"].iloc[-1] / df_m2["value"].iloc[-13] - 1) * 100, 2)
+            if m2_yoy > 5: m2_score, m2_label, m2_color = -1, f"Expanding Rapidly ({m2_yoy:+.1f}% YoY)", "#FF4444"
+            elif m2_yoy > 0: m2_score, m2_label, m2_color = 1, f"Modest Growth ({m2_yoy:+.1f}% YoY)", "#FF8C00"
+            else: m2_score, m2_label, m2_color = 2, f"Contracting ({m2_yoy:+.1f}% YoY)", "#00CC44"
+            signals["M2 Money Supply"] = {"score": m2_score, "label": m2_label, "color": m2_color, "val": m2_yoy}
+    except Exception: pass
+
+    try:
+        df_gdp = fred_series("GDPC1", fred_key, 12)
+        if df_gdp is not None and len(df_gdp) >= 5:
+            latest_gdp, prev_gdp, year_ago_gdp = df_gdp["value"].iloc[-1], df_gdp["value"].iloc[-2], df_gdp["value"].iloc[-5]
+            gdp_yoy, gdp_q = round((latest_gdp / year_ago_gdp - 1) * 100, 2), round((latest_gdp / prev_gdp - 1) * 4 * 100, 2)
+            if gdp_yoy >= 3.0: gdp_score, gdp_label, gdp_color = 2, f"Strong ({gdp_yoy:.1f}% YoY, {gdp_q:+.1f}% ann.)", "#00CC44"
+            elif gdp_yoy >= 2.0: gdp_score, gdp_label, gdp_color = 1, f"Moderate ({gdp_yoy:.1f}% YoY)", "#FF8C00"
+            elif gdp_yoy >= 0.5: gdp_score, gdp_label, gdp_color = -1, f"Slowing ({gdp_yoy:.1f}% YoY)", "#FF4444"
+            else: gdp_score, gdp_label, gdp_color = -2, f"Contraction ({gdp_yoy:.1f}% YoY)", "#FF0000"
+            signals["GDP Growth"] = {"score": gdp_score, "label": gdp_label, "color": gdp_color, "val": gdp_yoy}
+    except Exception: pass
+
+    total_score = sum(s["score"] for s in signals.values())
+    max_score = len(signals) * 2
+    pct = (total_score / max_score * 100) if max_score else 0
+
+    if pct >= 50:   env_label, env_color, env_desc = "EXPANSIONARY 🟢", "#00CC44", "Macro conditions are broadly supportive. Risk-on bias."
+    elif pct >= 10: env_label, env_color, env_desc = "MIXED / NEUTRAL 🟡", "#FF8C00", "Macro signals are mixed. Selective positioning warranted."
+    elif pct >= -30: env_label, env_color, env_desc = "CAUTIONARY ⚠️", "#FFCC00", "More headwinds than tailwinds. Elevated inflation or tightening financial conditions."
+    else:            env_label, env_color, env_desc = "CONTRACTIONARY 🔴", "#FF4444", "Multiple macro red flags. Elevated recession risk."
+
+    return {"signals": signals, "total_score": total_score, "max_score": max_score, "pct": pct, "env_label": env_label, "env_color": env_color, "env_desc": env_desc}
+
+@st.cache_data(ttl=3600)
+def get_macro_calendar(fred_key=None):
+    from datetime import date as _date, timedelta as _td
+    import calendar as _cal
+    today = _date.today()
+    horizon = today + _td(days=45)
+    results = []
+
+    try:
+        params = {"from": today.strftime("%Y-%m-%d"), "to": horizon.strftime("%Y-%m-%d")}
+        fk = st.secrets.get("FINNHUB_API_KEY") or st.secrets.get("finnhub_api_key") or ""
+        if fk: params["token"] = str(fk).strip()
+        data = _fetch_robust_json("https://finnhub.io/api/v1/calendar/economic", params=params, timeout=12)
+        events = data.get("economicCalendar", [])
+        HIGH_KW = ["cpi","fomc","fed","nonfarm","non-farm","payroll","gdp","pce","employment situation"]
+        MED_KW  = ["ppi","retail sales","ism","pmi","housing starts","durable goods","jolts","adp","jobless","consumer confidence","industrial production","trade balance"]
+        for ev in events:
+            name = (ev.get("event") or "").strip()
+            if not name: continue
+            nl, impact = name.lower(), (ev.get("impact") or "").upper()
+            is_high = impact == "HIGH" or any(kw in nl for kw in HIGH_KW)
+            is_med  = any(kw in nl for kw in MED_KW)
+            if not (is_high or is_med or impact in ("HIGH","MEDIUM")): continue
+            try: ev_date = _date.fromisoformat((ev.get("time") or "")[:10])
+            except Exception: continue
+            if not (today <= ev_date <= horizon): continue
+            results.append({
+                "date": ev_date, "name": name, "importance": "HIGH" if is_high else "MEDIUM", "time": "",
+                "actual": str(ev.get("actual","")) if ev.get("actual") is not None else "",
+                "forecast": str(ev.get("estimate","")) if ev.get("estimate") is not None else "",
+                "previous": str(ev.get("prev","")) if ev.get("prev") is not None else "",
+                "source": "finnhub",
+            })
+        if results:
+            results.sort(key=lambda x: x["date"])
+            return results[:35]
+    except Exception: pass
+
+    if fred_key:
+        try:
+            data = _fetch_robust_json("https://api.stlouisfed.org/fred/releases/dates", params={"api_key": fred_key, "file_type": "json", "realtime_start": today.strftime("%Y-%m-%d"), "realtime_end": horizon.strftime("%Y-%m-%d"), "limit": 150, "sort_order": "asc", "include_release_dates_with_no_data": "false"}, timeout=12)
+            FRED_NAMES = {"10":("CPI","HIGH"), "21":("Jobs Report","HIGH"), "46":("PCE","HIGH"), "20":("GDP","HIGH"), "9":("FOMC","HIGH"), "15":("PPI","MEDIUM"), "14":("Retail Sales","MEDIUM"), "17":("Industrial Production","MEDIUM"), "19":("Housing Starts","MEDIUM"), "11":("Consumer Confidence","MEDIUM"), "22":("Initial Jobless Claims","MEDIUM"), "175":("ISM Mfg PMI","MEDIUM"), "184":("ISM Services PMI","MEDIUM"), "13":("Durable Goods","MEDIUM"), "69":("ADP Employment","MEDIUM"), "23":("JOLTS","MEDIUM"), "55":("Trade Balance","MEDIUM")}
+            for rel in data.get("release_dates", []):
+                rid = str(rel.get("release_id",""))
+                if rid not in FRED_NAMES: continue
+                name, imp = FRED_NAMES[rid]
+                for d in rel.get("release_dates",[]):
+                    try:
+                        rel_date = _date.fromisoformat(d)
+                        if today <= rel_date <= horizon: results.append({"date":rel_date,"name":name,"importance":imp, "time":"","actual":"","forecast":"","previous":"","source":"fred"})
+                    except: continue
+            if results:
+                results.sort(key=lambda x: x["date"])
+                return results[:35]
+        except Exception: pass
+
+    def _nth_weekday(year, month, n, weekday):
+        count = 0
+        for day in range(1, _cal.monthrange(year, month)[1] + 1):
+            if _date(year, month, day).weekday() == weekday:
+                count += 1
+                if count == n: return _date(year, month, day)
+        return None
+
+    def _last_weekday(year, month, weekday):
+        last = None
+        for day in range(1, _cal.monthrange(year, month)[1] + 1):
+            if _date(year, month, day).weekday() == weekday: last = _date(year, month, day)
+        return last
+
+    static_events = []
+    for delta_m in range(0, 3):
+        m = ((today.month - 1 + delta_m) % 12) + 1
+        y = today.year + ((today.month - 1 + delta_m) // 12)
+        d = _nth_weekday(y, m, 1, 4)
+        if d: static_events.append(("Employment Situation (Jobs Report)", d, "HIGH"))
+        d = _nth_weekday(y, m, 2, 2)
+        if d: static_events.append(("Consumer Price Index (CPI)", d + _td(days=1), "HIGH"))
+        d = _nth_weekday(y, m, 2, 3)
+        if d: static_events.append(("Producer Price Index (PPI)", d, "MEDIUM"))
+        d = _nth_weekday(y, m, 2, 4)
+        if d: static_events.append(("Retail Sales", d + _td(days=1), "MEDIUM"))
+        d = _nth_weekday(y, m, 1, 3)
+        if d: static_events.append(("Initial Jobless Claims", d, "MEDIUM"))
+        d = _last_weekday(y, m, 4)
+        if d: static_events.append(("Personal Income & PCE", d, "HIGH"))
+        d = _date(y, m, 1)
+        while d.weekday() >= 5: d += _td(days=1)
+        static_events.append(("ISM Manufacturing PMI", d, "MEDIUM"))
+        d = _date(y, m, 3)
+        while d.weekday() >= 5: d += _td(days=1)
+        static_events.append(("ISM Services PMI", d, "MEDIUM"))
+        d = _last_weekday(y, m, 1)
+        if d: static_events.append(("Consumer Confidence (CB)", d, "MEDIUM"))
+        d = _last_weekday(y, m, 3)
+        if d: static_events.append(("GDP (Advance Estimate)", d, "HIGH"))
+
+    FOMC_APPROX = [_date(2025,3,19), _date(2025,5,7), _date(2025,6,18), _date(2025,7,30), _date(2025,9,17), _date(2025,10,29), _date(2025,12,10), _date(2026,1,28), _date(2026,3,18), _date(2026,4,29), _date(2026,6,17), _date(2026,7,29), _date(2026,9,16), _date(2026,10,28), _date(2026,12,16)]
+    for fd in FOMC_APPROX:
+        if today <= fd <= horizon: static_events.append(("FOMC Meeting (Fed Rate Decision)", fd, "HIGH"))
+
+    seen = set()
+    for name, date, imp in static_events:
+        key = (date, name)
+        if key in seen or not (today <= date <= horizon): continue
+        seen.add(key)
+        results.append({"date":date,"name":name,"importance":imp, "time":"","actual":"","forecast":"","previous":"","source":"est."})
+
+    results.sort(key=lambda x: x["date"])
+    return results[:35]
+
+@st.cache_data(ttl=3600)
+def get_ticker_exchange(ticker):
+    EXCHANGE_MAP = {
+        "NMS": "NASDAQ", "NGM": "NASDAQ", "NCM": "NASDAQ", "NYQ": "NYSE",
+        "ASE": "AMEX", "AMEX": "AMEX", "PCX": "AMEX", "PNK": "OTC", "OTC": "OTC",
+        "BTT": "NYSE", "NYSEArca": "AMEX", "NasdaqCM": "NASDAQ", "NasdaqGS": "NASDAQ", "NasdaqGM": "NASDAQ", "NYSE": "NYSE",
+    }
+    try:
+        info = yf.Ticker(ticker).info
+        exch = info.get("exchange", "") or info.get("fullExchangeName", "")
+        tv_prefix = EXCHANGE_MAP.get(exch, None)
+        if tv_prefix: return f"{tv_prefix}:{ticker}"
+    except Exception: pass
+    for prefix in ["NASDAQ", "NYSE", "AMEX"]: return f"{prefix}:{ticker}"
+    return f"NASDAQ:{ticker}"
+
+
+@st.cache_data(ttl=1800)
+def get_full_financials(ticker):
+    if yf is None: return {}
+    try:
+        t = yf.Ticker(ticker)
+        income, cashflow, balance = t.quarterly_financials, t.quarterly_cashflow, t.quarterly_balance_sheet
+        if income is None or income.empty: return {}
+
+        quarters = list(income.columns[:4])
+        results = {}
+
+        for q in quarters:
+            q_str = str(q)[:10]
+            row = {}
+
+            def _get(df, *keys):
+                for k in keys:
+                    if df is not None and not df.empty and k in df.index and q in df.columns:
+                        v = df.loc[k, q]
+                        if v is not None and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))): return float(v)
+                return None
+
+            row["revenue"]    = _get(income, "Total Revenue")
+            row["gross_profit"]= _get(income, "Gross Profit")
+            row["op_income"]  = _get(income, "Operating Income", "EBIT")
+            row["net_income"] = _get(income, "Net Income")
+            row["ebitda"]     = _get(income, "EBITDA", "Normalized EBITDA")
+            row["eps"]        = _get(income, "Diluted EPS", "Basic EPS")
+            row["int_expense"]= _get(income, "Interest Expense")
+            row["free_cashflow"] = _get(cashflow, "Free Cash Flow")
+            row["op_cashflow"]   = _get(cashflow, "Operating Cash Flow")
+            row["capex"]         = _get(cashflow, "Capital Expenditure")
+            row["total_debt"]    = _get(balance, "Total Debt", "Long Term Debt And Capital Lease Obligation")
+            row["cash"]          = _get(balance, "Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments")
+
+            if row["revenue"] and row["revenue"] > 0:
+                if row["gross_profit"] is not None: row["gross_margin"] = row["gross_profit"] / row["revenue"] * 100
+                if row["op_income"] is not None: row["op_margin"] = row["op_income"] / row["revenue"] * 100
+                if row["net_income"] is not None: row["net_margin"] = row["net_income"] / row["revenue"] * 100
+
+            results[q_str] = row
+        return results
+    except Exception:
+        return {}
+
+@st.cache_data(ttl=600)
+def get_stock_news(ticker, finnhub_key=None, newsapi_key=None):
+    results = []
+    if finnhub_key:
+        try:
+            from datetime import date as _date
+            today = _date.today()
+            from_dt = (today - timedelta(days=7)).strftime("%Y-%m-%d")
+            to_dt = today.strftime("%Y-%m-%d")
+            articles = _fetch_robust_json("https://finnhub.io/api/v1/company-news", params={"symbol": ticker, "from": from_dt, "to": to_dt, "token": finnhub_key}, timeout=10)
+            for art in articles[:8]:
+                headline = art.get("headline", "")
+                if not headline or not _is_english(headline): continue
+                ts = art.get("datetime", 0)
+                d = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else ""
+                results.append({"title": headline[:110], "url": art.get("url", "#"), "source": art.get("source", "Finnhub"), "date": d})
+            if results: return results
+        except Exception: pass
+
+    try:
+        info = yf.Ticker(ticker).info if yf else {}
+        co_name = info.get("shortName", ticker).split()[0] if info else ticker
+        query = f"{ticker} {co_name} stock"
+        arts = gdelt_news(query, max_rec=8)
+        for art in arts:
+            title = art.get("title", "")
+            if not title: continue
+            sd = art.get("seendate", "")
+            d = f"{sd[:4]}-{sd[4:6]}-{sd[6:8]}" if sd and len(sd) >= 8 else ""
+            results.append({"title": title[:110], "url": art.get("url", "#"), "source": art.get("domain", "GDELT"), "date": d})
+        if results: return results
+    except Exception: pass
+
+    if newsapi_key:
+        try:
+            arts = newsapi_headlines(newsapi_key, query=f"{ticker} stock earnings")
+            for art in arts[:8]:
+                title = art.get("title", "")
+                if not title or "[Removed]" in title: continue
+                results.append({"title": title[:110], "url": art.get("url", "#"), "source": art.get("source", {}).get("name", "NewsAPI"), "date": art.get("publishedAt", "")[:10]})
+        except Exception: pass
+
+    return results
+
+
+# ════════════════════════════════════════════════════════════════════
+# POLYMARKET MISPRICING ALGORITHM
+# ════════════════════════════════════════════════════════════════════
+
+def _poly_liquidity_score(market):
+    vol   = _safe_float(market.get("volume", 0))
+    vol24 = _safe_float(market.get("volume24hr", 0))
+    liq   = _safe_float(market.get("liquidity", 0))
+    if vol > 1_000_000 and liq > 100_000:  return 1.0   
+    if vol > 250_000  and liq > 30_000:    return 0.80
+    if vol > 50_000   and liq > 10_000:    return 0.60
+    if vol > 10_000   and liq > 2_000:     return 0.40
+    if vol > 1_000:                         return 0.20
+    return 0.05  
+
+def _poly_crowd_accuracy_discount(liq_score):
+    return 0.30 + 0.70 * (liq_score ** 0.6)
+
+def score_poly_mispricing(markets, base_rate_fn=None):
+    results = []
+    for m in markets:
+        try:
+            title = m.get("question", m.get("title", ""))
+            if not title: continue
+
+            pp = _parse_poly_field(m.get("outcomePrices", []))
+            if not pp or len(pp) < 2: continue
+
+            raw_yes = _safe_float(pp[0])
+            raw_no  = _safe_float(pp[1]) if len(pp) > 1 else (1 - raw_yes)
+
+            if raw_yes <= 0 or raw_yes >= 1: continue
+            if abs(raw_yes + raw_no - 1.0) > 0.15: continue
+
+            liq_score   = _poly_liquidity_score(m)
+            reliability = _poly_crowd_accuracy_discount(liq_score)
+            adj_prob    = 0.5 + (raw_yes - 0.5) * reliability
+
+            vol   = _safe_float(m.get("volume", 0))
+            vol24 = _safe_float(m.get("volume24hr", 0))
+            activity_ratio = min(vol24 / vol, 1.0) if vol > 0 else 0.0
+
+            # --- TRUE EDGE: deviation between raw and liquidity-adjusted ---
+            # In illiquid markets the crowd is unreliable → adj_prob pulls toward 50%
+            # The "edge" is how much the raw price overstates the true probability
+            raw_edge    = abs(raw_yes - 0.5)           # how extreme is raw
+            adj_edge    = abs(adj_prob - 0.5)           # how extreme after discount
+            crowd_error = raw_edge - adj_edge           # error from overcrowding
+
+            # Bet signal: only flag when crowd_error is meaningful
+            # High crowd_error + illiquid = fade opportunity
+            # High adj_edge + liquid = real momentum (ride)
+            vol24_weight = math.log1p(vol24) / math.log1p(1_000_000) if vol24 > 0 else 0.0
+            vol24_weight = min(vol24_weight, 1.0)
+
+            # Mispricing score: high when crowd_error is large AND there's real activity
+            mispricing_score = round(
+                crowd_error * vol24_weight * (1.0 - liq_score + 0.1) * (0.5 + activity_ratio),
+                5
+            )
+
+            # Spread for display
+            spread_str = ""
+            best_bid = _safe_float(m.get("bestBid", 0))
+            best_ask = _safe_float(m.get("bestAsk", 0)) or _safe_float(m.get("bestOffer", 0))
+            if best_bid > 0 and best_ask > 0:
+                spread = best_ask - best_bid
+                spread_str = f"{spread*100:.1f}¢"
+
+            # Signal: fade overcrowded thin markets, ride confirmed deep markets
+            if liq_score < 0.40 and raw_yes > 0.70 and crowd_error > 0.05:
+                signal, signal_color = "FADE YES", "#FF4444"
+            elif liq_score < 0.40 and raw_yes < 0.30 and crowd_error > 0.05:
+                signal, signal_color = "FADE NO", "#00CC44"
+            elif liq_score >= 0.70 and raw_yes > 0.65:
+                signal, signal_color = "RIDE YES", "#00CC44"
+            elif liq_score >= 0.70 and raw_yes < 0.35:
+                signal, signal_color = "RIDE NO", "#FF4444"
+            else:
+                signal, signal_color = "MONITOR", "#FF8C00"
+
+            results.append({
+                "title": title[:80], "url": m.get("slug", ""),
+                "raw_yes": round(raw_yes * 100, 1),
+                "adj_yes": round(adj_prob * 100, 1),
+                "liq_score": liq_score,
+                "reliability": round(reliability, 2),
+                "edge": round(crowd_error, 3),   # now: true crowd error
+                "mispricing_score": mispricing_score,
+                "vol": vol, "vol24": vol24,
+                "activity_ratio": round(activity_ratio, 3),
+                "signal": signal, "signal_color": signal_color,
+                "spread": spread_str,
+                "liq_tier": ("DEEP" if liq_score >= 0.8 else "MED" if liq_score >= 0.5
+                              else "THIN" if liq_score >= 0.2 else "ILLIQ"),
+            })
+        except Exception:
+            continue
+
+    results.sort(key=lambda x: x["mispricing_score"], reverse=True)
+    return results[:15]
+
+
+# ════════════════════════════════════════════════════════════════════
+# GEO TAB — DATA FETCHERS & CONSTANTS
+# ════════════════════════════════════════════════════════════════════
+
+GEO_FINANCIAL_NETWORKS = [
+    {"name": "Bloomberg",  "channel_id": "UCIALMKvObZNtJ6AmdCLP7Lg", "embed_url": "https://www.youtube.com/embed/iEpJwprxDdk?autoplay=1&mute=1"},
+    {"name": "CNBC",       "channel_id": "UCvJJ_dzjViJCoLf5uKUTwoA", "embed_url": "https://www.youtube.com/embed/live_stream?channel=UCvJJ_dzjViJCoLf5uKUTwoA&autoplay=1&mute=1"},
+    {"name": "Euronews",   "channel_id": "UCW2QcKZiU8aUGg4yxCIditg", "embed_url": "https://www.youtube.com/embed/live_stream?channel=UCW2QcKZiU8aUGg4yxCIditg&autoplay=1&mute=1"},
+    {"name": "France 24",  "channel_id": "UCQfwfsi5VrQ8yKZ-UWmAoBw", "embed_url": "https://www.youtube.com/embed/live_stream?channel=UCQfwfsi5VrQ8yKZ-UWmAoBw&autoplay=1&mute=1"},
+    {"name": "Al Jazeera", "channel_id": "UCNye-wNBqNL5ZzHSJj3l8Bg", "embed_url": "https://www.youtube.com/embed/live_stream?channel=UCNye-wNBqNL5ZzHSJj3l8Bg&autoplay=1&mute=1"},
+    {"name": "DW News",    "channel_id": "UCknLrEdhRCp1aegoMqRaCZg", "embed_url": "https://www.youtube.com/embed/live_stream?channel=UCknLrEdhRCp1aegoMqRaCZg&autoplay=1&mute=1"},
+    {"name": "Sky News",   "channel_id": "UCoMdktPbSTixAyNGwb-UYkQ", "embed_url": "https://www.youtube.com/embed/live_stream?channel=UCoMdktPbSTixAyNGwb-UYkQ&autoplay=1&mute=1"},
+]
+
+GEO_WEBCAM_FEEDS = [
+    {"id": "tehran", "city": "Tehran", "country": "Iran", "region": "Middle East", "fallbackVideoId": "-zGuR1qVKrU"},
+    {"id": "tel-aviv", "city": "Tel Aviv", "country": "Israel", "region": "Middle East", "fallbackVideoId": "JHwwZRH2wz8"},
+    {"id": "jerusalem", "city": "Jerusalem", "country": "Israel", "region": "Middle East", "fallbackVideoId": "UyduhBUpO7Q"},
+    {"id": "dubai", "city": "Dubai", "country": "UAE", "region": "Middle East", "fallbackVideoId": "MfIpyflPbHQ"},
+    {"id": "kyiv", "city": "Kyiv", "country": "Ukraine", "region": "Europe", "fallbackVideoId": "-Q7FuPINDjA"},
+    {"id": "odessa", "city": "Odessa", "country": "Ukraine", "region": "Europe", "fallbackVideoId": "e2gC37ILQmk"},
+    {"id": "paris", "city": "Paris", "country": "France", "region": "Europe", "fallbackVideoId": "OzYp4NRZlwQ"},
+    {"id": "st-petersburg", "city": "St. Petersburg","country": "Russia", "region": "Europe", "fallbackVideoId": "CjtIYbmVfck"},
+    {"id": "london", "city": "London", "country": "UK", "region": "Europe", "fallbackVideoId": "M3EYAY2MftI"},
+    {"id": "washington", "city": "Washington DC","country": "USA", "region": "Americas", "fallbackVideoId": "1wV9lLe14aU"},
+    {"id": "new-york", "city": "New York", "country": "USA", "region": "Americas", "fallbackVideoId": "4qyZLflp-sI"},
+    {"id": "los-angeles", "city": "Los Angeles", "country": "USA", "region": "Americas", "fallbackVideoId": "EO_1LWqsCNE"},
+    {"id": "miami", "city": "Miami", "country": "USA", "region": "Americas", "fallbackVideoId": "5YCajRjvWCg"},
+    {"id": "taipei", "city": "Taipei", "country": "Taiwan", "region": "Asia-Pacific", "fallbackVideoId": "z_fY1pj1VBw"},
+    {"id": "shanghai", "city": "Shanghai", "country": "China", "region": "Asia-Pacific", "fallbackVideoId": "76EwqI5XZIc"},
+    {"id": "tokyo", "city": "Tokyo", "country": "Japan", "region": "Asia-Pacific", "fallbackVideoId": "4pu9sF5Qssw"},
+    {"id": "seoul", "city": "Seoul", "country": "South Korea", "region": "Asia-Pacific", "fallbackVideoId": "-JhoMGoAfFc"},
+    {"id": "sydney", "city": "Sydney", "country": "Australia", "region": "Asia-Pacific", "fallbackVideoId": "7pcL-0Wo77U"},
+]
+
+GEO_SHIPPING_LANES = {
+    "type": "FeatureCollection",
+    "features": [
+        {"type": "Feature", "properties": {"name": "Trans-Pacific", "type": "shipping"}, "geometry": {"type": "LineString", "coordinates": [[121.5, 31.2], [140.0, 35.0], [160.0, 38.0], [180.0, 35.0], [-160.0, 28.0], [-140.0, 24.0], [-118.2, 33.7]]}},
+        {"type": "Feature", "properties": {"name": "Trans-Atlantic", "type": "shipping"}, "geometry": {"type": "LineString", "coordinates": [[2.35, 48.85], [-5.0, 48.0], [-20.0, 42.0], [-40.0, 38.0], [-60.0, 35.0], [-74.0, 40.7]]}},
+        {"type": "Feature", "properties": {"name": "Suez / Red Sea", "type": "shipping"}, "geometry": {"type": "LineString", "coordinates": [[5.0, 36.0], [15.0, 37.0], [25.0, 35.0], [32.0, 31.0], [32.5, 29.9], [33.5, 27.0], [38.0, 23.0], [43.5, 12.5], [50.0, 10.0]]}},
+        {"type": "Feature", "properties": {"name": "Strait of Hormuz", "type": "shipping"}, "geometry": {"type": "LineString", "coordinates": [[50.0, 10.0], [55.0, 15.0], [58.0, 20.0], [56.5, 24.0], [57.5, 23.6]]}},
+        {"type": "Feature", "properties": {"name": "Malacca / SCS", "type": "shipping"}, "geometry": {"type": "LineString", "coordinates": [[80.0, 5.0], [90.0, 3.0], [100.0, 2.5], [104.5, 1.3], [108.0, 3.5], [110.0, 5.0], [115.0, 8.0], [121.5, 22.0], [121.5, 31.2]]}},
+        {"type": "Feature", "properties": {"name": "Cape of Good Hope", "type": "shipping"}, "geometry": {"type": "LineString", "coordinates": [[2.35, 48.85], [-10.0, 30.0], [-17.0, 14.0], [-14.0, -8.0], [0.0, -20.0], [18.5, -34.0], [25.0, -34.5], [35.0, -28.0], [43.5, -12.0], [50.0, 10.0]]}},
+    ],
+}
+
+GEO_THEATERS = {
+    "Middle East + Oil + Hormuz":         "Middle East Iran oil Hormuz",
+    "China + Taiwan + Semiconductors":    "China Taiwan semiconductor chips TSMC",
+    "Russia + Ukraine + Energy":          "Russia Ukraine energy grain NATO",
+    "Africa + Cobalt + Lithium + Coup":   "Africa cobalt lithium coup Sahel Mali",
+    "Red Sea + Suez + Shipping":          "Red Sea Suez shipping Houthi container",
+    "South China Sea + Trade":            "South China Sea shipping Philippines trade",
+}
+
+GEO_IMPACT_TICKERS = {
+    "WTI Crude": "CL=F", "Brent Crude": "BZ=F", "Natural Gas": "NG=F",
+    "Gold":      "GC=F", "Silver":      "SI=F", "Wheat":       "ZW=F",
+    "USD Index": "DX-Y.NYB", "EUR/USD": "EURUSD=X", "10Y Yield": "^TNX",
+}
+
+
+def fetch_military_aircraft() -> "pd.DataFrame":
+    import pandas as _pd
+    try:
+        data = _fetch_robust_json("https://api.airplanes.live/v2/mil", timeout=15)
+        ac_list = data.get("ac", [])
+        rows = []
+        for ac in ac_list:
+            lat, lon = ac.get("lat"), ac.get("lon")
+            if lat is None or lon is None: continue
+            rows.append({
+                "hex": ac.get("hex", ""), "lat": float(lat), "lon": float(lon),
+                "alt_baro": int(ac.get("alt_baro") or 0), "gs": int(ac.get("gs") or 0),
+                "flight": str(ac.get("flight") or ac.get("hex", "UNKN")).strip(),
+                "track": float(ac.get("track") or 0), "size": 48,
+            })
+        df = _pd.DataFrame(rows)
+        if not df.empty:
+            df["photo_url"] = df["hex"].apply(lambda h: f"https://api.planespotters.net/pub/photos/hex/{h}")
+        return df
+    except Exception as e:
+        logger.error("Military Flight Fetch Error: %s", str(e))
+        return _pd.DataFrame()
+
+
+@st.cache_data(ttl=300)
+def fetch_satellite_positions():
+    import pandas as _pd
+    try:
+        from skyfield.api import EarthSatellite, load, wgs84 as _wgs84
+        import numpy as _np
+    except ImportError:
+        logger.error("Satellite Tracker: Missing skyfield")
+        return _pd.DataFrame(), []
+
+    try:
+        r = requests.get("https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle", timeout=15, headers={"User-Agent": "SENTINEL/3.0"})
+        r.raise_for_status()
+        lines = [l.strip() for l in r.text.strip().splitlines() if l.strip()]
+    except Exception as e:
+        logger.error("Celestrak Error: %s", str(e))
+        return _pd.DataFrame(), []
+
+    from datetime import timezone as _tz, timedelta as _td
+    ts = load.timescale()
+    now_utc = datetime.now(_tz.utc)
+    t_now = ts.from_datetime(now_utc)
+
+    sats, i = [], 0
+    while i + 2 < len(lines):
+        name, tle1, tle2 = lines[i], lines[i + 1], lines[i + 2]
+        if tle1.startswith("1 ") and tle2.startswith("2 "):
+            try: sats.append(EarthSatellite(tle1, tle2, name, ts))
+            except Exception: pass
+            i += 3
+        else: i += 1
+
+    sats = sats[:50]
+    rows, path_features = [], []
+
+    for sat in sats:
+        try:
+            geo = _wgs84.geographic_position_of(sat.at(t_now))
+            lat, lon, alt_km = float(geo.latitude.degrees), float(geo.longitude.degrees), float(geo.elevation.km)
+            try: n = sat.model.no_kozai * (1440 / (2 * _np.pi))
+            except Exception: n = 15.5
+            vel_kms = round(n * 2 * _np.pi * (6371 + alt_km) / 86400, 2)
+
+            rows.append({"name": sat.name, "lat": lat, "lon": lon, "alt_km": round(alt_km, 1), "vel_kms": vel_kms, "size": 32})
+            path_coords = []
+            for offset in range(0, 91, 5):
+                t_f = ts.from_datetime(now_utc + _td(minutes=offset))
+                g = _wgs84.geographic_position_of(sat.at(t_f))
+                path_coords.append([float(g.longitude.degrees), float(g.latitude.degrees)])
+            path_features.append({"path": path_coords, "name": sat.name, "color": [0, 180, 255, 100]})
+        except Exception: continue
+
+    return _pd.DataFrame(rows), path_features
+
+
+@st.cache_data(ttl=300)
+def fetch_conflict_events() -> "pd.DataFrame":
+    import pandas as _pd
+    try:
+        url = "https://api.gdeltproject.org/api/v2/geo/geo?query=(strike%20OR%20attack%20OR%20bombing%20OR%20explosion)&mode=pointdata&format=geojson&timespan=1h"
+        data = _fetch_robust_json(url, timeout=12, headers={"User-Agent": "SENTINEL/3.0"})
+        features = data.get("features", [])
+        rows = []
+        for f in features:
+            coords = f.get("geometry", {}).get("coordinates", [])
+            props  = f.get("properties", {})
+            if len(coords) < 2: continue
+            rows.append({"lon": float(coords[0]), "lat": float(coords[1]), "name": props.get("name", "Event"), "url": props.get("url", "")})
+        return _pd.DataFrame(rows)
+    except Exception:
+        return _pd.DataFrame()
+
+@st.cache_data(ttl=300)
+def fetch_conflict_events_json():
+    df = fetch_conflict_events()
+    return [] if df is None or df.empty else df.to_dict("records")
+
+@st.cache_data(ttl=300)
+def fetch_military_aircraft_json():
+    df = fetch_military_aircraft()
+    return [] if df is None or df.empty else df.to_dict("records")
+
+@st.cache_data(ttl=300)
+def fetch_satellite_positions_json():
+    df, _ = fetch_satellite_positions()
+    return [] if df is None or df.empty else df.to_dict("records")
+
+@st.cache_data(ttl=300)
+def fetch_ais_vessels():
+    vessels = []
+    ais_key = st.secrets.get("AISSTREAM_API_KEY", "") or ""
+    if ais_key:
+        try:
+            data = _fetch_robust_json("https://api.aisstream.io/v0/ships", params={"apikey": ais_key}, timeout=12, headers={"User-Agent": "SENTINEL/3.0"})
+            ships = data if isinstance(data, list) else data.get("data", data.get("ships", []))
+            for s in ships[:200]:
+                pos = s.get("position", s)
+                lat, lon = pos.get("lat", pos.get("latitude")), pos.get("lon", pos.get("longitude"))
+                if lat is None or lon is None: continue
+                vessels.append({"mmsi": str(s.get("mmsi", s.get("MMSI", ""))), "lat": float(lat), "lon": float(lon), "speed": float(s.get("speed", s.get("sog", 0)) or 0), "heading": float(s.get("heading", s.get("cog", 0)) or 0), "name": str(s.get("name", s.get("shipName", "VESSEL"))).strip()[:30], "type": str(s.get("shipType", s.get("type", "cargo")))})
+        except Exception: pass
+
+    mar_key = st.secrets.get("MARINESIA_API_KEY", "") or ""
+    if mar_key:
+        import time as _time
+        _CHOKEPOINT_BOXES = [("suez", 29.0, 30.5, 32.0, 33.5), ("hormuz", 25.5, 27.5, 55.0, 57.0), ("mandeb", 12.0, 13.5, 42.5, 44.0), ("malacca", 0.5, 2.5, 103.0, 104.5), ("taiwan", 23.5, 25.5, 118.5, 120.5), ("gibraltar", 35.5, 36.5, -6.0, -5.0)]
+        for name, lat_min, lat_max, lon_min, lon_max in _CHOKEPOINT_BOXES:
+            try:
+                data = _fetch_robust_json("https://api.marinesia.com/api/v2/vessel/area", params={"lat_min": lat_min, "lat_max": lat_max, "long_min": lon_min, "long_max": lon_max, "key": mar_key}, timeout=10, headers={"User-Agent": "SENTINEL/3.0"})
+                if not data.get("error") and data.get("data"):
+                    for s in data["data"][:30]:
+                        lat, lng = s.get("lat"), s.get("lng")
+                        if lat is None or lng is None: continue
+                        vessels.append({"mmsi": str(s.get("mmsi", "")), "lat": float(lat), "lon": float(lng), "speed": float(s.get("sog", 0) or 0), "heading": float(s.get("cog", s.get("hdt", 0)) or 0), "name": str(s.get("name", f"MMSI-{s.get('mmsi','')}"))[:30], "type": str(s.get("type", "cargo")).lower()})
+                _time.sleep(1.0)
+            except Exception: continue
+
+    try:
+        data = _fetch_robust_json("https://meri.digitraffic.fi/api/ais/v1/locations", timeout=12, headers={"User-Agent": "SENTINEL/3.0", "Accept": "application/json"})
+        for f in data.get("features", [])[:200]:
+            props, coords = f.get("properties", {}), f.get("geometry", {}).get("coordinates", [])
+            if len(coords) < 2: continue
+            vessels.append({"mmsi": str(props.get("mmsi", "")), "lat": float(coords[1]), "lon": float(coords[0]), "speed": float(props.get("sog", 0) or 0), "heading": float(props.get("cog", props.get("heading", 0)) or 0), "name": f"MMSI-{props.get('mmsi', 'UNKN')}", "type": "cargo"})
+    except Exception: pass
+
+    try:
+        data = _fetch_robust_json("https://ais.dma.dk/ais-api/getAisData", timeout=12, headers={"User-Agent": "SENTINEL/3.0", "Accept": "application/json"})
+        ships = data if isinstance(data, list) else data.get("aisData", data.get("ships", []))
+        for s in (ships or [])[:200]:
+            lat, lon = s.get("lat", s.get("latitude")), s.get("lon", s.get("longitude"))
+            if lat is None or lon is None: continue
+            vessels.append({"mmsi": str(s.get("mmsi", "")), "lat": float(lat), "lon": float(lon), "speed": float(s.get("sog", s.get("speed", 0)) or 0), "heading": float(s.get("cog", s.get("heading", 0)) or 0), "name": str(s.get("name", f"MMSI-{s.get('mmsi','UNKN')}")).strip()[:30], "type": str(s.get("shipType", "cargo"))})
+    except Exception: pass
+
+    _STATIC = [
+        {"mmsi": "STATIC-001", "lat": 29.95, "lon": 32.55, "speed": 8, "heading": 160, "name": "SUEZ CANAL TRANSIT", "type": "tanker"},
+        {"mmsi": "STATIC-002", "lat": 26.55, "lon": 56.25, "speed": 10, "heading": 310, "name": "HORMUZ TRANSIT", "type": "tanker"},
+        {"mmsi": "STATIC-003", "lat": 12.60, "lon": 43.20, "speed": 12, "heading": 340, "name": "BAB EL-MANDEB TRANSIT", "type": "cargo"},
+        {"mmsi": "STATIC-004", "lat": 1.28, "lon": 103.85, "speed": 9, "heading": 45, "name": "MALACCA STRAIT TRANSIT", "type": "container"},
+        {"mmsi": "STATIC-005", "lat": -34.20, "lon": 18.50, "speed": 14, "heading": 90, "name": "CAPE GOOD HOPE TRANSIT", "type": "tanker"},
+        {"mmsi": "STATIC-006", "lat": 9.10, "lon": -79.70, "speed": 11, "heading": 270, "name": "PANAMA CANAL TRANSIT", "type": "container"},
+        {"mmsi": "STATIC-007", "lat": 35.00, "lon": 136.00, "speed": 10, "heading": 200, "name": "JAPAN STRAIT TRANSIT", "type": "cargo"},
+        {"mmsi": "STATIC-008", "lat": 51.00, "lon": 1.50, "speed": 8, "heading": 220, "name": "ENGLISH CHANNEL TRANSIT", "type": "container"},
+        {"mmsi": "STATIC-009", "lat": 13.50, "lon": 48.00, "speed": 14, "heading": 30, "name": "GULF OF ADEN CONVOY", "type": "tanker"},
+        {"mmsi": "STATIC-010", "lat": 15.80, "lon": 41.80, "speed": 10, "heading": 350, "name": "RED SEA NORTHBOUND", "type": "cargo"},
+        {"mmsi": "STATIC-011", "lat": 10.50, "lon": 114.00, "speed": 12, "heading": 30, "name": "SCS PARACEL ROUTE", "type": "container"},
+        {"mmsi": "STATIC-012", "lat": 7.50, "lon": 116.50, "speed": 11, "heading": 315, "name": "SCS SPRATLY ROUTE", "type": "tanker"},
+        {"mmsi": "STATIC-013", "lat": 24.50, "lon": 119.50, "speed": 13, "heading": 20, "name": "TAIWAN STRAIT TRANSIT", "type": "cargo"},
+        {"mmsi": "STATIC-014", "lat": 31.35, "lon": 121.50, "speed": 5, "heading": 90, "name": "SHANGHAI APPROACH", "type": "container"},
+        {"mmsi": "STATIC-015", "lat": 22.30, "lon": 114.15, "speed": 6, "heading": 180, "name": "HONG KONG APPROACH", "type": "container"},
+        {"mmsi": "STATIC-016", "lat": 40.67, "lon": -74.05, "speed": 7, "heading": 0, "name": "NEW YORK APPROACH", "type": "tanker"},
+        {"mmsi": "STATIC-017", "lat": 51.90, "lon": 4.50, "speed": 6, "heading": 90, "name": "ROTTERDAM APPROACH", "type": "container"},
+        {"mmsi": "STATIC-018", "lat": 35.50, "lon": 139.80, "speed": 5, "heading": 270, "name": "TOKYO BAY APPROACH", "type": "cargo"},
+        {"mmsi": "STATIC-019", "lat": 41.20, "lon": 29.00, "speed": 9, "heading": 210, "name": "BOSPHORUS TRANSIT", "type": "tanker"},
+        {"mmsi": "STATIC-020", "lat": 36.00, "lon": -5.40, "speed": 11, "heading": 90, "name": "GIBRALTAR TRANSIT", "type": "cargo"},
+    ]
+    vessels.extend(_STATIC)
+
+    seen = {}
+    for v in vessels:
+        mmsi = v.get("mmsi", "")
+        if not mmsi: continue
+        existing = seen.get(mmsi)
+        if existing is None: seen[mmsi] = v
+        else:
+            new_name, old_name = v.get("name", ""), existing.get("name", "")
+            if (old_name.startswith("MMSI-") or old_name == "VESSEL") and not new_name.startswith("MMSI-") and new_name != "VESSEL":
+                seen[mmsi] = v
+
+    return list(seen.values())
+
+# ════════════════════════════════════════════════════════════════════
+# CRYPTO — INSTITUTIONAL BTC ETF FLOWS
+# ════════════════════════════════════════════════════════════════════
+
+_ETF_TICKERS = ["IBIT", "FBTC", "ARKB", "BITB", "GBTC", "HODL", "BRRR", "EZBC", "BTCO", "BTCW"]
+_ETF_COLORS = {"IBIT": "#00CC44", "FBTC": "#00AA88", "ARKB": "#44BB66", "BITB": "#66CC88", "GBTC": "#FF4444", "HODL": "#55DD99", "BRRR": "#33CC77", "EZBC": "#77DDAA", "BTCO": "#88CCBB", "BTCW": "#99BBAA"}
+_YAHOO_UAS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+]
+
+def _fetch_yahoo_v8_chart(ticker, range_str="5d", interval="1d"):
+    import random
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={range_str}&interval={interval}"
+    try:
+        ua = random.choice(_YAHOO_UAS)
+        data = _fetch_robust_json(url, headers={"User-Agent": ua}, timeout=10)
+        result = data.get("chart", {}).get("result", [])
+        if not result: return []
+        meta = result[0]
+        timestamps, indicators = meta.get("timestamp", []), meta.get("indicators", {}).get("quote", [{}])[0]
+        highs, lows = indicators.get("high", []), indicators.get("low", [])
+        if not timestamps or not closes: return []
+
+        rows = []
+        for i, ts in enumerate(timestamps):
+            c = closes[i] if i < len(closes) else None
+            h = highs[i] if i < len(highs) else c
+            l = lows[i] if i < len(lows) else c
+            v = volumes[i] if i < len(volumes) else None
+            if c is None or v is None: continue
+            rows.append({
+                "timestamp": ts, 
+                "close": float(c), 
+                "high": float(h) if h else float(c),
+                "low": float(l) if l else float(c),
+                "volume": int(v)
+            })
+        return rows
+    except Exception as e:
+        logger.error("Failed to fetch Yahoo V8 chart for %s: %s", ticker, str(e))
+        return []
+
+@st.cache_data(ttl=600)
+def fetch_btc_etf_flows():
+    import pandas as _pd
+    import time as _time
+    all_flows = {}
+    
+    for ticker in _ETF_TICKERS:
+        try:
+            _time.sleep(1.0 + (_time.time() % 1.5))
+            rows = _fetch_yahoo_v8_chart(ticker, range_str="5d", interval="1d")
+            if not rows or len(rows) < 2: continue
+            ticker_flows = {}
+            for i in range(1, len(rows)):
+                prev_close = rows[i - 1]["close"]
+                curr_close, curr_high, curr_low = rows[i]["close"], rows[i]["high"], rows[i]["low"]
+                volume, ts = rows[i]["volume"], rows[i]["timestamp"]
+                
+                if prev_close <= 0 or curr_close <= 0: continue
+                vwap = (curr_high + curr_low + curr_close) / 3.0
+                direction = 1.0 if (curr_close - prev_close) >= 0 else -1.0
+                # Using VWAP for accumulation mathematically handles intraday volatility
+                ticker_flows[_pd.Timestamp.fromtimestamp(ts).normalize()] = round((volume * vwap * direction * 0.10) / 1e6, 2)
+            if ticker_flows: all_flows[ticker] = ticker_flows
+            _time.sleep(1.0)
+        except Exception as e:
+            logger.error("BTC ETF Flow specific fallback error for %s: %s", ticker, str(e))
+            continue
+
+    if not all_flows: return None
+    df = _pd.DataFrame(all_flows)
+    df.index = _pd.to_datetime(df.index)
+    df = df.sort_index().fillna(0)
+    df["Total"] = df[[c for c in df.columns if c in _ETF_TICKERS]].sum(axis=1)
+    return df if len(df) > 0 else None
+
+@st.cache_data(ttl=1800)
+def fetch_btc_etf_flows_fallback():
+    import pandas as _pd
+    if yf is None: return None
+    try:
+        all_data = {}
+        for ticker in _ETF_TICKERS:
+            try:
+                hist = yf.Ticker(ticker).history(period="60d")
+                if hist is None or hist.empty or len(hist) < 2: continue
+                prev_close = hist["Close"].shift(1)
+                vwap = (hist["High"] + hist["Low"] + hist["Close"]) / 3.0
+                direction = (hist["Close"] - prev_close).apply(lambda x: 1.0 if x >= 0 else -1.0)
+                all_data[ticker] = ((hist["Volume"] * vwap * direction * 0.10) / 1e6).iloc[1:]
+            except Exception as e:
+                logger.error("BTC ETF Fallback flow error for %s: %s", ticker, str(e))
+                continue
+
+        if not all_data: return None
+        df = _pd.DataFrame(all_data)
+        df.index = _pd.to_datetime(df.index).tz_localize(None)
+        df = df.fillna(0)
+        df["Total"] = df[[c for c in df.columns if c in _ETF_TICKERS]].sum(axis=1)
+        return df.tail(30) if len(df) > 0 else None
+    except Exception:
+        return None
