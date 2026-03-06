@@ -1189,7 +1189,7 @@ def fetch_0dte_chain(underlying="SPY"):
             T_val = 0.5 / 365.0  # Appx half a trading day for 0DTE flow
             
             calculated_iv = get_iv_newton(spot, strike, T_val, r_rate, mid, opt_type)
-            if calculated_iv > 0:
+            if calculated_iv is not None and calculated_iv > 0:
                 bs_override = bs_greeks_engine(spot, strike, T_val, r_rate, calculated_iv, opt_type)
                 final_iv = calculated_iv
                 final_delta = bs_override["delta"]
@@ -1258,6 +1258,247 @@ def find_gamma_flip(gex_profile):
         if gex_profile[strikes[i - 1]] <= 0 and gex_profile[strikes[i]] > 0: return strikes[i]
     vals = list(gex_profile.values())
     return strikes[0] if all(v >= 0 for v in vals) else strikes[-1]
+
+
+def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
+    """Multi-factor quantitative SPX daily direction predictor.
+    
+    Combines 7 weighted signals rooted in options market microstructure:
+    1. Gamma Regime    — positive gamma = mean-reverting (dealer hedging dampens moves)
+    2. Net GEX Tilt    — call vs put gamma imbalance shows directional flow
+    3. VWAP Deviation  — institutional volume anchor; reversion signal
+    4. Put/Call Ratio  — sentiment skew from OI distribution
+    5. Max Pain Gravity — expiry pin effect attracts price
+    6. VIX Term Struct  — contango = calm, backwardation = panic
+    7. VIX Level        — regime classification (low/normal/elevated/crisis)
+    
+    Returns dict with direction, confidence, score, and per-signal breakdown.
+    """
+    if not chain or not spx_metrics:
+        return None
+
+    spot = spx_metrics["spot"]
+    vwap = spx_metrics["vwap"]
+    vix = (vix_data or {}).get("vix") or 20.0
+    contango = (vix_data or {}).get("contango")
+
+    # Compute GEX if not provided
+    if gex_profile is None:
+        gex_profile = compute_gex_profile(chain, spot / 10)
+
+    gamma_flip_spy = find_gamma_flip(gex_profile)
+    gamma_flip = gamma_flip_spy * 10 if gamma_flip_spy else None
+    max_pain_spy = compute_max_pain(chain)
+    max_pain = max_pain_spy * 10 if max_pain_spy else None
+    pcr = compute_pcr(chain)
+
+    # Expected move from VIX (annualized → daily)
+    daily_em = spot * (vix / 100) / (252 ** 0.5)
+
+    score = 0.0
+    signals = []  # list of (name, value, weight, direction_str, color)
+
+    # ──────────────────────────────────────────────────────────
+    # SIGNAL 1: Gamma Regime (weight: 3.0)
+    # Positive net GEX = dealers long gamma → mean-reversion (bullish, damped)
+    # Negative net GEX = dealers short gamma → trend-following (bearish, volatile)
+    # ──────────────────────────────────────────────────────────
+    if gex_profile:
+        net_gex = sum(gex_profile.values())
+        if net_gex > 0:
+            contrib = 2.5
+            signals.append(("Gamma Regime", f"Net +{net_gex:.1f}M", contrib,
+                           "POSITIVE — Dealers hedge → dampened, mean-reverting", "#00CC44"))
+        elif net_gex < -0.5:
+            contrib = -2.5
+            signals.append(("Gamma Regime", f"Net {net_gex:.1f}M", contrib,
+                           "NEGATIVE — Dealers amplify → trending, volatile", "#FF4444"))
+        else:
+            contrib = 0.0
+            signals.append(("Gamma Regime", f"Net {net_gex:.1f}M", contrib,
+                           "NEUTRAL — Near gamma-neutral zone", "#FF8C00"))
+        score += contrib
+
+    # ──────────────────────────────────────────────────────────
+    # SIGNAL 2: GEX Tilt — Call-side vs Put-side gamma mass
+    # More call gamma above spot = resistance (bearish pressure)
+    # More put gamma below spot = support (bullish floor)
+    # ──────────────────────────────────────────────────────────
+    if gex_profile and gamma_flip:
+        above_gex = sum(v for k, v in gex_profile.items() if k * 10 > spot)
+        below_gex = sum(v for k, v in gex_profile.items() if k * 10 < spot)
+        total_abs = abs(above_gex) + abs(below_gex)
+        if total_abs > 0:
+            tilt_ratio = (above_gex - below_gex) / total_abs
+            # Positive tilt = more call gamma above = cap/resistance = slightly bearish for breakout
+            # But if we're below gamma flip, net puts dominate = bearish
+            if spot > gamma_flip:
+                contrib = 1.5  # above flip = bullish regime
+                signals.append(("GEX Tilt", f"Above Gamma Flip (Δ{spot-gamma_flip:+.0f})", contrib,
+                               "BULLISH — Spot above dealer flip point", "#00CC44"))
+            else:
+                contrib = -1.5
+                signals.append(("GEX Tilt", f"Below Gamma Flip (Δ{spot-gamma_flip:+.0f})", contrib,
+                               "BEARISH — Spot below dealer flip point", "#FF4444"))
+            score += contrib
+
+    # ──────────────────────────────────────────────────────────
+    # SIGNAL 3: VWAP Deviation (weight: 2.5)
+    # Price > VWAP = institutional buyers in control
+    # Price < VWAP = institutional sellers in control
+    # ──────────────────────────────────────────────────────────
+    vwap_dev = (spot - vwap) / vwap * 100
+    if abs(vwap_dev) > 0.05:
+        if vwap_dev > 0:
+            contrib = min(vwap_dev * 8, 2.5)  # scaled, capped at 2.5
+            signals.append(("VWAP Position", f"{vwap_dev:+.2f}% above", contrib,
+                           f"BULLISH — Spot ${spot:,.0f} above VWAP ${vwap:,.0f}", "#00CC44"))
+        else:
+            contrib = max(vwap_dev * 8, -2.5)
+            signals.append(("VWAP Position", f"{vwap_dev:+.2f}% below", contrib,
+                           f"BEARISH — Spot ${spot:,.0f} below VWAP ${vwap:,.0f}", "#FF4444"))
+        score += contrib
+    else:
+        signals.append(("VWAP Position", f"{vwap_dev:+.2f}%", 0.0,
+                       "NEUTRAL — Spot at VWAP equilibrium", "#888888"))
+
+    # ──────────────────────────────────────────────────────────
+    # SIGNAL 4: Put/Call Ratio (weight: 2.0)
+    # Low PCR (<0.7) = extreme call buying = bullish sentiment
+    # High PCR (>1.2) = extreme put buying = bearish sentiment / hedging
+    # ──────────────────────────────────────────────────────────
+    if pcr is not None:
+        if pcr < 0.7:
+            contrib = 2.0
+            signals.append(("Put/Call Ratio", f"{pcr:.2f}", contrib,
+                           "BULLISH — Heavy call buying, strong risk appetite", "#00CC44"))
+        elif pcr < 0.85:
+            contrib = 1.0
+            signals.append(("Put/Call Ratio", f"{pcr:.2f}", contrib,
+                           "MILDLY BULLISH — Moderate call skew", "#00CC44"))
+        elif pcr > 1.3:
+            contrib = -2.0
+            signals.append(("Put/Call Ratio", f"{pcr:.2f}", contrib,
+                           "BEARISH — Heavy put hedging / fear", "#FF4444"))
+        elif pcr > 1.0:
+            contrib = -1.0
+            signals.append(("Put/Call Ratio", f"{pcr:.2f}", contrib,
+                           "MILDLY BEARISH — Elevated put hedging", "#FF4444"))
+        else:
+            contrib = 0.0
+            signals.append(("Put/Call Ratio", f"{pcr:.2f}", contrib,
+                           "NEUTRAL — Balanced call/put flow", "#888888"))
+        score += contrib
+
+    # ──────────────────────────────────────────────────────────
+    # SIGNAL 5: Max Pain Gravity (weight: 1.5)
+    # SPX tends to pin near max pain at expiry (dealer hedging effect)
+    # If spot > max_pain: bearish pull. If spot < max_pain: bullish pull.
+    # ──────────────────────────────────────────────────────────
+    if max_pain:
+        mp_dist = spot - max_pain
+        mp_pct = mp_dist / spot * 100
+        if abs(mp_pct) > 0.3:
+            if mp_dist > 0:
+                contrib = -1.5  # spot above max pain → pull down
+                signals.append(("Max Pain Gravity", f"${max_pain:,.0f} ({mp_pct:+.1f}%)", contrib,
+                               f"BEARISH PULL — Expiry magnet ${abs(mp_dist):.0f} pts below spot", "#FF4444"))
+            else:
+                contrib = 1.5  # spot below max pain → pull up
+                signals.append(("Max Pain Gravity", f"${max_pain:,.0f} ({mp_pct:+.1f}%)", contrib,
+                               f"BULLISH PULL — Expiry magnet ${abs(mp_dist):.0f} pts above spot", "#00CC44"))
+            score += contrib
+        else:
+            signals.append(("Max Pain Gravity", f"${max_pain:,.0f} ({mp_pct:+.1f}%)", 0.0,
+                           "PINNED — Spot near max pain; expect low range", "#888888"))
+
+    # ──────────────────────────────────────────────────────────
+    # SIGNAL 6: VIX Term Structure (weight: 1.5)
+    # Contango = normal, stable regime. Backwardation = fear, crash risk.
+    # ──────────────────────────────────────────────────────────
+    if contango is not None:
+        if contango:
+            contrib = 1.0
+            signals.append(("VIX Term Structure", "Contango", contrib,
+                           "BULLISH — Normal vol regime, calm markets", "#00CC44"))
+        else:
+            contrib = -1.5
+            signals.append(("VIX Term Structure", "Backwardation", contrib,
+                           "BEARISH — Inverted vol curve signals stress/panic", "#FF4444"))
+        score += contrib
+
+    # ──────────────────────────────────────────────────────────
+    # SIGNAL 7: VIX Level Regime (weight: 1.0)
+    # VIX < 15 = complacency. 15-20 = normal. 20-30 = elevated. >30 = crisis.
+    # ──────────────────────────────────────────────────────────
+    if vix < 15:
+        contrib = 0.5
+        signals.append(("VIX Level", f"{vix:.1f}", contrib,
+                       "LOW VOL — Complacent, slight upward drift bias", "#00CC44"))
+    elif vix <= 20:
+        contrib = 0.0
+        signals.append(("VIX Level", f"{vix:.1f}", contrib,
+                       "NORMAL — Standard volatility regime", "#888888"))
+    elif vix <= 30:
+        contrib = -1.0
+        signals.append(("VIX Level", f"{vix:.1f}", contrib,
+                       "ELEVATED — Put buying dominant, hedging spike", "#FF8C00"))
+    else:
+        contrib = -1.5
+        signals.append(("VIX Level", f"{vix:.1f}", contrib,
+                       "CRISIS — Extreme fear, large gap risk", "#FF4444"))
+    score += contrib
+
+    # ──────────────────────────────────────────────────────────
+    # DECISION: weighted score → direction + confidence
+    # ──────────────────────────────────────────────────────────
+    max_possible = sum(abs(s[2]) for s in signals) or 1.0
+    normalized = score / max_possible  # -1.0 to +1.0
+
+    if score >= 4.0:
+        direction, color = "BULLISH", "#00CC44"
+        confidence = "HIGH" if score >= 6.5 else "MEDIUM"
+    elif score >= 2.0:
+        direction, color = "LEAN BULLISH", "#00CC44"
+        confidence = "MEDIUM" if score >= 3.0 else "LOW"
+    elif score <= -4.0:
+        direction, color = "BEARISH", "#FF4444"
+        confidence = "HIGH" if score <= -6.5 else "MEDIUM"
+    elif score <= -2.0:
+        direction, color = "LEAN BEARISH", "#FF4444"
+        confidence = "MEDIUM" if score <= -3.0 else "LOW"
+    else:
+        direction, color = "NEUTRAL", "#FF8C00"
+        confidence = "LOW"
+
+    # Expected range based on direction + VIX
+    if "BULLISH" in direction:
+        range_low = f"${spot:,.0f}"
+        range_high = f"${spot + daily_em * 0.6:,.0f}"
+    elif "BEARISH" in direction:
+        range_low = f"${spot - daily_em * 0.6:,.0f}"
+        range_high = f"${spot:,.0f}"
+    else:
+        range_low = f"${spot - daily_em * 0.3:,.0f}"
+        range_high = f"${spot + daily_em * 0.3:,.0f}"
+
+    return {
+        "direction": direction,
+        "direction_color": color,
+        "confidence": confidence,
+        "score": round(score, 1),
+        "max_score": round(max_possible, 1),
+        "normalized": round(normalized, 2),
+        "daily_em": round(daily_em, 1),
+        "expected_range": f"{range_low} – {range_high}",
+        "signals": signals,  # list of (name, value, weight, description, color)
+        "spot": spot,
+        "vwap": vwap,
+        "gamma_flip": gamma_flip,
+        "max_pain": max_pain,
+        "pcr": pcr,
+        "vix": vix,
+    }
 
 
 def compute_max_pain(chain):
