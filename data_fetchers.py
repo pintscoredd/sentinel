@@ -339,29 +339,34 @@ def options_expiries(ticker):
 
 @st.cache_data(ttl=600)
 def options_chain(ticker, expiry=None):
-    try:
-        t = get_yf_ticker(ticker)
-        if t is None: return None, None, None
-        exps = []
-        for _ in range(2):
-            exps = list(t.options)
-            if exps: break
-            import time
-            time.sleep(0.5)
-            
-        if not exps: return None, None, None
-        exp = expiry if expiry and expiry in exps else exps[0]
-        chain = t.option_chain(exp)
-        cols = ["strike", "lastPrice", "bid", "ask", "volume", "openInterest", "impliedVolatility"]
-        c, p = None, None
-        if hasattr(chain, "calls") and not chain.calls.empty:
-            c = chain.calls[[x for x in cols if x in chain.calls.columns]]
-        if hasattr(chain, "puts") and not chain.puts.empty:
-            p = chain.puts[[x for x in cols if x in chain.puts.columns]]
-        return c, p, exp
-    except Exception as e:
-        logger.error(f"options_chain error: {e}")
-        return None, None, None
+    import time
+    for attempt in range(3):
+        try:
+            if attempt > 0:
+                time.sleep(0.5 * (attempt + 1))  # 1.0s, 1.5s backoff
+            t = get_yf_ticker(ticker)
+            if t is None: return None, None, None
+            exps = []
+            for _ in range(2):
+                exps = list(t.options)
+                if exps: break
+                time.sleep(0.5)
+                
+            if not exps: return None, None, None
+            exp = expiry if expiry and expiry in exps else exps[0]
+            chain = t.option_chain(exp)
+            cols = ["strike", "lastPrice", "bid", "ask", "volume", "openInterest", "impliedVolatility"]
+            c, p = None, None
+            if hasattr(chain, "calls") and not chain.calls.empty:
+                c = chain.calls[[x for x in cols if x in chain.calls.columns]]
+            if hasattr(chain, "puts") and not chain.puts.empty:
+                p = chain.puts[[x for x in cols if x in chain.puts.columns]]
+            if c is not None or p is not None:
+                return c, p, exp
+        except Exception as e:
+            logger.warning(f"options_chain attempt {attempt+1}: {e}")
+    logger.error(f"options_chain failed after 3 attempts for {ticker}")
+    return None, None, None
 
 
 def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=None):
@@ -987,20 +992,7 @@ def finnhub_officers(ticker, key):
     try:
         tk = get_yf_ticker(ticker)
         if tk:
-            # 1. Fallback to companyOfficers
-            officers = tk.info.get("companyOfficers", [])
-            for o in officers:
-                name = str(o.get("name", "")).strip()
-                title = str(o.get("title", "")).strip()
-                if not name or not title: continue
-                clean_name = name.upper().replace(".", "").replace(",", "")
-                for pfx in ["MR ", "MS ", "MRS ", "DR ", "PROF "]:
-                    if clean_name.startswith(pfx):
-                        clean_name = clean_name[len(pfx):].strip()
-                if clean_name not in role_map:
-                    role_map[clean_name] = title
-                    
-            # 2. Extract Board of Directors from insider_transactions
+            # 1. Extract from insider_transactions FIRST (generic titles like "Officer")
             try:
                 idf = tk.insider_transactions
                 if idf is not None and not idf.empty:
@@ -1012,6 +1004,29 @@ def finnhub_officers(ticker, key):
                                 role_map[ins_name] = pos
             except:
                 pass
+
+            # 2. companyOfficers override generic titles with real ones
+            _generic = {"Officer", "Director", "officer", "director", ""}
+            officers = tk.info.get("companyOfficers", [])
+            for o in officers:
+                name = str(o.get("name", "")).strip()
+                title = str(o.get("title", "")).strip()
+                if not name or not title: continue
+                clean_name = name.upper().replace(".", "").replace(",", "")
+                for pfx in ["MR ", "MS ", "MRS ", "DR ", "PROF "]:
+                    if clean_name.startswith(pfx):
+                        clean_name = clean_name[len(pfx):].strip()
+                # Always overwrite if existing entry is generic
+                if clean_name not in role_map or role_map.get(clean_name) in _generic:
+                    role_map[clean_name] = title
+                # Create reversed-name entries (LAST FIRST / LAST FIRST MIDDLE)
+                parts = clean_name.split()
+                if len(parts) >= 2:
+                    last_first_all = parts[-1] + " " + " ".join(parts[:-1])
+                    last_first = parts[-1] + " " + parts[0]
+                    for variant in (last_first_all, last_first):
+                        if variant not in role_map or role_map.get(variant) in _generic:
+                            role_map[variant] = title
     except:
         pass
 
