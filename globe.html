@@ -1702,27 +1702,27 @@
 
         let flag = "🛰️ UNKN";
         let n = (sat.name || "").toUpperCase();
-        let img = "https://upload.wikimedia.org/wikipedia/commons/thumb/2/27/Satellite_icon.png/320px-Satellite_icon.png";
+        let img = "";
         if (n.includes("STARLINK")) {
-          flag = "🇺🇸 USA (SpaceX)"; img = "https://upload.wikimedia.org/wikipedia/commons/thumb/7/77/Starlink_Logo_2.svg/320px-Starlink_Logo_2.svg.png";
+          flag = "🇺🇸 USA (SpaceX)"; img = "https://flagcdn.com/w320/us.png";
         } else if (n.includes("SPACEBEE") || n.includes("USA") || n.includes("NOAA") || n.includes("GOES") || n.includes("FLOCK") || n.includes("GPS") || n.includes("NAVSTAR")) {
-          flag = "🇺🇸 USA"; img = "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/Flag_of_the_United_States_%28Pantone%29.svg/320px-Flag_of_the_United_States_%28Pantone%29.svg.png";
+          flag = "🇺🇸 USA"; img = "https://flagcdn.com/w320/us.png";
         } else if (n.includes("COSMOS") || n.includes("KSM") || n.includes("METEOR") || n.includes("GLONASS") || n.includes("RESURS")) {
-          flag = "🇷🇺 RUS"; img = "https://upload.wikimedia.org/wikipedia/en/thumb/f/f3/Flag_of_Russia.svg/320px-Flag_of_Russia.svg.png";
+          flag = "🇷🇺 RUS"; img = "https://flagcdn.com/w320/ru.png";
         } else if (n.includes("BEIDOU") || n.includes("PRC") || n.includes("FENGYUN") || n.includes("GAOFEN") || n.includes("YAOGAN") || n.includes("TIANHUI")) {
-          flag = "🇨🇳 CHN"; img = "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fa/Flag_of_the_People%27s_Republic_of_China.svg/320px-Flag_of_the_People%27s_Republic_of_China.svg.png";
+          flag = "🇨🇳 CHN"; img = "https://flagcdn.com/w320/cn.png";
         } else if (n.includes("GALILEO") || n.includes("SENTINEL") || n.includes("METOP") || n.includes("PLEIADES")) {
-          flag = "🇪🇺 ESA/EU"; img = "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b7/Flag_of_Europe.svg/320px-Flag_of_Europe.svg.png";
+          flag = "🇪🇺 ESA/EU"; img = "https://flagcdn.com/w320/eu.png";
         } else if (n.includes("GSAT") || n.includes("CARTOSAT") || n.includes("INSAT") || n.includes("RISAT") || n.includes("MICROSAT")) {
-          flag = "🇮🇳 IND"; img = "https://upload.wikimedia.org/wikipedia/en/thumb/4/41/Flag_of_India.svg/320px-Flag_of_India.svg.png";
+          flag = "🇮🇳 IND"; img = "https://flagcdn.com/w320/in.png";
         } else if (n.includes("IGS") || n.includes("QZS") || n.includes("ALOS") || n.includes("HIMAWARI")) {
-          flag = "🇯🇵 JPN"; img = "https://upload.wikimedia.org/wikipedia/en/thumb/9/9e/Flag_of_Japan.svg/320px-Flag_of_Japan.svg.png";
+          flag = "🇯🇵 JPN"; img = "https://flagcdn.com/w320/jp.png";
         } else if (n.includes("ONEWEB")) {
-          flag = "🇬🇧 UK (OneWeb)"; img = "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/OneWeb_Logo.svg/320px-OneWeb_Logo.svg.png";
+          flag = "🇬🇧 UK (OneWeb)"; img = "https://flagcdn.com/w320/gb.png";
         } else if (n.includes("ISS") || n.includes("ZARYA")) {
-          flag = "🌐 INT (ISS)"; img = "https://upload.wikimedia.org/wikipedia/commons/thumb/0/04/International_Space_Station_after_undocking_of_STS-132.jpg/320px-International_Space_Station_after_undocking_of_STS-132.jpg";
+          flag = "🌐 INT (ISS)";
         } else if (n.includes("IRIDIUM")) {
-          flag = "🌐 INT (Iridium)"; img = "https://upload.wikimedia.org/wikipedia/commons/thumb/1/17/Iridium_satellite_model.jpg/320px-Iridium_satellite_model.jpg";
+          flag = "🌐 INT (Iridium)";
         }
 
         document.getElementById('ic-body').textContent =
