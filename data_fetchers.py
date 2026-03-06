@@ -2110,24 +2110,18 @@ def score_poly_mispricing(markets, base_rate_fn=None):
             vol24 = _safe_float(m.get("volume24hr", 0))
             activity_ratio = min(vol24 / vol, 1.0) if vol > 0 else 0.0
 
-            # --- TRUE EDGE: deviation between raw and liquidity-adjusted ---
-            # In illiquid markets the crowd is unreliable → adj_prob pulls toward 50%
-            # The "edge" is how much the raw price overstates the true probability
-            raw_edge    = abs(raw_yes - 0.5)           # how extreme is raw
-            adj_edge    = abs(adj_prob - 0.5)           # how extreme after discount
-            crowd_error = raw_edge - adj_edge           # error from overcrowding
+            # --- EDGE: gap between raw crowd price and liquidity-adjusted fair value ---
+            edge = abs(raw_yes - adj_prob)
 
-            # Bet signal: only flag when crowd_error is meaningful
-            # High crowd_error + illiquid = fade opportunity
-            # High adj_edge + liquid = real momentum (ride)
-            vol24_weight = math.log1p(vol24) / math.log1p(1_000_000) if vol24 > 0 else 0.0
-            vol24_weight = min(vol24_weight, 1.0)
+            # Confidence: how much to trust this edge (high liq + active = trustworthy)
+            confidence = liq_score * activity_ratio
 
-            # Mispricing score: high when crowd_error is large AND there's real activity
-            mispricing_score = round(
-                crowd_error * vol24_weight * (1.0 - liq_score + 0.1) * (0.5 + activity_ratio),
-                5
-            )
+            # Volume weight: normalize 24h volume on a log scale
+            vol_weight = min(math.log1p(vol24) / math.log1p(1_000_000), 1.0) if vol24 > 0 else 0.0
+
+            # Mispricing score: edge × (1 + confidence) × volume
+            # Unlike old formula, deep-liq markets aren't suppressed
+            mispricing_score = round(edge * (1.0 + confidence) * vol_weight, 5)
 
             # Spread for display
             spread_str = ""
@@ -2137,17 +2131,17 @@ def score_poly_mispricing(markets, base_rate_fn=None):
                 spread = best_ask - best_bid
                 spread_str = f"{spread*100:.1f}¢"
 
-            # Signal: fade overcrowded thin markets, ride confirmed deep markets
-            if liq_score < 0.40 and raw_yes > 0.70 and crowd_error > 0.05:
-                signal, signal_color = "FADE YES", "#FF4444"
-            elif liq_score < 0.40 and raw_yes < 0.30 and crowd_error > 0.05:
-                signal, signal_color = "FADE NO", "#00CC44"
+            # --- ACTION SIGNALS (clear, no ambiguity) ---
+            if liq_score < 0.40 and raw_yes > 0.70 and edge > 0.05:
+                signal, signal_color = "BET NO", "#FF4444"       # crowd overpriced YES
+            elif liq_score < 0.40 and raw_yes < 0.30 and edge > 0.05:
+                signal, signal_color = "BET YES", "#00CC44"      # crowd overpriced NO
             elif liq_score >= 0.70 and raw_yes > 0.65:
-                signal, signal_color = "RIDE YES", "#00CC44"
+                signal, signal_color = "CONFIRMED", "#00CC44"    # deep market agrees
             elif liq_score >= 0.70 and raw_yes < 0.35:
-                signal, signal_color = "RIDE NO", "#FF4444"
+                signal, signal_color = "CONTRARIAN", "#FF4444"   # deep market prices NO
             else:
-                signal, signal_color = "MONITOR", "#FF8C00"
+                signal, signal_color = "WATCH", "#FF8C00"        # wait for clarity
 
             results.append({
                 "title": title[:80], "url": m.get("slug", ""),
@@ -2155,7 +2149,7 @@ def score_poly_mispricing(markets, base_rate_fn=None):
                 "adj_yes": round(adj_prob * 100, 1),
                 "liq_score": liq_score,
                 "reliability": round(reliability, 2),
-                "edge": round(crowd_error, 3),   # now: true crowd error
+                "edge": round(edge, 3),
                 "mispricing_score": mispricing_score,
                 "vol": vol, "vol24": vol24,
                 "activity_ratio": round(activity_ratio, 3),
