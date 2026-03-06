@@ -2508,6 +2508,7 @@ def _fetch_yahoo_v8_chart(ticker, range_str="5d", interval="1d"):
         meta = result[0]
         timestamps, indicators = meta.get("timestamp", []), meta.get("indicators", {}).get("quote", [{}])[0]
         highs, lows = indicators.get("high", []), indicators.get("low", [])
+        closes, volumes = indicators.get("close", []), indicators.get("volume", [])
         if not timestamps or not closes: return []
 
         rows = []
