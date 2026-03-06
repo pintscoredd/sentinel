@@ -29,6 +29,13 @@ except ImportError:
     import json
 
 try:
+    from google import genai
+    from google.genai import types as genai_types
+except ImportError:
+    genai = None
+    genai_types = None
+
+try:
     import yfinance as yf
 except ImportError:
     yf = None
@@ -2311,7 +2318,7 @@ def fetch_satellite_positions():
 def fetch_conflict_events() -> "pd.DataFrame":
     import pandas as _pd
     try:
-        url = "https://api.gdeltproject.org/api/v2/geo/geo?query=(strike%20OR%20attack%20OR%20bombing%20OR%20explosion)&mode=pointdata&format=geojson&timespan=1h"
+        url = "https://api.gdeltproject.org/api/v2/geo/geo?query=(strike%20OR%20attack%20OR%20bombing%20OR%20explosion%20OR%20war%20OR%20conflict)&mode=pointdata&format=geojson&timespan=24h"
         data = _fetch_robust_json(url, timeout=12, headers={"User-Agent": "SENTINEL/3.0"})
         features = data.get("features", [])
         rows = []
@@ -2328,6 +2335,68 @@ def fetch_conflict_events() -> "pd.DataFrame":
 def fetch_conflict_events_json():
     df = fetch_conflict_events()
     return [] if df is None or df.empty else df.to_dict("records")
+
+
+def _strip_llm_json(raw: str) -> str:
+    """Strip markdown code fences and trailing commas from LLM output."""
+    text = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+    text = re.sub(r"```\s*$", "", text).strip()
+    # Remove trailing commas before ] or } (common LLM hallucination)
+    text = re.sub(r",\s*([\]}])", r"\1", text)
+    return text
+
+
+@st.cache_data(ttl=43200)
+def fetch_ai_hotspots_json(gemini_api_key: str) -> list:
+    """Use Gemini + Google Search grounding to discover top breaking conflicts.
+
+    Cached for 12 hours (ttl=43200) to prevent API quota burn.
+    Returns a list of dicts with keys: lat, lon, name, url.
+    Returns [] on any failure — never crashes the UI.
+    """
+    if not gemini_api_key or genai is None:
+        return []
+    try:
+        client = genai.Client(api_key=gemini_api_key)
+        grounding_tool = genai_types.Tool(
+            google_search=genai_types.GoogleSearch()
+        )
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=(
+                "Search the web for the top 5 most critical breaking geopolitical "
+                "conflicts or military escalations happening in the world RIGHT NOW. "
+                "For each, determine the approximate latitude and longitude of the "
+                "primary location. Return ONLY a raw JSON array — no explanation, "
+                "no markdown fences. Format: "
+                '[{"lat": float, "lon": float, "name": "Event Name", "url": "source_url"}]'
+            ),
+            config=genai_types.GenerateContentConfig(
+                tools=[grounding_tool],
+                temperature=0.2,
+                max_output_tokens=1024,
+            ),
+        )
+        cleaned = _strip_llm_json(response.text)
+        parsed = json.loads(cleaned)
+        if not isinstance(parsed, list):
+            logger.warning({"msg": "AI hotspots returned non-list JSON"})
+            return []
+        # Validate each entry has the required keys
+        valid = []
+        for item in parsed:
+            if isinstance(item, dict) and "lat" in item and "lon" in item and "name" in item:
+                valid.append({
+                    "lat": float(item["lat"]),
+                    "lon": float(item["lon"]),
+                    "name": str(item["name"]),
+                    "url": str(item.get("url", "")),
+                })
+        logger.info({"count": len(valid)}, "AI hotspots fetched")
+        return valid
+    except Exception as exc:
+        logger.error({"error": str(exc)}, "AI hotspots fetch failed")
+        return []
 
 @st.cache_data(ttl=300)
 def fetch_military_aircraft_json():
