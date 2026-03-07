@@ -2627,6 +2627,22 @@ with tabs[7]:
                         f'</div>'
                         f'</div>',
                         unsafe_allow_html=True)
+                        
+                    _analyst_targets = _em_data.get("analyst_targets", [])
+                    if _analyst_targets:
+                        at_html = '<div style="margin-top:14px;padding:10px;background:#0A0A0A;border:1px solid #1A1A1A;border-radius:3px;font-family:monospace;font-size:10px">'
+                        at_html += '<div style="color:#00AAFF;font-weight:700;margin-bottom:6px">TOP ANALYST TARGETS <span style="font-weight:100;color:#555;font-size:8px">(Track Record)</span></div>'
+                        for tg in _analyst_targets:
+                            firm_str = tg["firm"][:14] + "…" if len(tg["firm"]) > 15 else tg["firm"]
+                            tgt_val = tg["target"]
+                            action = tg["action"]
+                            action_str = f' <span style="color:#555">·</span> <span style="color:#888">{action}</span>' if action else ""
+                            c_price = _em_data.get("price", 0)
+                            color = "#00CC44" if (c_price > 0 and tgt_val > c_price) else ("#FF4444" if (c_price > 0 and tgt_val < c_price) else "#FF8C00")
+                            at_html += f'<div style="display:flex;justify-content:space-between;margin-top:4px"><span style="color:#CCC">{firm_str}{action_str}</span><span style="color:{color};font-weight:700">${tgt_val:,.2f}</span></div>'
+                        at_html += '</div>'
+                        st.markdown(at_html, unsafe_allow_html=True)
+                        
                     st.markdown('</div>', unsafe_allow_html=True)
 
             # ── Stock-specific news (after matrix) ──
