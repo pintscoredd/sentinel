@@ -2214,7 +2214,7 @@ with tabs[7]:
 
                     # Header row
                     quarters_sorted = sorted(fin_data.keys(), reverse=True)
-                    hdr_str = "".join(f'<span style="color:#FF6600;font-weight:700">{q}</span>' for q in quarters_sorted)
+                    hdr_str = "".join(f'<span style="color:#FF6600;font-weight:700;text-align:right">{q}</span>' for q in quarters_sorted)
                     st.markdown(
                         f'<div style="display:grid;grid-template-columns:130px repeat({len(quarters_sorted)},1fr);'
                         f'gap:6px;padding:5px 8px;border-bottom:1px solid #FF6600;font-family:monospace;font-size:10px;color:#FF6600;letter-spacing:1px">'
