@@ -2271,33 +2271,74 @@ with tabs[7]:
                 _em_years = _em_data["years"]
                 _em_qlabels = _em_data["q_labels"]
                 _em_quarterly = _em_data["quarterly"]
+                _em_estimates = _em_data.get("estimates", {})
+                _em_surprise = _em_data.get("surprise_pct", {})
+                _em_beats = _em_data.get("beats", {})
+                _em_revenue_q = _em_data.get("revenue_q", {})
                 _em_annual = _em_data["annual"]
+                _em_annual_rev = _em_data.get("annual_revenue", {})
                 _em_yoy = _em_data["yoy_growth"]
                 _em_ann_growth = _em_data["annual_growth"]
+                _em_rev_growth = _em_data.get("rev_growth", {})
+                _em_ann_rev_growth = _em_data.get("annual_rev_growth", {})
                 _em_vals = _em_data["valuations"]
                 _em_currency = _em_data["currency"]
                 _em_company = _em_data.get("company", et)
+                _em_streak = _em_data.get("streak", 0)
+                _em_beat_rate = _em_data.get("beat_rate", 0)
+
+                # ── Header with beat/miss streak ──
+                if _em_streak > 0:
+                    _streak_txt = f"🔥 {_em_streak}Q BEAT STREAK"
+                    _streak_c = "#00CC44"
+                elif _em_streak < 0:
+                    _streak_txt = f"⚠️ {abs(_em_streak)}Q MISS STREAK"
+                    _streak_c = "#FF4444"
+                else:
+                    _streak_txt = "— NO STREAK"
+                    _streak_c = "#888"
+                _beat_rate_c = "#00CC44" if _em_beat_rate >= 75 else "#FF8C00" if _em_beat_rate >= 50 else "#FF4444"
 
                 st.markdown(f'''<div class="em-container">
 <div class="em-header">
 <span class="em-badge">Earnings Matrix</span>
 <span class="em-ticker-label">● {et}</span>
 <span class="em-metric-label">EPS (GAAP)</span>
+<span style="margin-left:auto;font-family:monospace;font-size:10px;color:{_streak_c};font-weight:700">{_streak_txt}</span>
+<span style="margin-left:12px;font-family:monospace;font-size:10px;color:{_beat_rate_c}">Beat Rate: {_em_beat_rate:.0f}%</span>
 </div>''', unsafe_allow_html=True)
 
                 _em_left, _em_right = st.columns(2)
 
                 with _em_left:
-                    st.markdown(f'<div style="color:#555;font-family:monospace;font-size:9px;margin-bottom:6px;letter-spacing:1px">All values are in {_em_currency} ($)</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div style="color:#555;font-family:monospace;font-size:9px;margin-bottom:6px;letter-spacing:1px">EPS ACTUAL vs ESTIMATE — {_em_currency} ($)</div>', unsafe_allow_html=True)
                     year_headers = "".join(f"<th>{yr}</th>" for yr in _em_years)
                     eps_html = f'<table class="em-table"><thead><tr><th></th>{year_headers}</tr></thead><tbody>'
                     for ql in _em_qlabels:
                         eps_html += f"<tr><td>{ql}</td>"
                         for yr in _em_years:
                             val = _em_quarterly.get(yr, {}).get(ql)
+                            est = _em_estimates.get(yr, {}).get(ql)
+                            beat = _em_beats.get(yr, {}).get(ql)
+                            surp = _em_surprise.get(yr, {}).get(ql)
                             if val is not None:
                                 color = "#00CC44" if val >= 0 else "#FF4444"
-                                eps_html += f'<td style="color:{color}">{val:.2f}</td>'
+                                # Beat/miss indicator
+                                if beat is True:
+                                    icon = ' <span style="color:#00CC44;font-size:8px">✓</span>'
+                                elif beat is False:
+                                    icon = ' <span style="color:#FF4444;font-size:8px">✗</span>'
+                                else:
+                                    icon = ""
+                                # Surprise tooltip
+                                surp_str = ""
+                                if surp is not None:
+                                    s_c = "#00CC44" if surp >= 0 else "#FF4444"
+                                    surp_str = f'<br><span style="color:{s_c};font-size:8px">{surp:+.1f}%</span>'
+                                est_str = ""
+                                if est is not None:
+                                    est_str = f'<br><span style="color:#555;font-size:8px">est {est:.2f}</span>'
+                                eps_html += f'<td style="color:{color}">{val:.2f}{icon}{est_str}{surp_str}</td>'
                             else:
                                 eps_html += '<td style="color:#333">—</td>'
                         eps_html += "</tr>"
@@ -2339,6 +2380,67 @@ with tabs[7]:
 
                 st.markdown('</div>', unsafe_allow_html=True)
 
+                # ── Revenue table (if data exists) ──
+                if _em_revenue_q:
+                    st.markdown('<div class="em-container" style="margin-top:8px">', unsafe_allow_html=True)
+                    _rev_left, _rev_right = st.columns(2)
+                    with _rev_left:
+                        st.markdown('<div style="color:#555;font-family:monospace;font-size:9px;margin-bottom:6px;letter-spacing:1px">QUARTERLY REVENUE</div>', unsafe_allow_html=True)
+                        rev_year_headers = "".join(f"<th>{yr}</th>" for yr in _em_years)
+                        rev_html = f'<table class="em-table"><thead><tr><th></th>{rev_year_headers}</tr></thead><tbody>'
+                        for ql in _em_qlabels:
+                            rev_html += f"<tr><td>{ql}</td>"
+                            for yr in _em_years:
+                                val = _em_revenue_q.get(yr, {}).get(ql)
+                                if val is not None:
+                                    if abs(val) >= 1e9:
+                                        rev_html += f'<td style="color:#CCC">${val/1e9:.1f}B</td>'
+                                    elif abs(val) >= 1e6:
+                                        rev_html += f'<td style="color:#CCC">${val/1e6:.0f}M</td>'
+                                    else:
+                                        rev_html += f'<td style="color:#CCC">${val:,.0f}</td>'
+                                else:
+                                    rev_html += '<td style="color:#333">—</td>'
+                            rev_html += "</tr>"
+                        rev_html += '<tr class="em-annual"><td>Annual</td>'
+                        for yr in _em_years:
+                            val = _em_annual_rev.get(yr)
+                            if val is not None:
+                                if abs(val) >= 1e9:
+                                    rev_html += f'<td style="color:#FF8C00;font-weight:700">${val/1e9:.1f}B</td>'
+                                else:
+                                    rev_html += f'<td style="color:#FF8C00;font-weight:700">${val/1e6:.0f}M</td>'
+                            else:
+                                rev_html += '<td style="color:#333">—</td>'
+                        rev_html += "</tr></tbody></table>"
+                        st.markdown(rev_html, unsafe_allow_html=True)
+
+                    with _rev_right:
+                        st.markdown('<div class="em-growth-toggle"><span class="em-growth-btn active">Revenue YoY %</span></div>', unsafe_allow_html=True)
+                        rev_g_headers = "".join(f"<th>{yr}</th>" for yr in _em_years)
+                        rev_g_html = f'<table class="em-table"><thead><tr><th></th>{rev_g_headers}</tr></thead><tbody>'
+                        for ql in _em_qlabels:
+                            rev_g_html += f"<tr><td>{ql}</td>"
+                            for yr in _em_years:
+                                val = _em_rev_growth.get(yr, {}).get(ql)
+                                if val is not None:
+                                    color = "#00CC44" if val >= 0 else "#FF4444"
+                                    rev_g_html += f'<td style="color:{color}">{val:+.1f}%</td>'
+                                else:
+                                    rev_g_html += '<td style="color:#333">—</td>'
+                            rev_g_html += "</tr>"
+                        rev_g_html += '<tr class="em-annual"><td>Annual</td>'
+                        for yr in _em_years:
+                            val = _em_ann_rev_growth.get(yr)
+                            if val is not None:
+                                color = "#00CC44" if val >= 0 else "#FF4444"
+                                rev_g_html += f'<td style="color:{color};font-weight:700">{val:+.1f}%</td>'
+                            else:
+                                rev_g_html += '<td style="color:#333">—</td>'
+                        rev_g_html += "</tr></tbody></table>"
+                        st.markdown(rev_g_html, unsafe_allow_html=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+
                 _em_chart_col, _em_val_col = st.columns([3, 2])
 
                 with _em_chart_col:
@@ -2350,42 +2452,119 @@ with tabs[7]:
                         fig_eps_line = dark_fig(250)
                         fig_eps_line.add_trace(go.Scatter(
                             x=ann_labels, y=ann_values, mode="lines+markers",
+                            name="EPS",
                             line=dict(color="#00CC44", width=2),
                             marker=dict(size=8, color="#00CC44", line=dict(width=1, color="#000")),
                             text=[f"FY{yr}: ${v:.2f}" for yr, v in zip(_ann_years_sorted, ann_values)],
                             hoverinfo="text",
                         ))
+                        # Overlay annual revenue on secondary axis if available
+                        if _em_annual_rev:
+                            rev_labels = [str(yr) for yr in _ann_years_sorted if yr in _em_annual_rev]
+                            rev_values = [_em_annual_rev[yr] / 1e9 for yr in _ann_years_sorted if yr in _em_annual_rev]
+                            if rev_values:
+                                fig_eps_line.add_trace(go.Bar(
+                                    x=rev_labels, y=rev_values, name="Revenue ($B)",
+                                    marker=dict(color="rgba(255,102,0,0.15)", line=dict(color="#FF6600", width=1)),
+                                    yaxis="y2",
+                                    hovertext=[f"Rev: ${v:.1f}B" for v in rev_values],
+                                    hoverinfo="text",
+                                ))
+                                fig_eps_line.update_layout(
+                                    yaxis2=dict(overlaying="y", side="right", showgrid=False,
+                                                tickfont=dict(size=8, color="#FF6600"), tickprefix="$", ticksuffix="B",
+                                                title=None),
+                                    legend=dict(font=dict(size=8, color="#888"), bgcolor="rgba(0,0,0,0)",
+                                                orientation="h", x=0, y=1.08),
+                                )
                         fig_eps_line.update_layout(
-                            margin=dict(l=40, r=20, t=30, b=30), height=250,
-                            title=dict(text="ANNUAL EPS (YEARLY)", font=dict(size=10, color="#FF6600"), x=0),
+                            margin=dict(l=40, r=50, t=30, b=30), height=250,
+                            title=dict(text="ANNUAL EPS + REVENUE OVERLAY", font=dict(size=10, color="#FF6600"), x=0),
                             xaxis=dict(color="#555", tickfont=dict(size=9), showgrid=False),
                             yaxis=dict(color="#555", tickfont=dict(size=9), gridcolor="#111", title=None, tickprefix="$"),
                         )
                         st.plotly_chart(fig_eps_line, use_container_width=True, config={'displayModeBar': False})
 
-                    _q_bar_labels, _q_bar_values, _q_bar_colors = [], [], []
+                    # ── Quarterly EPS: Actual vs Estimate with beat/miss coloring ──
+                    _q_bar_labels, _q_bar_actuals, _q_bar_estimates = [], [], []
+                    _q_bar_colors, _q_bar_beat_icons = [], []
                     for yr in _em_years:
                         for ql in _em_qlabels:
                             val = _em_quarterly.get(yr, {}).get(ql)
                             if val is not None:
-                                _q_bar_labels.append(f"{ql[:2]} {yr}")
-                                _q_bar_values.append(val)
-                                _q_bar_colors.append("#00CC44" if val >= 0 else "#FF4444")
+                                label = f"{ql[:2]} {yr}"
+                                _q_bar_labels.append(label)
+                                _q_bar_actuals.append(val)
+                                est = _em_estimates.get(yr, {}).get(ql)
+                                _q_bar_estimates.append(est)
+                                beat = _em_beats.get(yr, {}).get(ql)
+                                if beat is True:
+                                    _q_bar_colors.append("#00CC44")
+                                    _q_bar_beat_icons.append("✓ BEAT")
+                                elif beat is False:
+                                    _q_bar_colors.append("#FF4444")
+                                    _q_bar_beat_icons.append("✗ MISS")
+                                else:
+                                    _q_bar_colors.append("#FF8C00")
+                                    _q_bar_beat_icons.append("")
                     if _q_bar_labels:
-                        fig_q_bar = dark_fig(220)
+                        fig_q_bar = dark_fig(260)
+                        # Estimate bars (background)
+                        est_vals_clean = [e if e is not None else 0 for e in _q_bar_estimates]
+                        if any(e > 0 for e in est_vals_clean):
+                            fig_q_bar.add_trace(go.Bar(
+                                name="Estimate", x=_q_bar_labels, y=est_vals_clean,
+                                marker=dict(color="rgba(255,255,255,0.06)", line=dict(color="#333", width=1)),
+                                hovertext=[f"Est: ${e:.2f}" if e else "—" for e in est_vals_clean],
+                                hoverinfo="text",
+                            ))
+                        # Actual bars (foreground)
                         fig_q_bar.add_trace(go.Bar(
-                            x=_q_bar_labels, y=_q_bar_values,
-                            marker=dict(color=_q_bar_colors, line=dict(width=0), opacity=0.85),
-                            text=[f"${v:.2f}" for v in _q_bar_values],
-                            textposition="outside", textfont=dict(size=8, color="#888"),
+                            name="Actual", x=_q_bar_labels, y=_q_bar_actuals,
+                            marker=dict(color=_q_bar_colors, line=dict(width=0), opacity=0.9),
+                            text=[f"${v:.2f}" for v in _q_bar_actuals],
+                            textposition="outside", textfont=dict(size=7, color="#888"),
+                            hovertext=[f"Actual: ${a:.2f} | {b}" for a, b in zip(_q_bar_actuals, _q_bar_beat_icons)],
+                            hoverinfo="text",
                         ))
                         fig_q_bar.update_layout(
-                            margin=dict(l=40, r=10, t=30, b=40), height=220,
-                            title=dict(text="QUARTERLY EPS", font=dict(size=10, color="#FF6600"), x=0),
+                            barmode="overlay",
+                            margin=dict(l=40, r=10, t=30, b=40), height=260,
+                            title=dict(text="QUARTERLY EPS — ACTUAL vs ESTIMATE  (🟢 Beat · 🔴 Miss)", font=dict(size=10, color="#FF6600"), x=0),
                             xaxis=dict(color="#555", tickfont=dict(size=7, color="#666"), tickangle=-45, showgrid=False),
                             yaxis=dict(color="#555", tickfont=dict(size=9), gridcolor="#111", title=None, tickprefix="$"),
+                            legend=dict(font=dict(size=8, color="#888"), bgcolor="rgba(0,0,0,0)",
+                                        orientation="h", x=0, y=1.08),
+                            showlegend=True,
                         )
                         st.plotly_chart(fig_q_bar, use_container_width=True, config={'displayModeBar': False})
+
+                    # ── Revenue trend chart ──
+                    if _em_revenue_q:
+                        _rev_labels, _rev_values = [], []
+                        for yr in _em_years:
+                            for ql in _em_qlabels:
+                                val = _em_revenue_q.get(yr, {}).get(ql)
+                                if val is not None:
+                                    _rev_labels.append(f"{ql[:2]} {yr}")
+                                    _rev_values.append(val / 1e9)
+                        if _rev_labels:
+                            fig_rev = dark_fig(200)
+                            fig_rev.add_trace(go.Scatter(
+                                x=_rev_labels, y=_rev_values, mode="lines+markers+text",
+                                line=dict(color="#FF6600", width=2),
+                                marker=dict(size=6, color="#FF6600", line=dict(width=1, color="#000")),
+                                text=[f"${v:.1f}B" for v in _rev_values],
+                                textposition="top center", textfont=dict(size=7, color="#FF8C00"),
+                                hoverinfo="text",
+                            ))
+                            fig_rev.update_layout(
+                                margin=dict(l=40, r=10, t=30, b=40), height=200,
+                                title=dict(text="QUARTERLY REVENUE TREND ($B)", font=dict(size=10, color="#FF6600"), x=0),
+                                xaxis=dict(color="#555", tickfont=dict(size=7, color="#666"), tickangle=-45, showgrid=False),
+                                yaxis=dict(color="#555", tickfont=dict(size=9), gridcolor="#111", title=None, tickprefix="$", ticksuffix="B"),
+                            )
+                            st.plotly_chart(fig_rev, use_container_width=True, config={'displayModeBar': False})
                     st.markdown('</div>', unsafe_allow_html=True)
 
                 with _em_val_col:
@@ -2418,18 +2597,34 @@ with tabs[7]:
                         if g_val is not None:
                             g_color = "#00CC44" if g_val >= 0 else "#FF4444"
                             g_icon = "▲" if g_val >= 0 else "▼"
+                            # Revenue growth alongside
+                            r_val = _em_ann_rev_growth.get(yr)
+                            rev_str = ""
+                            if r_val is not None:
+                                r_color = "#00CC44" if r_val >= 0 else "#FF4444"
+                                rev_str = f' <span style="color:#555">|</span> <span style="color:{r_color};font-size:9px">Rev {r_val:+.1f}%</span>'
                             st.markdown(
                                 f'<div style="display:flex;justify-content:space-between;padding:3px 0;font-family:monospace;font-size:11px;border-bottom:1px solid #0D0D0D">'
                                 f'<span style="color:#888">FY {yr}</span>'
-                                f'<span style="color:{g_color};font-weight:700">{g_icon} {g_val:+.1f}%</span></div>',
+                                f'<span style="color:{g_color};font-weight:700">{g_icon} {g_val:+.1f}%{rev_str}</span></div>',
                                 unsafe_allow_html=True)
 
+                    # ── Company info card ──
+                    _mcap = _em_data.get("market_cap", 0)
+                    _mcap_str = f"${_mcap/1e12:.2f}T" if _mcap >= 1e12 else (f"${_mcap/1e9:.1f}B" if _mcap >= 1e9 else (f"${_mcap/1e6:.0f}M" if _mcap >= 1e6 else "—"))
+                    _t_eps = _em_data.get("trailing_eps", 0)
+                    _f_eps = _em_data.get("forward_eps", 0)
                     st.markdown(
                         f'<div style="margin-top:14px;padding:10px;background:#0A0A0A;border:1px solid #1A1A1A;border-radius:3px;font-family:monospace;font-size:10px">'
                         f'<div style="color:#FF6600;font-weight:700;margin-bottom:4px">{_em_company}</div>'
-                        f'<div style="color:#888">Currency: {_em_currency}</div>'
-                        f'<div style="color:#888">FY End: Month {_em_data["fiscal_end_month"]}</div>'
+                        f'<div style="color:#888">Currency: {_em_currency} · FY End: Mo {_em_data["fiscal_end_month"]}</div>'
                         f'<div style="color:#00CC44;margin-top:4px">Price: ${_em_data.get("price", 0):,.2f}</div>'
+                        f'<div style="color:#888;margin-top:2px">Mkt Cap: {_mcap_str}</div>'
+                        f'<div style="color:#888;margin-top:2px">TTM EPS: <span style="color:#CCC">${_t_eps:.2f}</span> · Fwd EPS: <span style="color:#CCC">${_f_eps:.2f}</span></div>'
+                        f'<div style="margin-top:6px;padding-top:6px;border-top:1px solid #1A1A1A">'
+                        f'<span style="color:{_beat_rate_c};font-weight:700">Beat Rate: {_em_beat_rate:.0f}%</span>'
+                        f' · <span style="color:{_streak_c}">{_streak_txt}</span>'
+                        f'</div>'
                         f'</div>',
                         unsafe_allow_html=True)
                     st.markdown('</div>', unsafe_allow_html=True)
