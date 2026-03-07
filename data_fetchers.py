@@ -2647,6 +2647,36 @@ def get_earnings_matrix(ticker):
 
         currency = info.get("currency", "USD")
 
+        # ── Analyst Price Targets (Top 5 tracked) ──
+        analyst_targets = []
+        try:
+            ud = t.upgrades_downgrades
+            if ud is not None and not ud.empty:
+                ud = ud.reset_index().sort_values("GradeDate", ascending=False)
+                ud = ud.drop_duplicates(subset=["Firm"])
+                ud = ud[ud["currentPriceTarget"].notna() & (ud["currentPriceTarget"] > 0)]
+                
+                track_record_firms = ["B of A Securities", "Bank of America", "Needham", "TD Cowen", "Cowen & Co.", "RBC Capital", "Oppenheimer"]
+                best_targets = []
+                other_targets = []
+                
+                for _, row in ud.iterrows():
+                    firm = row["Firm"]
+                    pt = float(row["currentPriceTarget"])
+                    action = row.get("ToGrade", "") or row.get("Action", "")
+                    if pd.isna(action): action = ""
+                    else: action = str(action)
+                    
+                    obj = {"firm": firm, "target": pt, "action": action[:20]}
+                    if firm in track_record_firms:
+                        best_targets.append(obj)
+                    else:
+                        other_targets.append(obj)
+                        
+                analyst_targets = (best_targets + other_targets)[:5]
+        except Exception:
+            pass
+
         return {
             "quarterly": quarterly,
             "estimates": estimates,
@@ -2671,6 +2701,7 @@ def get_earnings_matrix(ticker):
             "forward_eps": _safe_float(info.get("forwardEps"), 0),
             "trailing_eps": _safe_float(info.get("trailingEps"), 0),
             "market_cap": _safe_float(info.get("marketCap"), 0),
+            "analyst_targets": analyst_targets,
         }
     except Exception as e:
         logger.error({"error": str(e)}, "Earnings Matrix Error")
