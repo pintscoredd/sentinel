@@ -1538,6 +1538,22 @@
         closeCard();
       };
 
+      // ── DRAG INFO CARD
+      const ic = document.getElementById('ic');
+      let icDrag = false, icX = 0, icY = 0;
+      ic.addEventListener('mousedown', e => {
+        if (e.target.id === 'ic-close' || e.target.tagName === 'BUTTON') return;
+        icDrag = true;
+        icX = e.clientX - ic.getBoundingClientRect().left;
+        icY = e.clientY - ic.getBoundingClientRect().top;
+      });
+      window.addEventListener('mousemove', e => {
+        if (!icDrag) return;
+        ic.style.left = (e.clientX - icX) + 'px';
+        ic.style.top = (e.clientY - icY) + 'px';
+      });
+      window.addEventListener('mouseup', () => icDrag = false);
+
       // ── INTERACTION
       const raycaster = new THREE.Raycaster();
       raycaster.params.Mesh = { backfaceCulling: false };
@@ -1700,16 +1716,26 @@
           `ALTITUDE: ${flight.alt.toLocaleString()} FT\nSPEED: ${flight.speed} KTS\nHEADING: ${Math.round(flight.heading)}°\nICAO24: ${flight.hex || '—'}\nTYPE: ${flight.type || 'MILITARY'}\nREG: ${flight.reg || '—'}`;
         document.getElementById('ic-body').textContent = bodyText;
         // Fetch aircraft photo from planespotters.net API (returns JSON)
-        document.getElementById('ic-mkt').innerHTML = '';
-        if (flight.hex) {
-          const photoContainer = document.getElementById('ic-mkt');
+        const photoContainer = document.getElementById('ic-mkt');
+        photoContainer.innerHTML = '';
+
+        let cleanHex = (flight.hex || '').replace(/[^a-zA-Z0-9]/g, '');
+        let cleanReg = (flight.reg || '').replace(/[^a-zA-Z0-9-]/g, '');
+
+        if (cleanHex || cleanReg) {
           photoContainer.innerHTML = '<div style="color:#333;font-size:9px;margin-top:4px">Loading photo…</div>';
-          fetch(`https://api.planespotters.net/pub/photos/hex/${flight.hex}`)
-            .then(r => r.ok ? r.json() : null)
+
+          let p = cleanHex ? fetch(`https://api.planespotters.net/pub/photos/hex/${cleanHex}`).then(r => r.ok ? r.json() : { photos: [] }) : Promise.resolve({ photos: [] });
+
+          p.then(data => {
+            if (data && data.photos && data.photos.length > 0) return data;
+            if (cleanReg) return fetch(`https://api.planespotters.net/pub/photos/reg/${cleanReg}`).then(r => r.ok ? r.json() : { photos: [] });
+            return data;
+          })
             .then(data => {
               if (data && data.photos && data.photos.length > 0) {
                 const url = data.photos[0].thumbnail_large?.src || data.photos[0].thumbnail?.src || '';
-                if (url) photoContainer.innerHTML = `<div style="margin-top:6px"><img src="${url}" style="width:100%;max-width:260px;border-radius:3px;border:1px solid #222" onerror="this.parentElement.style.display='none'"/></div>`;
+                if (url) photoContainer.innerHTML = `<div style="margin-top:6px"><img src="${url}" style="width:100%;max-width:260px;border-radius:3px;border:1px solid #222" draggable="false" onerror="this.parentElement.style.display='none'"/></div>`;
                 else photoContainer.innerHTML = '';
               } else { photoContainer.innerHTML = ''; }
             })
