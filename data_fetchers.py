@@ -2316,17 +2316,31 @@ def get_full_financials(ticker):
 @st.cache_data(ttl=1800)
 def get_earnings_matrix(ticker):
     """Build Bloomberg-style Earnings Matrix data for a ticker.
-    
+
+    Pulls from multiple yfinance sources for maximum data coverage:
+      1) t.earnings_dates  — reported EPS actual + estimate for 12+ quarters
+      2) t.quarterly_financials — Diluted EPS from income statement
+      3) t.earnings  — annual/quarterly dicts (legacy API, older history)
+
     Returns dict with:
-        - quarterly: {year: {q_label: eps_value}} e.g. {2024: {"Q1 Sep": 2.99, ...}}
+        - quarterly: {year: {q_label: eps_value}}
+        - estimates: {year: {q_label: eps_estimate}}
+        - surprise_pct: {year: {q_label: surprise_%}}
+        - beats: {year: {q_label: True/False/None}}
+        - revenue_q: {year: {q_label: revenue_value}}
         - annual: {year: total_eps}
-        - yoy_growth: {year: {q_label: pct_growth}}  YoY % for each quarter
+        - annual_revenue: {year: total_revenue}
+        - yoy_growth: {year: {q_label: pct_growth}}
         - annual_growth: {year: pct_growth}
-        - valuations: {metric: {period: value}} e.g. {"P/E": {"Last 4Q": 25.7, ...}}
+        - rev_growth: {year: {q_label: pct_growth}}
+        - annual_rev_growth: {year: pct_growth}
+        - valuations: {metric: {period: value}}
         - fiscal_end_month: int (1-12)
         - currency: str
         - years: sorted list of years
         - q_labels: ordered list of quarter labels
+        - streak: int (consecutive beats, negative = misses)
+        - beat_rate: float (% of quarters that beat)
     """
     if yf is None:
         return None
@@ -2339,7 +2353,6 @@ def get_earnings_matrix(ticker):
         # ── Determine fiscal year end month ──
         fiscal_end_month = info.get("fiscalYearEnd") or info.get("lastFiscalYearEnd")
         if isinstance(fiscal_end_month, str):
-            # Some tickers return month name
             _month_map = {"january": 1, "february": 2, "march": 3, "april": 4,
                           "may": 5, "june": 6, "july": 7, "august": 8,
                           "september": 9, "october": 10, "november": 11, "december": 12}
@@ -2347,70 +2360,171 @@ def get_earnings_matrix(ticker):
         elif not isinstance(fiscal_end_month, int):
             fiscal_end_month = 12
 
-        # Map fiscal quarter end months to quarter label
-        _q_month_labels = {}
+        # Map each fiscal quarter-end month → Q label
         import calendar
+        _q_month_labels = {}
         for qi in range(4):
             m = ((fiscal_end_month - 3 * (3 - qi)) % 12) or 12
-            month_abbr = calendar.month_abbr[m]
-            _q_month_labels[m] = f"Q{qi+1} {month_abbr}"
-        # Ordered list: Q1, Q2, Q3, Q4
+            _q_month_labels[m] = f"Q{qi+1} {calendar.month_abbr[m]}"
         q_labels = [f"Q{qi+1} {calendar.month_abbr[((fiscal_end_month - 3*(3-qi)) % 12) or 12]}" for qi in range(4)]
 
-        # ── Get historical quarterly EPS from financials ──
-        quarterly = {}  # {year: {q_label: eps}}
+        def _month_to_qlabel(month):
+            """Map a calendar month to the nearest fiscal quarter label."""
+            if month in _q_month_labels:
+                return _q_month_labels[month]
+            best_m = min(_q_month_labels.keys(), key=lambda m: min(abs(m - month), 12 - abs(m - month)))
+            return _q_month_labels[best_m]
+
+        def _fiscal_year(month, year):
+            """Determine fiscal year from calendar month/year."""
+            return year if month <= fiscal_end_month else year + 1
+
+        quarterly = {}   # {fy: {q_label: eps_actual}}
+        estimates = {}   # {fy: {q_label: eps_estimate}}
+        surprise_pct = {}  # {fy: {q_label: surprise_%}}
+        beats = {}       # {fy: {q_label: True/False/None}}
+        revenue_q = {}   # {fy: {q_label: revenue}}
+
+        # ────────────────────────────────────────────────
+        # SOURCE 1: earnings_dates (best for actual + estimate + surprise)
+        # ────────────────────────────────────────────────
+        try:
+            ed = t.earnings_dates
+            if ed is not None and not ed.empty:
+                for idx, row in ed.iterrows():
+                    dt = pd.to_datetime(idx)
+                    month, year = dt.month, dt.year
+                    ql = _month_to_qlabel(month)
+                    fy = _fiscal_year(month, year)
+
+                    # Reported EPS
+                    actual = row.get("Reported EPS")
+                    if actual is not None and not (isinstance(actual, float) and math.isnan(actual)):
+                        actual = round(float(actual), 2)
+                        if fy not in quarterly:
+                            quarterly[fy] = {}
+                        quarterly[fy][ql] = actual
+
+                    # EPS Estimate
+                    est = row.get("EPS Estimate")
+                    if est is not None and not (isinstance(est, float) and math.isnan(est)):
+                        est = round(float(est), 2)
+                        if fy not in estimates:
+                            estimates[fy] = {}
+                        estimates[fy][ql] = est
+
+                    # Surprise %
+                    surp = row.get("Surprise(%)")
+                    if surp is not None and not (isinstance(surp, float) and math.isnan(surp)):
+                        if fy not in surprise_pct:
+                            surprise_pct[fy] = {}
+                        surprise_pct[fy][ql] = round(float(surp), 1)
+
+                    # Beat/miss
+                    if actual is not None and est is not None:
+                        if fy not in beats:
+                            beats[fy] = {}
+                        beats[fy][ql] = actual >= est
+        except Exception:
+            pass
+
+        # ────────────────────────────────────────────────
+        # SOURCE 2: quarterly_financials (fills EPS + revenue gaps)
+        # ────────────────────────────────────────────────
         try:
             income = t.quarterly_financials
             if income is not None and not income.empty:
                 for col in income.columns:
                     dt = pd.to_datetime(col)
-                    month = dt.month
-                    year = dt.year
-                    # Find which fiscal quarter this falls into
-                    q_label = _q_month_labels.get(month)
-                    if not q_label:
-                        # Closest match
-                        best_m = min(_q_month_labels.keys(), key=lambda m: abs(m - month))
-                        q_label = _q_month_labels[best_m]
-                    
-                    # Determine fiscal year
-                    fiscal_year = year if month <= fiscal_end_month else year + 1
-                    
-                    # Get EPS
-                    eps_val = None
-                    for key in ["Diluted EPS", "Basic EPS"]:
+                    month, year = dt.month, dt.year
+                    ql = _month_to_qlabel(month)
+                    fy = _fiscal_year(month, year)
+
+                    # EPS — only if not already filled by earnings_dates
+                    if fy not in quarterly or ql not in quarterly.get(fy, {}):
+                        for key in ["Diluted EPS", "Basic EPS"]:
+                            if key in income.index:
+                                v = income.loc[key, col]
+                                if v is not None and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
+                                    if fy not in quarterly:
+                                        quarterly[fy] = {}
+                                    quarterly[fy][ql] = round(float(v), 2)
+                                    break
+
+                    # Revenue
+                    for key in ["Total Revenue", "Revenue"]:
                         if key in income.index:
                             v = income.loc[key, col]
                             if v is not None and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
-                                eps_val = round(float(v), 2)
+                                if fy not in revenue_q:
+                                    revenue_q[fy] = {}
+                                revenue_q[fy][ql] = float(v)
                                 break
-                    
-                    if eps_val is not None:
-                        if fiscal_year not in quarterly:
-                            quarterly[fiscal_year] = {}
-                        quarterly[fiscal_year][q_label] = eps_val
         except Exception:
             pass
 
-        # Also try earnings_history / earnings_dates for more data
+        # ────────────────────────────────────────────────
+        # SOURCE 3: t.earnings (legacy — fills older years)
+        # ────────────────────────────────────────────────
         try:
-            eh = t.earnings_history
-            if eh is not None and not eh.empty:
-                for _, row in eh.iterrows():
-                    dt = pd.to_datetime(row.get("reportDate") or row.get("date") or row.name)
-                    month = dt.month
-                    year = dt.year
-                    q_label = _q_month_labels.get(month)
-                    if not q_label:
-                        best_m = min(_q_month_labels.keys(), key=lambda m: abs(m - month))
-                        q_label = _q_month_labels[best_m]
-                    fiscal_year = year if month <= fiscal_end_month else year + 1
-                    eps_val = row.get("epsActual") or row.get("actual")
-                    if eps_val is not None and not (isinstance(eps_val, float) and math.isnan(eps_val)):
-                        if fiscal_year not in quarterly:
-                            quarterly[fiscal_year] = {}
-                        if q_label not in quarterly[fiscal_year]:
-                            quarterly[fiscal_year][q_label] = round(float(eps_val), 2)
+            earnings_obj = t.earnings
+            if isinstance(earnings_obj, dict):
+                # quarterly earnings: list of {date, actual, estimate}
+                for qe in earnings_obj.get("quarterly", []):
+                    try:
+                        dt = pd.to_datetime(qe.get("date"))
+                        month, year = dt.month, dt.year
+                        ql = _month_to_qlabel(month)
+                        fy = _fiscal_year(month, year)
+                        actual = qe.get("actual")
+                        if actual is not None and not math.isnan(float(actual)):
+                            if fy not in quarterly:
+                                quarterly[fy] = {}
+                            if ql not in quarterly[fy]:
+                                quarterly[fy][ql] = round(float(actual), 2)
+                        est = qe.get("estimate")
+                        if est is not None and not math.isnan(float(est)):
+                            if fy not in estimates:
+                                estimates[fy] = {}
+                            if ql not in estimates[fy]:
+                                estimates[fy][ql] = round(float(est), 2)
+                        if actual is not None and est is not None:
+                            a_, e_ = float(actual), float(est)
+                            if not math.isnan(a_) and not math.isnan(e_):
+                                if fy not in beats:
+                                    beats[fy] = {}
+                                if ql not in beats[fy]:
+                                    beats[fy][ql] = a_ >= e_
+                                if fy not in surprise_pct:
+                                    surprise_pct[fy] = {}
+                                if ql not in surprise_pct[fy] and e_ != 0:
+                                    surprise_pct[fy][ql] = round((a_ - e_) / abs(e_) * 100, 1)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+        # Also try quarterly_earnings attribute (some yfinance versions)
+        try:
+            qe_df = t.quarterly_earnings
+            if qe_df is not None and not qe_df.empty:
+                for idx, row in qe_df.iterrows():
+                    dt = pd.to_datetime(idx)
+                    month, year = dt.month, dt.year
+                    ql = _month_to_qlabel(month)
+                    fy = _fiscal_year(month, year)
+                    rev = row.get("Revenue")
+                    if rev is not None and not (isinstance(rev, float) and math.isnan(rev)):
+                        if fy not in revenue_q:
+                            revenue_q[fy] = {}
+                        if ql not in revenue_q[fy]:
+                            revenue_q[fy][ql] = float(rev)
+                    eps = row.get("Earnings")
+                    if eps is not None and not (isinstance(eps, float) and math.isnan(eps)):
+                        if fy not in quarterly:
+                            quarterly[fy] = {}
+                        if ql not in quarterly[fy]:
+                            quarterly[fy][ql] = round(float(eps), 2)
         except Exception:
             pass
 
@@ -2421,12 +2535,16 @@ def get_earnings_matrix(ticker):
 
         # ── Annual totals ──
         annual = {}
+        annual_revenue = {}
         for yr in years:
-            vals = [v for v in quarterly[yr].values() if v is not None]
+            vals = [v for v in quarterly.get(yr, {}).values() if v is not None]
             if vals:
                 annual[yr] = round(sum(vals), 2)
+            rev_vals = [v for v in revenue_q.get(yr, {}).values() if v is not None]
+            if rev_vals:
+                annual_revenue[yr] = sum(rev_vals)
 
-        # ── YoY growth ──
+        # ── YoY growth (EPS) ──
         yoy_growth = {}
         annual_growth = {}
         for yr in years:
@@ -2436,32 +2554,82 @@ def get_earnings_matrix(ticker):
                 prev = quarterly.get(yr - 1, {}).get(ql)
                 if cur is not None and prev is not None and prev != 0:
                     yoy_growth[yr][ql] = round((cur - prev) / abs(prev) * 100, 1)
-            # Annual YoY
             cur_ann = annual.get(yr)
             prev_ann = annual.get(yr - 1)
             if cur_ann is not None and prev_ann is not None and prev_ann != 0:
                 annual_growth[yr] = round((cur_ann - prev_ann) / abs(prev_ann) * 100, 1)
 
+        # ── Revenue YoY growth ──
+        rev_growth = {}
+        annual_rev_growth = {}
+        for yr in years:
+            rev_growth[yr] = {}
+            for ql in q_labels:
+                cur = revenue_q.get(yr, {}).get(ql)
+                prev = revenue_q.get(yr - 1, {}).get(ql)
+                if cur is not None and prev is not None and prev != 0:
+                    rev_growth[yr][ql] = round((cur - prev) / abs(prev) * 100, 1)
+            cur_rev = annual_revenue.get(yr)
+            prev_rev = annual_revenue.get(yr - 1)
+            if cur_rev is not None and prev_rev is not None and prev_rev != 0:
+                annual_rev_growth[yr] = round((cur_rev - prev_rev) / abs(prev_rev) * 100, 1)
+
+        # ── Beat/miss streak & rate ──
+        beat_list = []
+        for yr in sorted(quarterly.keys()):
+            for ql in q_labels:
+                b = beats.get(yr, {}).get(ql)
+                if b is not None:
+                    beat_list.append(b)
+        streak = 0
+        if beat_list:
+            direction = beat_list[-1]
+            for b in reversed(beat_list):
+                if b == direction:
+                    streak += 1 if direction else -1
+                else:
+                    break
+            if not direction:
+                streak = -abs(streak)
+        beat_rate = round(sum(1 for b in beat_list if b) / len(beat_list) * 100, 0) if beat_list else 0
+
+        # ── Compute estimate-based surprise where missing ──
+        for yr in years:
+            for ql in q_labels:
+                act = quarterly.get(yr, {}).get(ql)
+                est = estimates.get(yr, {}).get(ql)
+                if act is not None and est is not None and est != 0:
+                    if yr not in surprise_pct:
+                        surprise_pct[yr] = {}
+                    if ql not in surprise_pct[yr]:
+                        surprise_pct[yr][ql] = round((act - est) / abs(est) * 100, 1)
+                    if yr not in beats:
+                        beats[yr] = {}
+                    if ql not in beats[yr]:
+                        beats[yr][ql] = act >= est
+
         # ── Valuation multiples ──
         valuations = {}
         price = _safe_float(info.get("currentPrice") or info.get("regularMarketPrice"), 0)
         if price > 0:
-            # P/E
             trailing_pe = _safe_float(info.get("trailingPE"), 0)
             forward_pe = _safe_float(info.get("forwardPE"), 0)
-            # P/S
             trailing_ps = _safe_float(info.get("priceToSalesTrailing12Months"), 0)
-            # P/B
             pb = _safe_float(info.get("priceToBook"), 0)
-            # P/CF (price to operating cash flow)
             opcf = _safe_float(info.get("operatingCashflow"), 0)
             shares = _safe_float(info.get("sharesOutstanding"), 0)
             pcf = round(price / (opcf / shares), 1) if opcf > 0 and shares > 0 else 0
+            ev_ebitda = _safe_float(info.get("enterpriseToEbitda"), 0)
+            forward_eps = _safe_float(info.get("forwardEps"), 0)
 
             valuations = {
                 "P/E": {
                     "Last 4Q": f"{trailing_pe:.1f}x" if trailing_pe > 0 else "—",
                     "Forward": f"{forward_pe:.1f}x" if forward_pe > 0 else "—",
+                },
+                "EV/EBITDA": {
+                    "Last 4Q": f"{ev_ebitda:.1f}x" if ev_ebitda > 0 else "—",
+                    "Forward": "—",
                 },
                 "P/S": {
                     "Last 4Q": f"{trailing_ps:.1f}x" if trailing_ps > 0 else "—",
@@ -2481,9 +2649,16 @@ def get_earnings_matrix(ticker):
 
         return {
             "quarterly": quarterly,
+            "estimates": estimates,
+            "surprise_pct": surprise_pct,
+            "beats": beats,
+            "revenue_q": revenue_q,
             "annual": annual,
+            "annual_revenue": annual_revenue,
             "yoy_growth": yoy_growth,
             "annual_growth": annual_growth,
+            "rev_growth": rev_growth,
+            "annual_rev_growth": annual_rev_growth,
             "valuations": valuations,
             "fiscal_end_month": fiscal_end_month,
             "currency": currency,
@@ -2491,6 +2666,11 @@ def get_earnings_matrix(ticker):
             "q_labels": q_labels,
             "price": price,
             "company": info.get("shortName", ticker),
+            "streak": streak,
+            "beat_rate": beat_rate,
+            "forward_eps": _safe_float(info.get("forwardEps"), 0),
+            "trailing_eps": _safe_float(info.get("trailingEps"), 0),
+            "market_cap": _safe_float(info.get("marketCap"), 0),
         }
     except Exception as e:
         logger.error({"error": str(e)}, "Earnings Matrix Error")
