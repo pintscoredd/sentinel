@@ -337,6 +337,237 @@
       background: rgba(255, 220, 0, .2);
     }
 
+    #ic-track-btn.vessel {
+      border-color: #4488FF;
+      background: rgba(68, 136, 255, .08);
+      color: #4488FF;
+    }
+
+    #ic-track-btn.vessel:hover {
+      background: rgba(68, 136, 255, .2);
+    }
+
+    #ic.vessel {
+      border-left-color: #4488FF;
+      padding: 0;
+      width: 320px;
+      overflow: hidden;
+    }
+
+    #ic.vessel #ic-close {
+      top: 8px;
+      right: 10px;
+      color: #666;
+      z-index: 5;
+    }
+
+    /* Hide generic card elements when vessel class active */
+    #ic.vessel .icl,
+    #ic.vessel .icb,
+    #ic.vessel .icm,
+    #ic.vessel .ictags,
+    #ic.vessel #ic-date {
+      display: none;
+    }
+
+    /* Vessel card custom elements */
+    .vc-header {
+      background: linear-gradient(135deg, #0a1628 0%, #0d1f3c 100%);
+      padding: 12px 15px;
+      border-bottom: 1px solid #1a2a4a;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .vc-header-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 6px;
+      background: #4488FF;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+
+    .vc-header-info {
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .vc-header-name {
+      font-size: 14px;
+      font-weight: 800;
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      letter-spacing: 0.5px;
+    }
+
+    .vc-header-type {
+      font-size: 10px;
+      color: #6699CC;
+      margin-top: 1px;
+      letter-spacing: 0.5px;
+    }
+
+    .vc-dest {
+      padding: 10px 15px;
+      border-bottom: 1px solid #111;
+    }
+
+    .vc-dest-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 6px;
+    }
+
+    .vc-dest-label {
+      font-size: 9px;
+      color: #555;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 2px;
+    }
+
+    .vc-dest-value {
+      font-size: 13px;
+      font-weight: 700;
+      color: #ddd;
+    }
+
+    .vc-dest-country {
+      font-size: 10px;
+      color: #888;
+      text-align: right;
+    }
+
+    .vc-progress {
+      padding: 8px 15px 10px;
+      border-bottom: 1px solid #111;
+    }
+
+    .vc-progress-bar {
+      position: relative;
+      height: 4px;
+      background: #222;
+      border-radius: 2px;
+      overflow: visible;
+    }
+
+    .vc-progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #4488FF, #66AAFF);
+      border-radius: 2px;
+      position: relative;
+    }
+
+    .vc-progress-arrow {
+      position: absolute;
+      right: -7px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 0;
+      height: 0;
+      border-top: 5px solid transparent;
+      border-bottom: 5px solid transparent;
+      border-left: 8px solid #66AAFF;
+    }
+
+    .vc-progress-dots {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 5px;
+    }
+
+    .vc-progress-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      border: 1.5px solid #4488FF;
+    }
+
+    .vc-progress-dot.filled {
+      background: #4488FF;
+    }
+
+    .vc-data {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      border-bottom: 1px solid #111;
+    }
+
+    .vc-data-cell {
+      padding: 8px 12px;
+      border-right: 1px solid #111;
+    }
+
+    .vc-data-cell:last-child {
+      border-right: none;
+    }
+
+    .vc-data-label {
+      font-size: 9px;
+      color: #555;
+      letter-spacing: 0.5px;
+      margin-bottom: 2px;
+    }
+
+    .vc-data-val {
+      font-size: 12px;
+      color: #ccc;
+      font-weight: 600;
+    }
+
+    .vc-actions {
+      padding: 10px 15px;
+      border-bottom: 1px solid #111;
+    }
+
+    .vc-track-btn {
+      width: 100%;
+      padding: 7px 12px;
+      font-family: 'Courier New', monospace;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      cursor: pointer;
+      border: 1px solid #4488FF;
+      background: rgba(68, 136, 255, .1);
+      color: #4488FF;
+      border-radius: 3px;
+      transition: all .15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .vc-track-btn:hover {
+      background: rgba(68, 136, 255, .25);
+    }
+
+    .vc-footer {
+      padding: 8px 15px;
+      font-size: 9px;
+      color: #444;
+      letter-spacing: 0.5px;
+      line-height: 1.5;
+    }
+
+    .vc-footer b {
+      color: #777;
+      font-weight: 600;
+    }
+
+    .vc-ais-src {
+      color: #555;
+    }
+
     /* Tracking bar */
     #trackbar {
       position: absolute;
@@ -357,6 +588,11 @@
     #trackbar.flt {
       border-color: #FFDD00;
       color: #FFDD00;
+    }
+
+    #trackbar.vessel {
+      border-color: #4488FF;
+      color: #4488FF;
     }
 
     #trackbar-stop {
@@ -1391,6 +1627,11 @@
           label.textContent = '◉ TRACKING: ' + obj.name;
           computeOrbitTrack(obj);
           trackUpdateInt = setInterval(() => computeOrbitTrack(obj), 30000);
+        } else if (type === 'vessel') {
+          bar.className = 'vessel';
+          label.textContent = '🚢 TRACKING: ' + (obj.name || 'VESSEL');
+          computeVesselPath(obj);
+          trackUpdateInt = setInterval(() => computeVesselPath(obj), 30000);
         } else {
           bar.className = 'flt';
           label.textContent = '✈ TRACKING: ' + (obj.callsign || obj.hex);
@@ -1628,13 +1869,15 @@
         ic.style.display = 'none'; ic.className = '';
         currentCardObj = null;
         document.getElementById('ic-track-btn').style.display = 'none';
+        // Reset vessel card injected HTML
+        document.getElementById('ic-ttl').innerHTML = '';
       }
       window.closeCard = closeCard;
 
       function positionCard(px, py) {
         const ic = document.getElementById('ic');
         const W = canvas.clientWidth || CW, H = canvas.clientHeight || CH;
-        const IW = 300, IH = 260;
+        const IW = ic.offsetWidth || 320, IH = ic.offsetHeight || 260;
         let x = px + 16, y = py - 20;
         if (x + IW > W - 10) x = px - IW - 10;
         if (y + IH > H - 10) y = H - IH - 10;
@@ -1749,18 +1992,146 @@
         positionCard(px, py);
       }
 
+      function computeVesselPath(vessel) {
+        // Project vessel course forward 60 min at current heading/speed
+        trackLatLons = [];
+        const R = 6371; // Earth radius km
+        const speedKmh = vessel.speed * 1.852; // knots to km/h
+        for (let m = -10; m <= 60; m += 2) {
+          const dist = speedKmh * (m / 60);
+          const d = dist / R;
+          const hdg = vessel.heading * Math.PI / 180;
+          const lat1 = vessel.lat * Math.PI / 180;
+          const lon1 = vessel.lon * Math.PI / 180;
+          const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(hdg));
+          const lon2 = lon1 + Math.atan2(Math.sin(hdg) * Math.sin(d) * Math.cos(lat1), Math.cos(d) - Math.sin(lat1) * Math.sin(lat2));
+          trackLatLons.push({ lat: lat2 * 180 / Math.PI, lon: lon2 * 180 / Math.PI });
+        }
+        buildTrackLine(new THREE.Color(0x4488FF));
+      }
+
       function showVesselCard(vessel, px, py) {
-        currentCardObj = null;
+        currentCardObj = { type: 'vessel', data: vessel };
         const ic = document.getElementById('ic');
-        document.getElementById('ic-sev').textContent = 'MARITIME VESSEL — ' + vessel.type.toUpperCase();
-        document.getElementById('ic-ttl').textContent = vessel.name || 'UNKNOWN VESSEL';
-        document.getElementById('ic-body').textContent =
-          `MMSI: ${vessel.mmsi || '—'}\nSPEED: ${vessel.speed.toFixed(1)} KTS\nHEADING: ${Math.round(vessel.heading)}°\nTYPE: ${vessel.type || '—'}\nPOS: ${vessel.lat.toFixed(3)}°, ${vessel.lon.toFixed(3)}°`;
+
+        // Derive navigational status from speed
+        let navStatus = 'Under Way';
+        let navColor = '#00CC44';
+        if (vessel.speed < 0.5) { navStatus = 'Stopped'; navColor = '#FF4444'; }
+        else if (vessel.speed < 3) { navStatus = 'Slow Steam'; navColor = '#FF8C00'; }
+        else if (vessel.speed > 18) { navStatus = 'High Speed'; navColor = '#00AAFF'; }
+
+        // Format type label
+        const typeLabel = (vessel.type || 'cargo').replace(/[_-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+        // Guess region from lat/lon
+        let region = '';
+        const lat = vessel.lat, lon = vessel.lon;
+        if (lat > 25 && lat < 32 && lon > 30 && lon < 35) region = 'SUEZ CANAL';
+        else if (lat > 12 && lat < 15 && lon > 42 && lon < 45) region = 'BAB EL-MANDEB';
+        else if (lat > 25 && lat < 28 && lon > 54 && lon < 58) region = 'STRAIT OF HORMUZ';
+        else if (lat > 0 && lat < 3 && lon > 102 && lon < 105) region = 'MALACCA STRAIT';
+        else if (lat > 23 && lat < 26 && lon > 118 && lon < 121) region = 'TAIWAN STRAIT';
+        else if (lat > -36 && lat < -33 && lon > 17 && lon < 20) region = 'CAPE OF GOOD HOPE';
+        else if (lat > 35 && lat < 37 && lon > -6 && lon < -4) region = 'STRAIT OF GIBRALTAR';
+        else if (lat > 50 && lat < 52 && lon > 0 && lon < 3) region = 'ENGLISH CHANNEL';
+        else if (lat > 8 && lat < 10 && lon > -80 && lon < -79) region = 'PANAMA CANAL';
+        else if (lat > 30 && lat < 42 && lon > 120 && lon < 145) region = 'EAST ASIA';
+        else if (lat > 20 && lat < 45 && lon > -130 && lon < -60) region = 'NORTH AMERICA';
+        else if (lat > 35 && lat < 60 && lon > -10 && lon < 30) region = 'EUROPE';
+        else if (lat > -10 && lat < 20 && lon > 40 && lon < 80) region = 'INDIAN OCEAN';
+        else if (lat > 5 && lat < 22 && lon > 105 && lon < 120) region = 'SOUTH CHINA SEA';
+        else region = `${Math.abs(lat).toFixed(0)}°${lat >= 0 ? 'N' : 'S'}, ${Math.abs(lon).toFixed(0)}°${lon >= 0 ? 'E' : 'W'}`;
+
+        // Draught estimate based on vessel type
+        let draught = '—';
+        const tl = (vessel.type || '').toLowerCase();
+        if (tl.includes('tanker')) draught = '14.5m';
+        else if (tl.includes('container')) draught = '12.0m';
+        else if (tl.includes('cargo') || tl.includes('bulk')) draught = '10.5m';
+
+        // Speed progress percentage (0-25 kts mapped to 0-100%)
+        const speedPct = Math.min(vessel.speed / 20 * 100, 100);
+
+        // Build the vessel-specific HTML inside the title element (which stays visible)
+        // We hide the other generic elements via CSS
+        const vesselHTML = `
+          <div class="vc-header">
+            <div class="vc-header-icon">🚢</div>
+            <div class="vc-header-info">
+              <div class="vc-header-name">${vessel.name || 'UNKNOWN VESSEL'}</div>
+              <div class="vc-header-type">${typeLabel}</div>
+            </div>
+          </div>
+
+          <div class="vc-dest">
+            <div class="vc-dest-row">
+              <div>
+                <div class="vc-dest-label">POSITION</div>
+                <div class="vc-dest-value">${vessel.lat.toFixed(4)}° / ${vessel.lon.toFixed(4)}°</div>
+              </div>
+              <div class="vc-dest-country">${region}</div>
+            </div>
+            <div style="font-size:10px;color:#666;margin-top:2px">
+              MMSI: <span style="color:#aaa;font-weight:600">${vessel.mmsi || '—'}</span>
+            </div>
+          </div>
+
+          <div class="vc-progress">
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+              <div style="font-size:9px;color:#FF6600;font-weight:700">HEADING: ${Math.round(vessel.heading)}°</div>
+              <div style="font-size:9px;color:#888">${vessel.speed.toFixed(1)} KTS</div>
+            </div>
+            <div class="vc-progress-bar">
+              <div class="vc-progress-fill" style="width:${speedPct}%">
+                <div class="vc-progress-arrow"></div>
+              </div>
+            </div>
+            <div class="vc-progress-dots">
+              <div class="vc-progress-dot filled"></div>
+              <div class="vc-progress-dot ${vessel.speed > 5 ? 'filled' : ''}"></div>
+              <div class="vc-progress-dot ${vessel.speed > 10 ? 'filled' : ''}"></div>
+              <div class="vc-progress-dot ${vessel.speed > 15 ? 'filled' : ''}"></div>
+            </div>
+          </div>
+
+          <div class="vc-data">
+            <div class="vc-data-cell">
+              <div class="vc-data-label">Nav Status:</div>
+              <div class="vc-data-val" style="color:${navColor}">${navStatus}</div>
+            </div>
+            <div class="vc-data-cell">
+              <div class="vc-data-label">Speed/Course:</div>
+              <div class="vc-data-val">${vessel.speed.toFixed(1)}kn / ${Math.round(vessel.heading)}°</div>
+            </div>
+            <div class="vc-data-cell">
+              <div class="vc-data-label">Draught:</div>
+              <div class="vc-data-val">${draught}</div>
+            </div>
+          </div>
+
+          <div class="vc-actions">
+            <button class="vc-track-btn" onclick="startTrackingFromCard()">
+              📡 TRACK
+            </button>
+          </div>
+
+          <div class="vc-footer">
+            Received: <b>LIVE</b> <span class="vc-ais-src">(AIS source: ${vessel.mmsi?.startsWith('STATIC') ? 'Static Reference' : 'Roaming'})</span>
+          </div>
+        `;
+
+        // Clear generic fields
+        document.getElementById('ic-sev').textContent = '';
+        document.getElementById('ic-body').textContent = '';
         document.getElementById('ic-mkt').textContent = '';
-        document.getElementById('ic-tags').innerHTML = `<span class="ictag">AIS</span><span class="ictag">${vessel.type.toUpperCase()}</span><span class="ictag">MMSI ${vessel.mmsi || '?'}</span>`;
-        document.getElementById('ic-date').textContent = 'POSITION: AIS LIVE';
+        document.getElementById('ic-tags').innerHTML = '';
+        document.getElementById('ic-date').textContent = '';
         document.getElementById('ic-track-btn').style.display = 'none';
-        ic.className = 'show elevated';
+
+        // Inject vessel HTML into title element
+        document.getElementById('ic-ttl').innerHTML = vesselHTML;
+        ic.className = 'show vessel';
         positionCard(px, py);
       }
 
@@ -1834,6 +2205,14 @@
       }
       window.addCustomEvent = addCustomEvent;
       window.stopTracking = stopTracking;
+      window.showVesselCard = showVesselCard;
+      window.computeVesselPath = computeVesselPath;
+      window.renderVesselMarkers = renderVesselMarkers;
+
+      // Expose data for testing/debugging
+      Object.defineProperty(window, 'vesselData', { get() { return vesselData; }, set(v) { vesselData = v; } });
+      Object.defineProperty(window, 'vesselMeshes', { get() { return vesselMeshes; } });
+      Object.defineProperty(window, 'currentCardObj', { get() { return currentCardObj; } });
 
       // ── ANIMATION LOOP
       let lastT = 0;
