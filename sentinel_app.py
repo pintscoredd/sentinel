@@ -520,28 +520,32 @@ tabs = st.tabs(["BRIEF","MARKETS","SPX 0DTE","MACRO","CRYPTO","POLYMARKET","GEO"
 with tabs[0]:
     st.markdown('<div class="bb-ph">⚡ SENTINEL MORNING BRIEF</div>', unsafe_allow_html=True)
 
-    ref_col, mkt_col = st.columns([1, 1])
-    with ref_col:
-        if st.button("↺ REFRESH ALL DATA"):
-            st.cache_data.clear(); st.rerun()
-    with mkt_col:
-        mkt_status, mkt_color, mkt_detail = is_market_open()
-        st.markdown(
-            f'<div style="text-align:right;font-family:monospace;padding:4px 0">'
-            f'<span style="color:{mkt_color};font-size:14px;font-weight:900">● {mkt_status}</span>'
-            f' <span style="color:#555;font-size:10px">{mkt_detail}</span></div>',
-            unsafe_allow_html=True)
+    @st.fragment(run_every="30s")
+    def render_morning_brief_header():
+        ref_col, mkt_col = st.columns([1, 1])
+        with ref_col:
+            if st.button("↺ REFRESH ALL DATA"):
+                st.cache_data.clear(); st.rerun()
+        with mkt_col:
+            mkt_status, mkt_color, mkt_detail = is_market_open()
+            st.markdown(
+                f'<div style="text-align:right;font-family:monospace;padding:4px 0">'
+                f'<span style="color:{mkt_color};font-size:14px;font-weight:900">● {mkt_status}</span>'
+                f' <span style="color:#555;font-size:10px">{mkt_detail}</span></div>',
+                unsafe_allow_html=True)
 
-    KEY_T = {"SPY":"S&P 500","QQQ":"Nasdaq 100","DIA":"Dow Jones","IWM":"Russell 2K",
-            "^TNX":"10Y Yield","DX-Y.NYB":"USD Index","GLD":"Gold","CL=F":"WTI Crude","BTC-USD":"Bitcoin"}
-    qs = multi_quotes(list(KEY_T.keys()))
-    if qs:
-        cols = st.columns(len(qs))
-        for col, q in zip(cols, qs):
-            chg_str = f"{q['pct']:+.2f}% ({q['change']:+.2f})"
-            with col: st.metric(KEY_T.get(q["ticker"],q["ticker"]), fmt_p(q["price"]), delta=chg_str)
-    else:
-        st.markdown('<div style="color:#FF4444;font-size:11px;font-family:monospace">Quotes unavailable. Rate limits or network error.</div>', unsafe_allow_html=True)
+        KEY_T = {"SPY":"S&P 500","QQQ":"Nasdaq 100","DIA":"Dow Jones","IWM":"Russell 2K",
+                "^TNX":"10Y Yield","DX-Y.NYB":"USD Index","GLD":"Gold","CL=F":"WTI Crude","BTC-USD":"Bitcoin"}
+        qs = multi_quotes(list(KEY_T.keys()))
+        if qs:
+            cols = st.columns(len(qs))
+            for col, q in zip(cols, qs):
+                chg_str = f"{q['pct']:+.2f}% ({q['change']:+.2f})"
+                with col: st.metric(KEY_T.get(q["ticker"],q["ticker"]), fmt_p(q["price"]), delta=chg_str)
+        else:
+            st.markdown('<div style="color:#FF4444;font-size:11px;font-family:monospace">Quotes unavailable. Rate limits or network error.</div>', unsafe_allow_html=True)
+            
+    render_morning_brief_header()
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
     L, R = st.columns([3,2])
@@ -862,30 +866,34 @@ with tabs[1]:
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-    st.markdown('<div class="bb-ph">📡 FUTURES — LIVE TRACKING</div>', unsafe_allow_html=True)
-    with st.spinner("Loading futures…"):
-        fut_data = get_futures()
-    if fut_data:
-        st.markdown(
-            '<div class="fut-row" style="color:#FF6600;font-size:9px;letter-spacing:1px;border-bottom:1px solid #FF6600">'
-            '<span>CONTRACT</span><span>NAME</span><span>PRICE</span><span>CHG%</span><span>CHG $</span><span>SIGNAL</span>'
-            '</div>', unsafe_allow_html=True)
-        for f in fut_data:
-            c = "#00CC44" if f["pct"]>=0 else "#FF4444"
-            arr = "▲" if f["pct"]>=0 else "▼"
-            sig_lbl = "BULL" if f["pct"]>=0.5 else ("BEAR" if f["pct"]<=-0.5 else "FLAT")
-            sig_c = "#00CC44" if sig_lbl=="BULL" else ("#FF4444" if sig_lbl=="BEAR" else "#555")
+    @st.fragment(run_every="30s")
+    def render_futures_live():
+        st.markdown('<div class="bb-ph">📡 FUTURES — LIVE TRACKING</div>', unsafe_allow_html=True)
+        with st.spinner("Loading futures…"):
+            fut_data = get_futures()
+        if fut_data:
             st.markdown(
-                f'<div class="fut-row">'
-                f'<span style="color:#FF6600;font-weight:700">{f["ticker"]}</span>'
-                f'<span style="color:#AAA;font-size:10px">{f["name"]}</span>'
-                f'<span style="color:#FFF;font-weight:600">{fmt_p(f["price"])}</span>'
-                f'<span style="color:{c};font-weight:700">{arr}{abs(f["pct"]):.2f}%</span>'
-                f'<span style="color:{c}">{"+"+str(f["change"]) if f["change"]>=0 else str(f["change"])}</span>'
-                f'<span style="color:{sig_c};font-size:10px;font-weight:700">{sig_lbl}</span>'
-                f'</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Futures data loading…</p>', unsafe_allow_html=True)
+                '<div class="fut-row" style="color:#FF6600;font-size:9px;letter-spacing:1px;border-bottom:1px solid #FF6600">'
+                '<span>CONTRACT</span><span>NAME</span><span>PRICE</span><span>CHG%</span><span>CHG $</span><span>SIGNAL</span>'
+                '</div>', unsafe_allow_html=True)
+            for f in fut_data:
+                c = "#00CC44" if f["pct"]>=0 else "#FF4444"
+                arr = "▲" if f["pct"]>=0 else "▼"
+                sig_lbl = "BULL" if f["pct"]>=0.5 else ("BEAR" if f["pct"]<=-0.5 else "FLAT")
+                sig_c = "#00CC44" if sig_lbl=="BULL" else ("#FF4444" if sig_lbl=="BEAR" else "#555")
+                st.markdown(
+                    f'<div class="fut-row">'
+                    f'<span style="color:#FF6600;font-weight:700">{f["ticker"]}</span>'
+                    f'<span style="color:#AAA;font-size:10px">{f["name"]}</span>'
+                    f'<span style="color:#FFF;font-weight:600">{fmt_p(f["price"])}</span>'
+                    f'<span style="color:{c};font-weight:700">{arr}{abs(f["pct"]):.2f}%</span>'
+                    f'<span style="color:{c}">{"+"+str(f["change"]) if f["change"]>=0 else str(f["change"])}</span>'
+                    f'<span style="color:{sig_c};font-size:10px;font-weight:700">{sig_lbl}</span>'
+                    f'</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Futures data loading…</p>', unsafe_allow_html=True)
+
+    render_futures_live()
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
@@ -2190,8 +2198,8 @@ with tabs[7]:
                 st.markdown(f"""<div class="earn-card" style="background:{bc_bg}">
 <span class="earn-ticker">{row['Ticker']}</span>
 <div style="min-width:0">
-    <div style="color:#CCCCCC;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{company}</div>
-    <div style="color:#FF6600;font-size:10px;margin-top:2px;letter-spacing:1px">{sector.upper()}</div>
+    <div style="color:#CCCCCC;font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{company}</div>
+    <div style="color:#FF6600;font-size:12px;margin-top:2px;letter-spacing:1px">{sector.upper()}</div>
 </div>
 <span style="color:{bc};font-size:10px;font-weight:700;letter-spacing:1px;white-space:nowrap">{badge}</span>
 <span class="earn-date" style="white-space:nowrap">{ed_fmt}</span>
