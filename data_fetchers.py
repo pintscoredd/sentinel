@@ -187,6 +187,9 @@ def is_market_open():
         schedule = nyse.schedule(start_date=now.date(), end_date=now.date())
         
         if schedule.empty:
+            wd = now.weekday()  # Monday=0, Sunday=6
+            if wd == 6 and now.time() >= dtime(18, 0):
+                return "FUTURES OPEN", "#FF8C00", "US Equities Closed, Futures Live"
             return "CLOSED", "#FF4444", "Weekend / Holiday"
         
         market_open = schedule.iloc[0]['market_open'].astimezone(ET).time()
@@ -217,7 +220,7 @@ def is_0dte_market_open():
 # YAHOO FINANCE & ASYNC BATCHING
 # ════════════════════════════════════════════════════════════════════
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=60)
 def yahoo_quote(ticker):
     TICKER_MAP = {"DXY": "DX-Y.NYB", "$DXY": "DX-Y.NYB"}
     t = TICKER_MAP.get(ticker, ticker)
@@ -225,31 +228,35 @@ def yahoo_quote(ticker):
         tk = get_yf_ticker(t)
         if tk is None: return None
 
-        # fast_info gives live price during market hours
         fi = tk.fast_info
         price = getattr(fi, "last_price", None)
-        prev  = getattr(fi, "previous_close", None)
+        prev = None
+        vol = 0
 
-        if price is None or prev is None:
-            # Fallback to history if fast_info unavailable
+        # Always fetch history as fast_info.previous_close frequently caches incorrectly
+        try:
             h = tk.history(period="5d")
-            if h.empty: return None
-            price = h["Close"].iloc[-1]
-            prev  = h["Close"].iloc[-2] if len(h) > 1 else price
+            if not h.empty:
+                if price is None or price <= 0:
+                    price = float(h["Close"].iloc[-1])
+                prev = float(h["Close"].iloc[-2]) if len(h) > 1 else float(h["Close"].iloc[-1])
+                vol = int(h["Volume"].iloc[-1])
+        except Exception:
+            pass
+
+        if prev is None:
+            prev = getattr(fi, "previous_close", None)
+        if price is None:
+            return None
+        if prev is None:
+            prev = price
+        if vol == 0:
+            vol = int(getattr(fi, "three_month_average_volume", 0) or 0)
 
         price = float(price)
         prev  = float(prev)
         chg   = price - prev
         pct   = chg / prev * 100 if prev else 0.0
-
-        # Volume from fast_info
-        vol = int(getattr(fi, "three_month_average_volume", 0) or 0)
-        try:
-            h = tk.history(period="2d")
-            if not h.empty:
-                vol = int(h["Volume"].iloc[-1])
-        except Exception:
-            pass
 
         return {
             "ticker": ticker, "price": round(price, 2),
@@ -279,7 +286,7 @@ async def _fetch_yahoo_quotes_async(tickers):
     tasks = [loop.run_in_executor(None, yahoo_quote, tkr) for tkr in tickers]
     return await asyncio.gather(*tasks, return_exceptions=True)
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=60)
 def get_futures():
     FUTURES = [
         ("ES=F", "S&P 500 Futures"), ("NQ=F", "Nasdaq 100 Futures"), ("YM=F", "Dow Jones Futures"),
