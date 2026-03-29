@@ -133,19 +133,54 @@ def _is_english(text):
     return sum(1 for c in text if ord(c) < 128) / max(len(text), 1) > 0.72
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), retry=retry_if_exception_type((requests.exceptions.RequestException, ValueError)))
-def _fetch_robust_json(url, params=None, headers=None, timeout=10):
-    """Centralized, robust external fetcher using exponential backoff and fast JSON parsing."""
+from tenacity import retry_if_exception
+
+def _should_retry_http_error(exc):
+    if isinstance(exc, requests.exceptions.HTTPError):
+        status = exc.response.status_code
+        if status in (429, 500, 502, 503, 504):
+            return True
+        logger.error(f"HTTP {status} - Failing fast on 4xx error: {getattr(exc.response, 'text', '')}")
+        return False
+    if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout, ValueError)):
+        return True
+    return False
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), retry=retry_if_exception(_should_retry_http_error))
+def _do_fetch_robust_json(url, params=None, headers=None, timeout=10):
     if headers is None:
         headers = {}
-    
-    # Many APIs (GDELT, Airplanes.live) block Python/Streamlit user-agents
     if "User-Agent" not in headers or "SENTINEL" in headers["User-Agent"]:
         headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
         
     r = requests.get(url, params=params, headers=headers, timeout=timeout)
     r.raise_for_status()
     return json.loads(r.content)
+
+def _fetch_robust_json(url, params=None, headers=None, timeout=10):
+    """Centralized, robust external fetcher using exponential backoff and fast JSON parsing."""
+    from urllib.parse import urlparse
+    import time
+    
+    api_name = urlparse(url).netloc
+    if 'api_circuit_breaker' not in st.session_state:
+        st.session_state.api_circuit_breaker = {}
+        
+    cb = st.session_state.api_circuit_breaker.setdefault(api_name, {"failures": 0, "last_fail": 0})
+    
+    if cb["failures"] >= 3 and (time.time() - cb["last_fail"]) < 300:
+        logger.warning(f"Circuit breaker open for {api_name} - skipping request")
+        return None
+        
+    try:
+        res = _do_fetch_robust_json(url, params=params, headers=headers, timeout=timeout)
+        cb["failures"] = 0
+        return res
+    except Exception as e:
+        cb["failures"] += 1
+        cb["last_fail"] = time.time()
+        logger.error(f"Request failed for {api_name}: {e}")
+        return None
 
 
 def run_async(coro):
@@ -224,9 +259,11 @@ def yahoo_quote(ticker):
                     price = float(h["Close"].iloc[-1])
                 prev = float(h["Close"].iloc[-2]) if len(h) > 1 else float(h["Close"].iloc[-1])
                 vol = int(h["Volume"].iloc[-1])
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.debug(f"Error caught: {e}")
+            if 'api_error_count' not in st.session_state:
+                st.session_state.api_error_count = 0
+            st.session_state.api_error_count += 1
         if prev is None:
             prev = getattr(fi, "previous_close", None)
         if price is None:
@@ -260,8 +297,11 @@ def get_risk_free_rate(fred_key=None):
         h = get_yf_ticker("^IRX").history(period="5d")
         if not h.empty:
             return round(h["Close"].iloc[-1] / 100, 4)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Error caught: {e}")
+        if 'api_error_count' not in st.session_state:
+            st.session_state.api_error_count = 0
+        st.session_state.api_error_count += 1
     return 0.045   # final fallback
 
 async def _fetch_yahoo_quotes_async(tickers):
@@ -285,8 +325,11 @@ def get_futures():
             if isinstance(q, dict) and q:
                 rows.append({"ticker": ticker, "name": name, "price": q["price"],
                              "change": q["change"], "pct": q["pct"]})
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Error caught: {e}")
+        if 'api_error_count' not in st.session_state:
+            st.session_state.api_error_count = 0
+        st.session_state.api_error_count += 1
     return rows
 
 @st.cache_data(ttl=300)
@@ -646,8 +689,11 @@ def get_finra_short_volume(ticker):
                 "short_shares": s_shares,
                 "days_to_cover": s_ratio
             }
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Error caught: {e}")
+        if 'api_error_count' not in st.session_state:
+            st.session_state.api_error_count = 0
+        st.session_state.api_error_count += 1
     return None
 
 @st.cache_data(ttl=3600)
@@ -827,9 +873,11 @@ def calc_stock_fear_greed():
                 pct_above = (current / ma125 - 1) * 100
                 mom_score = max(0, min(100, 50 + pct_above * 5))
                 scores.append(("Momentum", mom_score))
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.debug(f"Error caught: {e}")
+            if 'api_error_count' not in st.session_state:
+                st.session_state.api_error_count = 0
+            st.session_state.api_error_count += 1
         # --- Signal 3: Safe Haven Demand (TLT vs SPY 20-day relative perf) ---
         try:
             tlt_hist = get_tlt_history().tail(21)
@@ -841,9 +889,11 @@ def calc_stock_fear_greed():
                 # Score mapping: Positive 20d outperformance of TLT -> fear
                 sh_score = max(0, min(100, 50 - relative_20d * 5))
                 scores.append(("SafeHaven", sh_score))
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.debug(f"Error caught: {e}")
+            if 'api_error_count' not in st.session_state:
+                st.session_state.api_error_count = 0
+            st.session_state.api_error_count += 1
         # --- Signal 4: Put/Call Ratio (equity options) ---
         try:
             # Use SPY options PCR as proxy
@@ -857,9 +907,11 @@ def calc_stock_fear_greed():
                 # PCR 0.5 = extreme greed (100), PCR 1.5 = extreme fear (0)
                 pcr_score = max(0, min(100, (1.5 - pcr) / 1.0 * 100))
                 scores.append(("PCR", pcr_score))
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.debug(f"Error caught: {e}")
+            if 'api_error_count' not in st.session_state:
+                st.session_state.api_error_count = 0
+            st.session_state.api_error_count += 1
         # --- Signal 5: Junk Bond Demand (HYG vs LQD spread proxy) ---
         try:
             hyg = yahoo_quote("HYG")
@@ -869,9 +921,11 @@ def calc_stock_fear_greed():
                 spread = hyg["pct"] - lqd["pct"]
                 junk_score = max(0, min(100, 50 + spread * 20))
                 scores.append(("Junk", junk_score))
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.debug(f"Error caught: {e}")
+            if 'api_error_count' not in st.session_state:
+                st.session_state.api_error_count = 0
+            st.session_state.api_error_count += 1
         if not scores:
             return None, None
 
@@ -913,7 +967,11 @@ def market_snapshot_str():
 @st.cache_data(ttl=300)
 def build_brief_context():
     """Assembles the enriched context for /brief and /geo."""
-    GEO_QUERY = (
+    PRIMARY_QUERY = st.session_state.get("geo_watch", "")
+    if not PRIMARY_QUERY:
+        PRIMARY_QUERY = "war OR strike OR sanctions OR interest rate OR oil OR escalation OR ceasefire OR tariff"
+        
+    BROAD_QUERY = (
         "war OR strike OR attack OR sanctions OR geopolitical OR crisis "
         "OR central bank OR interest rate OR oil OR tariff OR embargo "
         "OR Israel OR Iran OR Hamas OR Hezbollah OR Ukraine OR Russia "
@@ -921,12 +979,12 @@ def build_brief_context():
         "OR missile OR airstrike OR invasion OR ceasefire"
     )
 
-    def _fetch_geo():
+    def _fetch_geo(query):
         try:
             r = requests.get(
                 "https://api.gdeltproject.org/api/v2/doc/doc",
-                params={"query": GEO_QUERY + " sourcelang:english", "mode": "artlist",
-                        "maxrecords": 20, "format": "json", "timespan": "72h"},
+                params={"query": query + " sourcelang:english", "mode": "artlist",
+                        "maxrecords": 20, "format": "json", "timespan": "48h"},
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"},
                 timeout=8,
             )
@@ -947,10 +1005,15 @@ def build_brief_context():
 
     # Simple sequential wait since we got rid of ThreadPoolExecutor entirely
     base = market_snapshot_str()
-    geo_headlines = _fetch_geo()
+    
+    geo_headlines = _fetch_geo(PRIMARY_QUERY)
+    if len(geo_headlines) < 5:
+        broad_headlines = _fetch_geo(BROAD_QUERY)
+        if len(broad_headlines) > len(geo_headlines):
+            geo_headlines = broad_headlines
 
     if geo_headlines:
-        headlines_block = "LIVE GEOPOLITICAL & MACRO HEADLINES (last 72h, via GDELT):\n" + "\n".join(geo_headlines[:20])
+        headlines_block = "LIVE GEOPOLITICAL & MACRO HEADLINES (last 48h, via GDELT):\n" + "\n".join(geo_headlines[:20])
     else:
         headlines_block = "LIVE GEO HEADLINES: unavailable (GDELT timeout — use model knowledge for recent conflicts)"
 
@@ -1877,11 +1940,19 @@ def fetch_vix_data():
     try:
         h = get_yf_ticker("^VIX").history(period="5d")
         if not h.empty: result["vix"] = round(h["Close"].iloc[-1], 2)
-    except Exception: pass
+    except Exception as e:
+        logger.debug(f"Error caught: {e}")
+        if 'api_error_count' not in st.session_state:
+            st.session_state.api_error_count = 0
+        st.session_state.api_error_count += 1
     try:
         h9 = get_yf_ticker("^VIX9D").history(period="5d")
         if not h9.empty: result["vix9d"] = round(h9["Close"].iloc[-1], 2)
-    except Exception: pass
+    except Exception as e:
+        logger.debug(f"Error caught: {e}")
+        if 'api_error_count' not in st.session_state:
+            st.session_state.api_error_count = 0
+        st.session_state.api_error_count += 1
     if result["vix"] is not None and result["vix9d"] is not None:
         result["contango"] = result["vix"] > result["vix9d"]
     return result
@@ -2250,8 +2321,11 @@ def get_macro_overview(fred_key):
             elif cpi_yoy < 5.0: cpi_score, cpi_label, cpi_color = -1, f"High ({cpi_yoy:.1f}%)", "#FF4444"
             else: cpi_score, cpi_label, cpi_color = -2, f"Very High ({cpi_yoy:.1f}%)", "#FF0000"
             signals["CPI Inflation"] = {"score": cpi_score, "label": cpi_label, "color": cpi_color, "val": cpi_yoy}
-    except Exception: pass
-
+    except Exception as e:
+        logger.debug(f"Error caught: {e}")
+        if 'api_error_count' not in st.session_state:
+            st.session_state.api_error_count = 0
+        st.session_state.api_error_count += 1
     try:
         df_pce = fred_series("PCEPILFE", fred_key, 24)
         if df_pce is not None and len(df_pce) >= 13:
@@ -2260,8 +2334,11 @@ def get_macro_overview(fred_key):
             elif pce_yoy < 3.0: pce_score, pce_label, pce_color = 1, f"Slightly Elevated ({pce_yoy:.1f}%)", "#FF8C00"
             else: pce_score, pce_label, pce_color = -1, f"Above Target ({pce_yoy:.1f}%)", "#FF4444"
             signals["Core PCE"] = {"score": pce_score, "label": pce_label, "color": pce_color, "val": pce_yoy}
-    except Exception: pass
-
+    except Exception as e:
+        logger.debug(f"Error caught: {e}")
+        if 'api_error_count' not in st.session_state:
+            st.session_state.api_error_count = 0
+        st.session_state.api_error_count += 1
     try:
         df_unemp = fred_series("UNRATE", fred_key, 6)
         if df_unemp is not None and not df_unemp.empty:
@@ -2272,8 +2349,11 @@ def get_macro_overview(fred_key):
             elif urate < 5.5: u_score, u_label, u_color = -1, f"Rising ({urate:.1f}% {trend})", "#FF4444"
             else: u_score, u_label, u_color = -2, f"High Unemployment ({urate:.1f}% {trend})", "#FF0000"
             signals["Unemployment"] = {"score": u_score, "label": u_label, "color": u_color, "val": urate}
-    except Exception: pass
-
+    except Exception as e:
+        logger.debug(f"Error caught: {e}")
+        if 'api_error_count' not in st.session_state:
+            st.session_state.api_error_count = 0
+        st.session_state.api_error_count += 1
     try:
         df_2y, df_10y = fred_series("DGS2", fred_key, 3), fred_series("DGS10", fred_key, 3)
         if df_2y is not None and df_10y is not None and not df_2y.empty and not df_10y.empty:
@@ -2283,8 +2363,11 @@ def get_macro_overview(fred_key):
             elif spread > -0.5: yc_score, yc_label, yc_color = -1, f"Inverted ({spread:.2f}%)", "#FF4444"
             else: yc_score, yc_label, yc_color = -2, f"Deep Inversion ({spread:.2f}%)", "#FF0000"
             signals["Yield Curve (10-2Y)"] = {"score": yc_score, "label": yc_label, "color": yc_color, "val": spread}
-    except Exception: pass
-
+    except Exception as e:
+        logger.debug(f"Error caught: {e}")
+        if 'api_error_count' not in st.session_state:
+            st.session_state.api_error_count = 0
+        st.session_state.api_error_count += 1
     try:
         df_ff = fred_series("FEDFUNDS", fred_key, 6)
         if df_ff is not None and not df_ff.empty:
@@ -2297,8 +2380,11 @@ def get_macro_overview(fred_key):
             elif ffr > 5.0: ff_score, ff_label, ff_color = -1, f"Restrictive ({ffr:.2f}% — HOLD)", "#FF4444"
             else: ff_score, ff_label, ff_color = 1, f"Neutral ({ffr:.2f}% — HOLD)", "#FF8C00"
             signals["Fed Funds Rate"] = {"score": ff_score, "label": ff_label, "color": ff_color, "val": ffr}
-    except Exception: pass
-
+    except Exception as e:
+        logger.debug(f"Error caught: {e}")
+        if 'api_error_count' not in st.session_state:
+            st.session_state.api_error_count = 0
+        st.session_state.api_error_count += 1
     try:
         df_hy = fred_series("BAMLH0A0HYM2", fred_key, 6)
         if df_hy is not None and not df_hy.empty:
@@ -2309,8 +2395,11 @@ def get_macro_overview(fred_key):
             elif hy < 6.0: hy_score, hy_label, hy_color = -1, f"Wide ({hy:.2f}% {hy_trend} — Stress)", "#FF4444"
             else: hy_score, hy_label, hy_color = -2, f"Very Wide ({hy:.2f}% {hy_trend} — Crisis)", "#FF0000"
             signals["HY Credit Spread"] = {"score": hy_score, "label": hy_label, "color": hy_color, "val": hy}
-    except Exception: pass
-
+    except Exception as e:
+        logger.debug(f"Error caught: {e}")
+        if 'api_error_count' not in st.session_state:
+            st.session_state.api_error_count = 0
+        st.session_state.api_error_count += 1
     try:
         df_m2 = fred_series("M2SL", fred_key, 18)
         if df_m2 is not None and len(df_m2) >= 13:
@@ -2319,8 +2408,11 @@ def get_macro_overview(fred_key):
             elif m2_yoy > 0: m2_score, m2_label, m2_color = 1, f"Modest Growth ({m2_yoy:+.1f}% YoY)", "#FF8C00"
             else: m2_score, m2_label, m2_color = 2, f"Contracting ({m2_yoy:+.1f}% YoY)", "#00CC44"
             signals["M2 Money Supply"] = {"score": m2_score, "label": m2_label, "color": m2_color, "val": m2_yoy}
-    except Exception: pass
-
+    except Exception as e:
+        logger.debug(f"Error caught: {e}")
+        if 'api_error_count' not in st.session_state:
+            st.session_state.api_error_count = 0
+        st.session_state.api_error_count += 1
     try:
         df_gdp = fred_series("GDPC1", fred_key, 12)
         if df_gdp is not None and len(df_gdp) >= 5:
@@ -2331,8 +2423,11 @@ def get_macro_overview(fred_key):
             elif gdp_yoy >= 0.5: gdp_score, gdp_label, gdp_color = -1, f"Slowing ({gdp_yoy:.1f}% YoY)", "#FF4444"
             else: gdp_score, gdp_label, gdp_color = -2, f"Contraction ({gdp_yoy:.1f}% YoY)", "#FF0000"
             signals["GDP Growth"] = {"score": gdp_score, "label": gdp_label, "color": gdp_color, "val": gdp_yoy}
-    except Exception: pass
-
+    except Exception as e:
+        logger.debug(f"Error caught: {e}")
+        if 'api_error_count' not in st.session_state:
+            st.session_state.api_error_count = 0
+        st.session_state.api_error_count += 1
     total_score = sum(s["score"] for s in signals.values())
     max_score = len(signals) * 2
     pct = (total_score / max_score * 100) if max_score else 0
@@ -2381,8 +2476,11 @@ def get_macro_calendar(fred_key=None, days_back=0):
         if results:
             results.sort(key=lambda x: x["date"])
             return results[:35]
-    except Exception: pass
-
+    except Exception as e:
+        logger.debug(f"Error caught: {e}")
+        if 'api_error_count' not in st.session_state:
+            st.session_state.api_error_count = 0
+        st.session_state.api_error_count += 1
     if fred_key:
         try:
             data = _fetch_robust_json("https://api.stlouisfed.org/fred/releases/dates", params={"api_key": fred_key, "file_type": "json", "realtime_start": start_date.strftime("%Y-%m-%d"), "realtime_end": horizon.strftime("%Y-%m-%d"), "limit": 150, "sort_order": "asc", "include_release_dates_with_no_data": "false"}, timeout=12)
@@ -2399,8 +2497,11 @@ def get_macro_calendar(fred_key=None, days_back=0):
             if results:
                 results.sort(key=lambda x: x["date"])
                 return results[:35]
-        except Exception: pass
-
+        except Exception as e:
+            logger.debug(f"Error caught: {e}")
+            if 'api_error_count' not in st.session_state:
+                st.session_state.api_error_count = 0
+            st.session_state.api_error_count += 1
     def _nth_weekday(year, month, n, weekday):
         count = 0
         for day in range(1, _cal.monthrange(year, month)[1] + 1):
@@ -2469,7 +2570,11 @@ def get_ticker_exchange(ticker):
         exch = info.get("exchange", "") or info.get("fullExchangeName", "")
         tv_prefix = EXCHANGE_MAP.get(exch, None)
         if tv_prefix: return f"{tv_prefix}:{ticker}"
-    except Exception: pass
+    except Exception as e:
+        logger.debug(f"Error caught: {e}")
+        if 'api_error_count' not in st.session_state:
+            st.session_state.api_error_count = 0
+        st.session_state.api_error_count += 1
     for prefix in ["NASDAQ", "NYSE", "AMEX"]: return f"{prefix}:{ticker}"
     return f"NASDAQ:{ticker}"
 
@@ -2632,9 +2737,11 @@ def get_earnings_matrix(ticker):
                         if fy not in beats:
                             beats[fy] = {}
                         beats[fy][ql] = actual >= est
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.debug(f"Error caught: {e}")
+            if 'api_error_count' not in st.session_state:
+                st.session_state.api_error_count = 0
+            st.session_state.api_error_count += 1
         # ────────────────────────────────────────────────
         # SOURCE 2: quarterly_financials (fills EPS + revenue gaps)
         # ────────────────────────────────────────────────
@@ -2667,9 +2774,11 @@ def get_earnings_matrix(ticker):
                                     revenue_q[fy] = {}
                                 revenue_q[fy][ql] = float(v)
                                 break
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.debug(f"Error caught: {e}")
+            if 'api_error_count' not in st.session_state:
+                st.session_state.api_error_count = 0
+            st.session_state.api_error_count += 1
         # ────────────────────────────────────────────────
         # SOURCE 3: t.earnings (legacy — fills older years)
         # ────────────────────────────────────────────────
@@ -2708,9 +2817,11 @@ def get_earnings_matrix(ticker):
                                     surprise_pct[fy][ql] = round((a_ - e_) / abs(e_) * 100, 1)
                     except Exception:
                         continue
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.debug(f"Error caught: {e}")
+            if 'api_error_count' not in st.session_state:
+                st.session_state.api_error_count = 0
+            st.session_state.api_error_count += 1
         # Also try quarterly_earnings attribute (some yfinance versions)
         try:
             qe_df = t.quarterly_earnings
@@ -2732,9 +2843,11 @@ def get_earnings_matrix(ticker):
                             quarterly[fy] = {}
                         if ql not in quarterly[fy]:
                             quarterly[fy][ql] = round(float(eps), 2)
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.debug(f"Error caught: {e}")
+            if 'api_error_count' not in st.session_state:
+                st.session_state.api_error_count = 0
+            st.session_state.api_error_count += 1
         if not quarterly:
             return None
 
@@ -2881,9 +2994,11 @@ def get_earnings_matrix(ticker):
                         other_targets.append(obj)
                         
                 analyst_targets = (best_targets + other_targets)[:5]
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.debug(f"Error caught: {e}")
+            if 'api_error_count' not in st.session_state:
+                st.session_state.api_error_count = 0
+            st.session_state.api_error_count += 1
         return {
             "quarterly": quarterly,
             "estimates": estimates,
@@ -2932,8 +3047,11 @@ def get_stock_news(ticker, finnhub_key=None, newsapi_key=None):
                 d = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else ""
                 results.append({"title": headline[:110], "url": art.get("url", "#"), "source": art.get("source", "Finnhub"), "date": d})
             if results: return results
-        except Exception: pass
-
+        except Exception as e:
+            logger.debug(f"Error caught: {e}")
+            if 'api_error_count' not in st.session_state:
+                st.session_state.api_error_count = 0
+            st.session_state.api_error_count += 1
     try:
         tk = get_yf_ticker(ticker)
         info = tk.info if tk else {}
@@ -2947,8 +3065,11 @@ def get_stock_news(ticker, finnhub_key=None, newsapi_key=None):
             d = f"{sd[:4]}-{sd[4:6]}-{sd[6:8]}" if sd and len(sd) >= 8 else ""
             results.append({"title": title[:110], "url": art.get("url", "#"), "source": art.get("domain", "GDELT"), "date": d})
         if results: return results
-    except Exception: pass
-
+    except Exception as e:
+        logger.debug(f"Error caught: {e}")
+        if 'api_error_count' not in st.session_state:
+            st.session_state.api_error_count = 0
+        st.session_state.api_error_count += 1
     if newsapi_key:
         try:
             arts = newsapi_headlines(newsapi_key, query=f"{ticker} stock earnings")
@@ -2956,8 +3077,11 @@ def get_stock_news(ticker, finnhub_key=None, newsapi_key=None):
                 title = art.get("title", "")
                 if not title or "[Removed]" in title: continue
                 results.append({"title": title[:110], "url": art.get("url", "#"), "source": art.get("source", {}).get("name", "NewsAPI"), "date": art.get("publishedAt", "")[:10]})
-        except Exception: pass
-
+        except Exception as e:
+            logger.debug(f"Error caught: {e}")
+            if 'api_error_count' not in st.session_state:
+                st.session_state.api_error_count = 0
+            st.session_state.api_error_count += 1
     return results
 
 
@@ -3173,7 +3297,11 @@ def fetch_satellite_positions():
         name, tle1, tle2 = lines[i], lines[i + 1], lines[i + 2]
         if tle1.startswith("1 ") and tle2.startswith("2 "):
             try: sats.append(EarthSatellite(tle1, tle2, name, ts))
-            except Exception: pass
+            except Exception as e:
+                logger.debug(f"Error caught: {e}")
+                if 'api_error_count' not in st.session_state:
+                    st.session_state.api_error_count = 0
+                st.session_state.api_error_count += 1
             i += 3
         else: i += 1
 
@@ -3307,8 +3435,11 @@ def fetch_ais_vessels():
                 lat, lon = pos.get("lat", pos.get("latitude")), pos.get("lon", pos.get("longitude"))
                 if lat is None or lon is None: continue
                 vessels.append({"mmsi": str(s.get("mmsi", s.get("MMSI", ""))), "lat": float(lat), "lon": float(lon), "speed": float(s.get("speed", s.get("sog", 0)) or 0), "heading": float(s.get("heading", s.get("cog", 0)) or 0), "name": str(s.get("name", s.get("shipName", "VESSEL"))).strip()[:30], "type": str(s.get("shipType", s.get("type", "cargo")))})
-        except Exception: pass
-
+        except Exception as e:
+            logger.debug(f"Error caught: {e}")
+            if 'api_error_count' not in st.session_state:
+                st.session_state.api_error_count = 0
+            st.session_state.api_error_count += 1
     mar_key = st.secrets.get("MARINESIA_API_KEY", "") or ""
     if mar_key:
         import time as _time
@@ -3330,8 +3461,11 @@ def fetch_ais_vessels():
             props, coords = f.get("properties", {}), f.get("geometry", {}).get("coordinates", [])
             if len(coords) < 2: continue
             vessels.append({"mmsi": str(props.get("mmsi", "")), "lat": float(coords[1]), "lon": float(coords[0]), "speed": float(props.get("sog", 0) or 0), "heading": float(props.get("cog", props.get("heading", 0)) or 0), "name": f"MMSI-{props.get('mmsi', 'UNKN')}", "type": "cargo"})
-    except Exception: pass
-
+    except Exception as e:
+        logger.debug(f"Error caught: {e}")
+        if 'api_error_count' not in st.session_state:
+            st.session_state.api_error_count = 0
+        st.session_state.api_error_count += 1
     try:
         data = _fetch_robust_json("https://ais.dma.dk/ais-api/getAisData", timeout=12, headers={"User-Agent": "SENTINEL/3.0", "Accept": "application/json"})
         ships = data if isinstance(data, list) else data.get("aisData", data.get("ships", []))
@@ -3339,8 +3473,11 @@ def fetch_ais_vessels():
             lat, lon = s.get("lat", s.get("latitude")), s.get("lon", s.get("longitude"))
             if lat is None or lon is None: continue
             vessels.append({"mmsi": str(s.get("mmsi", "")), "lat": float(lat), "lon": float(lon), "speed": float(s.get("sog", s.get("speed", 0)) or 0), "heading": float(s.get("cog", s.get("heading", 0)) or 0), "name": str(s.get("name", f"MMSI-{s.get('mmsi','UNKN')}")).strip()[:30], "type": str(s.get("shipType", "cargo"))})
-    except Exception: pass
-
+    except Exception as e:
+        logger.debug(f"Error caught: {e}")
+        if 'api_error_count' not in st.session_state:
+            st.session_state.api_error_count = 0
+        st.session_state.api_error_count += 1
     _STATIC = [
         {"mmsi": "STATIC-001", "lat": 29.95, "lon": 32.55, "speed": 8, "heading": 160, "name": "SUEZ CANAL TRANSIT", "type": "tanker"},
         {"mmsi": "STATIC-002", "lat": 26.55, "lon": 56.25, "speed": 10, "heading": 310, "name": "HORMUZ TRANSIT", "type": "tanker"},
@@ -3551,6 +3688,7 @@ def get_global_indices():
                 prev = float(close.iloc[-2])
                 change = round(current - prev, 2)
                 pct = round(change / prev * 100, 2) if prev != 0 else 0.0
+                assert isinstance(pct, float)
 
                 # Sparkline: last 2 trading days (intraday proxy from close values)
                 sparkline = close.tail(10).tolist()

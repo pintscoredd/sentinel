@@ -65,9 +65,24 @@ from ui_components import (
 )
 
 st.set_page_config(page_title="SENTINEL", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
+import time
+
 PST = pytz.timezone("US/Pacific")
-def now_pst(): return datetime.now(PST).strftime("%Y-%m-%d %H:%M PST")
-def now_short(): return datetime.now(PST).strftime("%H:%M:%S")
+def _update_time_cache():
+    t = time.time()
+    if t - st.session_state.get("_time_last_update", 0.0) > 1.0:
+        now = datetime.now(PST)
+        st.session_state._cached_pst = now.strftime("%Y-%m-%d %H:%M PST")
+        st.session_state._cached_short = now.strftime("%H:%M:%S")
+        st.session_state._time_last_update = t
+
+def now_pst():
+    _update_time_cache()
+    return st.session_state._cached_pst
+
+def now_short():
+    _update_time_cache()
+    return st.session_state._cached_short
 
 # ════════════════════════════════════════════════════════════════════════════════
 # BLOOMBERG TERMINAL CSS — 1:1 accurate
@@ -422,23 +437,31 @@ h1,h2,h3,h4 { color: var(--org) !important; font-family: var(--mono) !important;
 # ════════════════════════════════════════════════════════════════════
 # SESSION STATE
 # ════════════════════════════════════════════════════════════════════
+from collections import namedtuple
+
+class SecretStr(namedtuple("SecretStr", ["value"])):
+    def __repr__(self): return "***"
+    def __str__(self): return "***"
+    def get_secret_value(self): return self.value
+    def __bool__(self): return bool(self.value)
+
 def _get_secret(name, default=""):
     """Try st.secrets with exact name, then lowercase, then uppercase."""
     for k in [name, name.lower(), name.upper()]:
         try:
             val = st.secrets.get(k, None)
             if val:
-                return str(val).strip()
+                return SecretStr(str(val).strip())
         except Exception:
             pass
     # Also try nested [api_keys] section some users set up
     try:
         val = st.secrets.get("api_keys", {}).get(name, None)
         if val:
-            return str(val).strip()
+            return SecretStr(str(val).strip())
     except Exception:
         pass
-    return default
+    return SecretStr(default) if default else SecretStr("")
 
 WATCHLIST_FILE = pathlib.Path(".streamlit/watchlist.json")
 
@@ -507,10 +530,10 @@ with st.sidebar:
         ("GDELT",         True, "always on"),
         ("CFTC COT",      True, "always on (free CSV)"),
         ("Alpaca (0DTE)", _alpaca_ok, "ALPACA_API_KEY"),
-        ("FRED",          bool(st.session_state.fred_key), "FRED_API_KEY"),
-        ("Finnhub",       bool(st.session_state.finnhub_key), "FINNHUB_API_KEY"),
-        ("NewsAPI",       bool(st.session_state.newsapi_key), "NEWSAPI_KEY"),
-        ("Gemini AI",     bool(st.session_state.gemini_key), "GEMINI_API_KEY"),
+        ("FRED",          bool(st.session_state.fred_key.get_secret_value()), "FRED_API_KEY"),
+        ("Finnhub",       bool(st.session_state.finnhub_key.get_secret_value()), "FINNHUB_API_KEY"),
+        ("NewsAPI",       bool(st.session_state.newsapi_key.get_secret_value()), "NEWSAPI_KEY"),
+        ("Gemini AI",     bool(st.session_state.gemini_key.get_secret_value()), "GEMINI_API_KEY"),
         ("AISstream",     bool(_get_secret("AISSTREAM_API_KEY")), "AISSTREAM_API_KEY"),
         ("Marinesia",     bool(_get_secret("MARINESIA_API_KEY")), "MARINESIA_API_KEY"),
     ]
@@ -524,15 +547,15 @@ with st.sidebar:
     st.markdown('<div style="color:#FF6600;font-size:9px;letter-spacing:2px;font-weight:700">API KEY OVERRIDES</div>', unsafe_allow_html=True)
     st.markdown('<div style="color:#444;font-size:8px;font-family:monospace;margin-bottom:6px">Leave blank to use secrets.toml value</div>', unsafe_allow_html=True)
 
-    _fred_input = st.text_input("FRED API Key", value="", type="password", placeholder="paste key to override…", key="fred_override")
-    if _fred_input:
-        st.session_state.fred_key = _fred_input.strip()
-    _finnhub_input = st.text_input("Finnhub Key", value="", type="password", placeholder="paste key to override…", key="finnhub_override")
-    if _finnhub_input:
-        st.session_state.finnhub_key = _finnhub_input.strip()
-    _cftc_input = st.text_input("CFTC API Key", value="", type="password", placeholder="optional — CSV is free", key="cftc_override")
-    if _cftc_input:
-        st.session_state.cftc_key = _cftc_input.strip()
+    with st.form("api_key_overrides", clear_on_submit=True):
+        _fred_input = st.text_input("FRED API Key", value="", type="password", placeholder="paste key to override…")
+        _finnhub_input = st.text_input("Finnhub Key", value="", type="password", placeholder="paste key to override…")
+        _cftc_input = st.text_input("CFTC API Key", value="", type="password", placeholder="optional — CSV is free")
+        if st.form_submit_button("Update Keys"):
+            if _fred_input: st.session_state.fred_key = SecretStr(_fred_input.strip())
+            if _finnhub_input: st.session_state.finnhub_key = SecretStr(_finnhub_input.strip())
+            if _cftc_input: st.session_state.cftc_key = SecretStr(_cftc_input.strip())
+            st.rerun()
 
     st.markdown('<hr style="border-top:1px solid #222;margin:8px 0">', unsafe_allow_html=True)
     st.markdown('<div style="color:#FF6600;font-size:9px;letter-spacing:2px;font-weight:700">MY CONTEXT</div>', unsafe_allow_html=True)
@@ -740,7 +763,8 @@ with tabs[0]:
 
         st.markdown('<div class="bb-ph">🌍 GEO WATCH</div>', unsafe_allow_html=True)
         with st.spinner("Loading geo feed…"):
-            geo_arts = gdelt_news("geopolitical conflict oil market",8)
+            query = st.session_state.geo_watch if st.session_state.geo_watch else "geopolitical conflict oil market"
+            geo_arts = gdelt_news(query, 8)
         if geo_arts:
             seen_titles = set()
             for art in geo_arts[:8]:
@@ -888,11 +912,11 @@ with tabs[1]:
                 st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Options unavailable for this ticker.</p>', unsafe_allow_html=True)
 
             st.markdown('<div class="bb-ph" style="margin-top:12px">🔍 INSIDER TRANSACTIONS</div>', unsafe_allow_html=True)
-            if st.session_state.finnhub_key:
+            if st.session_state.finnhub_key.get_secret_value():
                 with st.spinner("Loading insider data…"):
-                    ins = finnhub_insider(tkr, st.session_state.finnhub_key)
+                    ins = finnhub_insider(tkr, st.session_state.finnhub_key.get_secret_value())
                 if ins:
-                    st.markdown(render_insider_cards(ins[:10], tkr, st.session_state.finnhub_key), unsafe_allow_html=True)
+                    st.markdown(render_insider_cards(ins[:10], tkr, st.session_state.finnhub_key.get_secret_value()), unsafe_allow_html=True)
                 else:
                     st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No recent insider transactions found.</p>', unsafe_allow_html=True)
             else:
@@ -933,7 +957,7 @@ with tabs[1]:
                 f'</div>',
                 unsafe_allow_html=True)
             for _, row in _region_df.iterrows():
-                _pct_val = float(row["% Chg"].replace("%","")) if isinstance(row["% Chg"], str) else row["% Chg"]
+                _pct_val = row["% Chg"]
                 _c = "#00CC44" if _pct_val >= 0 else "#FF4444"
                 _arr = "▲" if _pct_val >= 0 else "▼"
                 st.markdown(
@@ -1362,11 +1386,11 @@ with tabs[1]:
     else:
         st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Heatmap data loading…</p>', unsafe_allow_html=True)
 
-    if st.session_state.finnhub_key:
+    if st.session_state.finnhub_key.get_secret_value():
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
         st.markdown('<div class="bb-ph">📰 MARKET NEWS — FINNHUB LIVE</div>', unsafe_allow_html=True)
         with st.spinner("Loading news…"):
-            fn = finnhub_news(st.session_state.finnhub_key)
+            fn = finnhub_news(st.session_state.finnhub_key.get_secret_value())
         for art in fn[:8]:
             title=art.get("headline","")[:100]; url=art.get("url","#"); src=art.get("source","")
             ts=art.get("datetime",0)
@@ -1683,7 +1707,7 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
 with tabs[3]:
     st.markdown('<div class="bb-ph">📈 MACRO — FRED DATA DASHBOARD</div>', unsafe_allow_html=True)
 
-    if not st.session_state.fred_key:
+    if not st.session_state.fred_key.get_secret_value():
         st.markdown("""<div style="background:#0A0500;border:1px solid #FF6600;border-left:4px solid #FF6600;
 padding:16px;font-family:monospace;font-size:12px;color:#FF8C00">
 ⚠️ FRED API key required for macro data.<br><br>
@@ -1695,7 +1719,7 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
         # ════════════════════════════════════════
         st.markdown('<div class="bb-ph">🧠 US MACRO ENVIRONMENT OVERVIEW</div>', unsafe_allow_html=True)
         with st.spinner("Computing macro environment…"):
-            macro_ov = get_macro_overview(st.session_state.fred_key)
+            macro_ov = get_macro_overview(st.session_state.fred_key.get_secret_value())
 
         if macro_ov:
             _env_label = macro_ov["env_label"]
@@ -1761,7 +1785,7 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
         # ════════════════════════════════════════
         st.markdown('<div class="bb-ph">📅 MACRO ECONOMIC CALENDAR — UPCOMING RELEASES</div>', unsafe_allow_html=True)
         with st.spinner("Loading macro calendar…"):
-            macro_cal = get_macro_calendar(st.session_state.fred_key)
+            macro_cal = get_macro_calendar(st.session_state.fred_key.get_secret_value())
 
         if macro_cal:
             from datetime import date as _today_date
@@ -1802,11 +1826,11 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
         with mc1:
             st.markdown('<div class="bb-ph">📉 YIELD CURVE (LIVE FROM FRED)</div>', unsafe_allow_html=True)
             with st.spinner("Loading yield curve…"):
-                fig_yc = yield_curve_chart(st.session_state.fred_key, 260)
+                fig_yc = yield_curve_chart(st.session_state.fred_key.get_secret_value(), 260)
             if fig_yc:
                 st.plotly_chart(fig_yc, width="stretch")
-                df_2y = fred_series("DGS2", st.session_state.fred_key, 3)
-                df_10y = fred_series("DGS10", st.session_state.fred_key, 3)
+                df_2y = fred_series("DGS2", st.session_state.fred_key.get_secret_value(), 3)
+                df_10y = fred_series("DGS10", st.session_state.fred_key.get_secret_value(), 3)
                 if df_2y is not None and df_10y is not None and not df_2y.empty and not df_10y.empty:
                     sp = round(df_10y["value"].iloc[-1] - df_2y["value"].iloc[-1], 2)
                     if sp < 0:
@@ -1816,7 +1840,7 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
 
                 st.markdown('<div class="bb-ph" style="margin-top:8px">📊 CPI vs FED FUNDS vs CORE PCE</div>', unsafe_allow_html=True)
                 with st.spinner("Loading inflation data…"):
-                    fig_cpi = cpi_vs_rates_chart(st.session_state.fred_key, 250)
+                    fig_cpi = cpi_vs_rates_chart(st.session_state.fred_key.get_secret_value(), 250)
                 if fig_cpi:
                     st.plotly_chart(fig_cpi, width="stretch")
             else:
@@ -1828,7 +1852,7 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
                     "Unemployment":"UNRATE","U6 Rate":"U6RATE","M2 Supply":"M2SL",
                     "HY Spread":"BAMLH0A0HYM2"}
             for name, code in MACRO.items():
-                df = fred_series(code, st.session_state.fred_key, 3)
+                df = fred_series(code, st.session_state.fred_key.get_secret_value(), 3)
                 if df is not None and not df.empty:
                     val = round(df["value"].iloc[-1], 2)
                     prev = round(df["value"].iloc[-2], 2) if len(df)>1 else val
@@ -1839,7 +1863,7 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
 
         st.markdown('<div class="bb-ph">📈 MULTI-MATURITY YIELD HISTORY — 3 YEARS (LIVE FRED)</div>', unsafe_allow_html=True)
         with st.spinner("Loading yield history…"):
-            fig_hist = yield_history_chart(st.session_state.fred_key, 240)
+            fig_hist = yield_history_chart(st.session_state.fred_key.get_secret_value(), 240)
         if fig_hist:
             st.plotly_chart(fig_hist, width="stretch")
         else:
@@ -1865,7 +1889,7 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
         st.markdown('<div class="bb-ph">💧 NET LIQUIDITY INDICATOR — WALCL − TGA − RRP</div>', unsafe_allow_html=True)
 
         with st.spinner("Computing net liquidity…"):
-            _nl_data = get_net_liquidity(st.session_state.fred_key)
+            _nl_data = get_net_liquidity(st.session_state.fred_key.get_secret_value())
 
         if _nl_data is not None and not _nl_data.empty:
             _nl_latest = _nl_data.iloc[-1]
@@ -1920,7 +1944,7 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
         st.markdown('<div class="bb-ph">🏔️ YIELD CURVE 3D EVOLUTION — 52 WEEK HISTORY</div>', unsafe_allow_html=True)
 
         with st.spinner("Loading yield curve evolution…"):
-            _yc3d_data = get_yield_curve_history(st.session_state.fred_key, lookback_weeks=52)
+            _yc3d_data = get_yield_curve_history(st.session_state.fred_key.get_secret_value(), lookback_weeks=52)
 
         if _yc3d_data is not None and not _yc3d_data.empty:
             # Take latest 8 snapshots for readable 3D surface
@@ -2054,7 +2078,7 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
     with _esi_col:
         st.markdown('<div class="bb-ph">📊 ECONOMIC SURPRISE INDEX</div>', unsafe_allow_html=True)
         with st.spinner("Computing ESI…"):
-            _esi = get_economic_surprise_index(st.session_state.fred_key)
+            _esi = get_economic_surprise_index(st.session_state.fred_key.get_secret_value())
         if _esi:
             st.markdown(
                 f'<div style="background:#080808;border:1px solid #1A1A1A;border-left:4px solid {_esi["label_color"]};'
@@ -3353,7 +3377,7 @@ with tabs[7]:
                 with st.spinner(f"Generating AI summary for {et}…"):
                     _ai_summary = get_ai_earnings_summary(
                         et,
-                        gemini_api_key=st.session_state.gemini_key,
+                        gemini_api_key=st.session_state.gemini_key.get_secret_value(),
                         finnhub_key=st.session_state.get("finnhub_key"),
                         newsapi_key=st.session_state.get("newsapi_key"),
                     )
@@ -3389,7 +3413,7 @@ with tabs[7]:
 with tabs[8]:
     st.markdown('<div class="bb-ph">🤖 SENTINEL AI — POWERED BY GOOGLE GEMINI</div>', unsafe_allow_html=True)
 
-    if not st.session_state.gemini_key:
+    if not st.session_state.gemini_key.get_secret_value():
         st.markdown("""<div style="background:#0A0500;border:1px solid #FF6600;border-left:4px solid #FF6600;
 padding:16px;font-family:monospace;font-size:12px;color:#FF8C00">
 ⚠️ Gemini API key required to activate SENTINEL AI.<br><br>
@@ -3405,7 +3429,7 @@ padding:16px;font-family:monospace;font-size:12px;color:#FF8C00">
     else:
         if st.button("🔍 LIST AVAILABLE GEMINI MODELS"):
             with st.spinner("Fetching model list…"):
-                mlist = list_gemini_models(st.session_state.gemini_key)
+                mlist = list_gemini_models(st.session_state.gemini_key.get_secret_value())
             for m in mlist:
                 st.markdown(f'<div style="font-family:monospace;font-size:11px;padding:2px 0;color:#FF8C00">{m}</div>', unsafe_allow_html=True)
             st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
