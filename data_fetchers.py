@@ -3280,3 +3280,820 @@ def fetch_btc_etf_flows_fallback():
         return df.tail(30) if len(df) > 0 else None
     except Exception:
         return None
+
+
+# ════════════════════════════════════════════════════════════════════
+# FEATURE 1: GLOBAL WEI MONITOR (World Equity Indices)
+# ════════════════════════════════════════════════════════════════════
+
+_GLOBAL_INDICES = {
+    "Americas": [
+        ("^GSPC", "S&P 500", "🇺🇸"),
+        ("^DJI", "Dow Jones", "🇺🇸"),
+        ("^IXIC", "Nasdaq Composite", "🇺🇸"),
+        ("^RUT", "Russell 2000", "🇺🇸"),
+        ("^GSPTSE", "TSX Composite", "🇨🇦"),
+        ("^BVSP", "Bovespa", "🇧🇷"),
+    ],
+    "EMEA": [
+        ("^FTSE", "FTSE 100", "🇬🇧"),
+        ("^GDAXI", "DAX", "🇩🇪"),
+        ("^FCHI", "CAC 40", "🇫🇷"),
+        ("^STOXX50E", "Euro Stoxx 50", "🇪🇺"),
+        ("^AEX", "AEX", "🇳🇱"),
+        ("^TA125.TA", "TA-125", "🇮🇱"),
+    ],
+    "APAC": [
+        ("^N225", "Nikkei 225", "🇯🇵"),
+        ("^HSI", "Hang Seng", "🇭🇰"),
+        ("000001.SS", "Shanghai Comp", "🇨🇳"),
+        ("^KS11", "KOSPI", "🇰🇷"),
+        ("^AXJO", "ASX 200", "🇦🇺"),
+        ("^BSESN", "Sensex", "🇮🇳"),
+    ],
+}
+
+@st.cache_data(ttl=300)
+def get_global_indices():
+    """Fetch global equity indices with sparkline data using yf.download bulk."""
+    import numpy as np
+    if yf is None:
+        return pd.DataFrame()
+
+    all_tickers = []
+    ticker_meta = {}
+    for region, indices in _GLOBAL_INDICES.items():
+        for ticker, name, flag in indices:
+            all_tickers.append(ticker)
+            ticker_meta[ticker] = {"name": name, "flag": flag, "region": region}
+
+    try:
+        # Bulk download: 35 trading-day history for sparkline + volatility
+        data = yf.download(all_tickers, period="35d", progress=False, threads=True)
+        if data.empty:
+            return pd.DataFrame()
+
+        rows = []
+        for ticker in all_tickers:
+            try:
+                meta = ticker_meta[ticker]
+                # Handle MultiIndex columns from yf.download
+                if isinstance(data.columns, pd.MultiIndex):
+                    close = data["Close"][ticker].dropna()
+                else:
+                    close = data["Close"].dropna()
+
+                if close.empty or len(close) < 2:
+                    continue
+
+                current = float(close.iloc[-1])
+                prev = float(close.iloc[-2])
+                change = round(current - prev, 2)
+                pct = round(change / prev * 100, 2) if prev != 0 else 0.0
+
+                # Sparkline: last 2 trading days (intraday proxy from close values)
+                sparkline = close.tail(10).tolist()
+
+                # 10D and 30D annualized volatility
+                returns = close.pct_change().dropna()
+                vol_10d = round(float(returns.tail(10).std() * np.sqrt(252) * 100), 2) if len(returns) >= 10 else 0.0
+                vol_30d = round(float(returns.tail(30).std() * np.sqrt(252) * 100), 2) if len(returns) >= 20 else 0.0
+
+                rows.append({
+                    "Region": meta["region"],
+                    "Flag": meta["flag"],
+                    "Index": meta["name"],
+                    "Ticker": ticker,
+                    "Value": current,
+                    "Change": change,
+                    "% Chg": pct,
+                    "10D Vol": vol_10d,
+                    "30D Vol": vol_30d,
+                    "Sparkline": sparkline,
+                })
+            except (KeyError, IndexError, TypeError) as e:
+                logger.warning("Global index skip", extra={"ticker": ticker, "error": str(e)})
+                continue
+
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except requests.exceptions.RequestException as e:
+        logger.error("Global indices fetch failed", extra={"error": str(e)})
+        return pd.DataFrame()
+    except Exception as e:
+        logger.error("Global indices unexpected error", extra={"error": str(e)})
+        return pd.DataFrame()
+
+
+# ════════════════════════════════════════════════════════════════════
+# FEATURE 2: NET LIQUIDITY INDICATOR (FRED: WALCL - WTREGEN - RRPONTSYD)
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=3600)
+def get_net_liquidity(fred_key, lookback=365):
+    """Calculate Net Liquidity = WALCL - WTREGEN - RRPONTSYD from FRED.
+    
+    WALCL: Fed Total Assets (Millions)
+    WTREGEN: Treasury General Account (Millions)
+    RRPONTSYD: Reverse Repo (Billions → converted to Millions)
+    """
+    if not fred_key:
+        return None
+    try:
+        walcl = fred_series("WALCL", fred_key, lookback)
+        wtregen = fred_series("WTREGEN", fred_key, lookback)
+        rrp = fred_series("RRPONTSYD", fred_key, lookback)
+
+        if walcl is None or wtregen is None or rrp is None:
+            return None
+        if walcl.empty or wtregen.empty or rrp.empty:
+            return None
+
+        # Align to weekly (Wednesday) — use forward-fill to handle different frequencies
+        walcl = walcl.set_index("date").resample("W-WED")["value"].last().ffill()
+        wtregen = wtregen.set_index("date").resample("W-WED")["value"].last().ffill()
+        # RRPONTSYD is in billions, convert to millions to match WALCL/WTREGEN
+        rrp = rrp.set_index("date").resample("W-WED")["value"].last().ffill() * 1000
+
+        # Align indices
+        df = pd.DataFrame({
+            "WALCL": walcl,
+            "TGA": wtregen,
+            "RRP": rrp,
+        }).dropna()
+
+        if df.empty:
+            return None
+
+        df["Net_Liquidity"] = df["WALCL"] - df["TGA"] - df["RRP"]
+        df["Net_Liquidity_T"] = df["Net_Liquidity"] / 1e6  # Convert millions to trillions
+        df = df.reset_index().rename(columns={"date": "Date"})
+        return df
+    except requests.exceptions.RequestException as e:
+        logger.error("Net liquidity FRED fetch failed", extra={"error": str(e)})
+        return None
+    except Exception as e:
+        logger.error("Net liquidity calculation error", extra={"error": str(e)})
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════
+# FEATURE 3: YIELD CURVE EVOLUTION (FRED: DGS1MO through DGS30)
+# ════════════════════════════════════════════════════════════════════
+
+_YIELD_MATURITIES = [
+    ("DGS1MO", "1M"), ("DGS3MO", "3M"), ("DGS6MO", "6M"),
+    ("DGS1", "1Y"), ("DGS2", "2Y"), ("DGS3", "3Y"),
+    ("DGS5", "5Y"), ("DGS7", "7Y"), ("DGS10", "10Y"),
+    ("DGS20", "20Y"), ("DGS30", "30Y"),
+]
+
+@st.cache_data(ttl=3600)
+def get_yield_curve_history(fred_key, lookback_weeks=52):
+    """Fetch yield curve data across all maturities for 3D surface/animation.
+    
+    Returns DataFrame with columns: Date, Maturity, Yield, Maturity_Num
+    """
+    if not fred_key:
+        return None
+    try:
+        all_data = {}
+        for series_id, label in _YIELD_MATURITIES:
+            df = fred_series(series_id, fred_key, lookback_weeks * 5)
+            if df is not None and not df.empty:
+                s = df.set_index("date")["value"]
+                all_data[label] = s
+
+        if len(all_data) < 5:
+            return None
+
+        combined = pd.DataFrame(all_data).dropna(how="all")
+        combined = combined.ffill()
+
+        # Sample weekly for animation frames
+        combined = combined.resample("W-FRI").last().dropna(how="all")
+
+        # Melt to long format for Plotly
+        maturity_map = {"1M": 1/12, "3M": 0.25, "6M": 0.5, "1Y": 1, "2Y": 2,
+                        "3Y": 3, "5Y": 5, "7Y": 7, "10Y": 10, "20Y": 20, "30Y": 30}
+
+        rows = []
+        for date_idx, row in combined.iterrows():
+            for mat_label, val in row.items():
+                if pd.notna(val):
+                    rows.append({
+                        "Date": date_idx,
+                        "Maturity": mat_label,
+                        "Yield": float(val),
+                        "Maturity_Num": maturity_map.get(mat_label, 0),
+                    })
+
+        return pd.DataFrame(rows) if rows else None
+    except Exception as e:
+        logger.error("Yield curve history fetch failed", extra={"error": str(e)})
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════
+# FEATURE 4: CROSS-ASSET VOLATILITY MONITOR
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=600)
+def get_cross_asset_volatility():
+    """Fetch VIX, GVZ (gold), OVX (oil), EVZ (euro) volatility indices."""
+    if yf is None:
+        return None
+    vol_tickers = ["^VIX", "^GVZ", "^OVX", "^EVZ"]
+    labels = {"^VIX": "VIX (Equity)", "^GVZ": "GVZ (Gold)", "^OVX": "OVX (Oil)", "^EVZ": "EVZ (Euro)"}
+
+    try:
+        data = yf.download(vol_tickers, period="6mo", progress=False, threads=True)
+        if data.empty:
+            return None
+
+        rows = []
+        for ticker in vol_tickers:
+            try:
+                if isinstance(data.columns, pd.MultiIndex):
+                    close = data["Close"][ticker].dropna()
+                else:
+                    close = data["Close"].dropna()
+
+                if close.empty or len(close) < 5:
+                    continue
+
+                current = float(close.iloc[-1])
+                prev = float(close.iloc[-2])
+                pct = round((current - prev) / prev * 100, 2) if prev else 0.0
+
+                # Percentile rank over 6 months
+                pct_rank = round((close < current).mean() * 100, 1)
+
+                # Determine regime
+                if pct_rank < 25:
+                    regime = "LOW"
+                elif pct_rank < 75:
+                    regime = "NORMAL"
+                else:
+                    regime = "ELEVATED"
+
+                sparkline = close.tail(60).tolist()
+
+                rows.append({
+                    "ticker": ticker,
+                    "label": labels.get(ticker, ticker),
+                    "current": round(current, 2),
+                    "change_pct": pct,
+                    "percentile": pct_rank,
+                    "regime": regime,
+                    "sparkline": sparkline,
+                    "history": close.reset_index().rename(columns={"Date": "date", ticker: "value"}).to_dict("records") if not isinstance(data.columns, pd.MultiIndex) else [],
+                })
+            except (KeyError, IndexError) as e:
+                logger.warning("Vol index skip", extra={"ticker": ticker, "error": str(e)})
+                continue
+
+        return rows if rows else None
+    except Exception as e:
+        logger.error("Cross-asset vol fetch failed", extra={"error": str(e)})
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════
+# FEATURE 5: MACRO CORRELATION MATRIX (60-day Pearson)
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=3600)
+def get_macro_correlation_matrix(lookback_days=60):
+    """Compute 60-day Pearson correlation matrix for cross-asset analysis."""
+    import numpy as np
+    if yf is None:
+        return None
+
+    assets = {
+        "SPY": "S&P 500", "TLT": "Bonds (20Y)", "GLD": "Gold",
+        "USO": "Oil", "UUP": "Dollar",
+    }
+    tickers = list(assets.keys())
+
+    try:
+        data = yf.download(tickers, period=f"{lookback_days + 10}d", progress=False, threads=True)
+        if data.empty:
+            return None
+
+        if isinstance(data.columns, pd.MultiIndex):
+            closes = data["Close"]
+        else:
+            closes = data[["Close"]]
+
+        returns = closes.pct_change().dropna().tail(lookback_days)
+
+        if returns.empty or len(returns) < 20:
+            return None
+
+        corr_matrix = returns.corr()
+        labels = [assets.get(t, t) for t in corr_matrix.columns]
+        corr_matrix.columns = labels
+        corr_matrix.index = labels
+
+        return corr_matrix
+    except Exception as e:
+        logger.error("Correlation matrix calculation failed", extra={"error": str(e)})
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════
+# FEATURE 6: SECTOR RELATIVE ROTATION GRAPH (RRG)
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=3600)
+def get_sector_rrg():
+    """Calculate Relative Rotation Graph data: RS-Ratio vs RS-Momentum for sector ETFs vs SPY."""
+    import numpy as np
+    if yf is None:
+        return None
+
+    sector_etf_map = {
+        "XLK": "Technology", "XLF": "Financials", "XLE": "Energy",
+        "XLV": "Healthcare", "XLP": "Staples", "XLU": "Utilities",
+        "XLY": "Discretionary", "XLB": "Materials", "XLC": "Comm Svcs",
+        "XLRE": "Real Estate", "XLI": "Industrials",
+    }
+
+    tickers = list(sector_etf_map.keys()) + ["SPY"]
+
+    try:
+        data = yf.download(tickers, period="6mo", progress=False, threads=True)
+        if data.empty:
+            return None
+
+        if isinstance(data.columns, pd.MultiIndex):
+            closes = data["Close"]
+        else:
+            return None
+
+        spy_close = closes["SPY"].dropna()
+        if spy_close.empty or len(spy_close) < 60:
+            return None
+
+        rows = []
+        for etf, sector_name in sector_etf_map.items():
+            try:
+                etf_close = closes[etf].dropna()
+                if len(etf_close) < 60:
+                    continue
+
+                # Align to common dates
+                aligned = pd.DataFrame({"etf": etf_close, "spy": spy_close}).dropna()
+                if len(aligned) < 60:
+                    continue
+
+                # Relative Strength = ETF / SPY
+                rs = aligned["etf"] / aligned["spy"]
+                # Normalize RS to 100-centered using 60-day SMA
+                rs_sma = rs.rolling(60).mean()
+                rs_ratio = (rs / rs_sma * 100).dropna()
+
+                if rs_ratio.empty:
+                    continue
+
+                # RS-Momentum = rate of change of RS-Ratio
+                rs_momentum = rs_ratio.pct_change(periods=10) * 100 + 100  # centered at 100
+
+                current_ratio = float(rs_ratio.iloc[-1])
+                current_momentum = float(rs_momentum.dropna().iloc[-1]) if not rs_momentum.dropna().empty else 100.0
+
+                # Trail: last 4 weekly points for animation
+                trail_ratio = rs_ratio.resample("W").last().dropna().tail(4).tolist()
+                trail_momentum = rs_momentum.resample("W").last().dropna().tail(4).tolist()
+
+                # Quadrant classification
+                if current_ratio >= 100 and current_momentum >= 100:
+                    quadrant = "LEADING"
+                elif current_ratio >= 100 and current_momentum < 100:
+                    quadrant = "WEAKENING"
+                elif current_ratio < 100 and current_momentum < 100:
+                    quadrant = "LAGGING"
+                else:
+                    quadrant = "IMPROVING"
+
+                rows.append({
+                    "etf": etf,
+                    "sector": sector_name,
+                    "rs_ratio": round(current_ratio, 2),
+                    "rs_momentum": round(current_momentum, 2),
+                    "quadrant": quadrant,
+                    "trail_ratio": trail_ratio,
+                    "trail_momentum": trail_momentum,
+                })
+            except (KeyError, IndexError, ZeroDivisionError) as e:
+                logger.warning("RRG sector skip", extra={"etf": etf, "error": str(e)})
+                continue
+
+        return rows if rows else None
+    except Exception as e:
+        logger.error("Sector RRG calculation failed", extra={"error": str(e)})
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════
+# FEATURE 7: IV TERM STRUCTURE (SPY ATM IV across 5+ expiries)
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=600)
+def get_iv_term_structure(ticker="SPY"):
+    """Get ATM implied volatility across multiple expiration dates."""
+    if yf is None:
+        return None
+    try:
+        tk = get_yf_ticker(ticker)
+        if tk is None:
+            return None
+
+        # Get current price
+        fi = tk.fast_info
+        price = getattr(fi, "last_price", None)
+        if price is None or price <= 0:
+            h = tk.history(period="1d")
+            price = float(h["Close"].iloc[-1]) if not h.empty else None
+        if price is None:
+            return None
+
+        exps = list(tk.options)
+        if not exps:
+            return None
+
+        # Take up to 8 expiries for the term structure
+        selected_exps = exps[:min(8, len(exps))]
+        today = datetime.today().date()
+
+        rows = []
+        for exp in selected_exps:
+            try:
+                chain = tk.option_chain(exp)
+                if chain is None:
+                    continue
+
+                calls, puts = chain.calls, chain.puts
+                if calls.empty and puts.empty:
+                    continue
+
+                exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+                dte = max((exp_date - today).days, 1)
+
+                # Find ATM strike (closest to current price)
+                if not calls.empty and "strike" in calls.columns:
+                    calls["_dist"] = (calls["strike"] - price).abs()
+                    atm_call = calls.nsmallest(1, "_dist")
+                    call_iv = float(atm_call["impliedVolatility"].iloc[0]) if not atm_call.empty else None
+                else:
+                    call_iv = None
+
+                if not puts.empty and "strike" in puts.columns:
+                    puts["_dist"] = (puts["strike"] - price).abs()
+                    atm_put = puts.nsmallest(1, "_dist")
+                    put_iv = float(atm_put["impliedVolatility"].iloc[0]) if not atm_put.empty else None
+                else:
+                    put_iv = None
+
+                # Average call and put ATM IV
+                ivs = [v for v in [call_iv, put_iv] if v is not None and v > 0]
+                if not ivs:
+                    continue
+
+                avg_iv = sum(ivs) / len(ivs)
+
+                rows.append({
+                    "expiry": exp,
+                    "dte": dte,
+                    "atm_iv": round(avg_iv * 100, 2),
+                    "call_iv": round(call_iv * 100, 2) if call_iv else None,
+                    "put_iv": round(put_iv * 100, 2) if put_iv else None,
+                    "atm_strike": float(atm_call["strike"].iloc[0]) if not atm_call.empty else price,
+                })
+            except (KeyError, IndexError, ValueError) as e:
+                logger.warning("IV term structure expiry skip", extra={"expiry": exp, "error": str(e)})
+                continue
+
+        return rows if rows else None
+    except Exception as e:
+        logger.error("IV term structure fetch failed", extra={"error": str(e)})
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════
+# FEATURE 8: GAMMA SQUEEZE SCANNER
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=3600)
+def get_gamma_squeeze_scanner():
+    """Scan for gamma squeeze candidates: high short interest + high options volume."""
+    import numpy as np
+    if yf is None:
+        return None
+
+    # Universe of meme/squeeze-prone stocks + high SI names
+    SCAN_UNIVERSE = [
+        "GME", "AMC", "BBBY", "KOSS", "BB", "NOK", "PLTR", "SOFI",
+        "RIVN", "LCID", "MARA", "RIOT", "COIN", "CVNA", "UPST",
+        "SNOW", "DKNG", "SPCE", "BYND", "FUBO", "WKHS", "GOEV",
+        "TLRY", "SNDL", "CLOV", "WISH", "SKLZ", "RKT", "OPEN",
+    ]
+
+    try:
+        # Bulk download for volume and price data
+        data = yf.download(SCAN_UNIVERSE, period="30d", progress=False, threads=True)
+        if data.empty:
+            return []
+
+        rows = []
+        for ticker in SCAN_UNIVERSE:
+            try:
+                if isinstance(data.columns, pd.MultiIndex):
+                    close = data["Close"][ticker].dropna()
+                    volume = data["Volume"][ticker].dropna()
+                else:
+                    continue
+
+                if close.empty or len(close) < 10:
+                    continue
+
+                current_price = float(close.iloc[-1])
+                avg_vol_20d = float(volume.tail(20).mean())
+                latest_vol = float(volume.iloc[-1])
+
+                # Volume surge ratio
+                vol_ratio = round(latest_vol / avg_vol_20d, 2) if avg_vol_20d > 0 else 0.0
+
+                # Short interest data via yfinance info
+                tk = get_yf_ticker(ticker)
+                if tk is None:
+                    continue
+                info = tk.info or {}
+                short_pct = _safe_float(info.get("shortPercentOfFloat", 0)) * 100
+                short_ratio = _safe_float(info.get("shortRatio", 0))
+                shares_short = _safe_int(info.get("sharesShort", 0))
+
+                # Score: combine short interest + volume surge
+                squeeze_score = 0.0
+                if short_pct > 20:
+                    squeeze_score += 3.0
+                elif short_pct > 10:
+                    squeeze_score += 2.0
+                elif short_pct > 5:
+                    squeeze_score += 1.0
+
+                if vol_ratio > 3.0:
+                    squeeze_score += 3.0
+                elif vol_ratio > 2.0:
+                    squeeze_score += 2.0
+                elif vol_ratio > 1.5:
+                    squeeze_score += 1.0
+
+                if short_ratio > 5:
+                    squeeze_score += 1.0
+
+                if squeeze_score < 2.0:
+                    continue
+
+                # Signal classification
+                if squeeze_score >= 5:
+                    signal = "🔴 HIGH SQUEEZE"
+                elif squeeze_score >= 3:
+                    signal = "🟡 MODERATE"
+                else:
+                    signal = "🟢 LOW"
+
+                rows.append({
+                    "ticker": ticker,
+                    "price": round(current_price, 2),
+                    "short_pct": round(short_pct, 1),
+                    "short_ratio": round(short_ratio, 1),
+                    "vol_ratio": vol_ratio,
+                    "squeeze_score": round(squeeze_score, 1),
+                    "signal": signal,
+                    "avg_vol": int(avg_vol_20d),
+                    "latest_vol": int(latest_vol),
+                })
+            except (KeyError, IndexError) as e:
+                continue
+
+        rows.sort(key=lambda x: x["squeeze_score"], reverse=True)
+        return rows[:15]
+    except Exception as e:
+        logger.error("Gamma squeeze scanner failed", extra={"error": str(e)})
+        return []
+
+
+# ════════════════════════════════════════════════════════════════════
+# FEATURE 9: DYNAMIC EARNINGS CALENDAR (Finnhub)
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=3600)
+def get_finnhub_earnings_calendar(finnhub_key, days_ahead=14):
+    """Fetch upcoming earnings from Finnhub /calendar/earnings API."""
+    if not finnhub_key:
+        return None
+    try:
+        today = datetime.today().date()
+        end = today + timedelta(days=days_ahead)
+        data = _fetch_robust_json(
+            "https://finnhub.io/api/v1/calendar/earnings",
+            params={
+                "from": today.strftime("%Y-%m-%d"),
+                "to": end.strftime("%Y-%m-%d"),
+                "token": finnhub_key,
+            },
+            timeout=12,
+        )
+        earnings = data.get("earningsCalendar", [])
+        if not earnings:
+            return None
+
+        rows = []
+        for e in earnings:
+            symbol = e.get("symbol", "")
+            if not symbol or "." in symbol:  # Skip non-US
+                continue
+            rows.append({
+                "ticker": symbol,
+                "date": e.get("date", ""),
+                "hour": e.get("hour", ""),  # bmo, amc, dmh
+                "eps_estimate": e.get("epsEstimate"),
+                "eps_actual": e.get("epsActual"),
+                "revenue_estimate": e.get("revenueEstimate"),
+                "revenue_actual": e.get("revenueActual"),
+                "quarter": e.get("quarter"),
+                "year": e.get("year"),
+            })
+
+        return sorted(rows, key=lambda x: x["date"]) if rows else None
+    except requests.exceptions.RequestException as e:
+        logger.error("Finnhub earnings calendar fetch failed", extra={"error": str(e)})
+        return None
+    except Exception as e:
+        logger.error("Finnhub earnings calendar error", extra={"error": str(e)})
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════
+# FEATURE 10: OPTIONS-IMPLIED EXPECTED MOVE
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=600)
+def get_expected_move(ticker):
+    """Calculate options-implied expected move = ATM Call + Put premium / Spot."""
+    if yf is None:
+        return None
+    try:
+        tk = get_yf_ticker(ticker)
+        if tk is None:
+            return None
+
+        fi = tk.fast_info
+        price = getattr(fi, "last_price", None)
+        if price is None or price <= 0:
+            h = tk.history(period="1d")
+            price = float(h["Close"].iloc[-1]) if not h.empty else None
+        if price is None or price <= 0:
+            return None
+
+        exps = list(tk.options)
+        if not exps:
+            return None
+
+        # Use nearest expiry
+        exp = exps[0]
+        chain = tk.option_chain(exp)
+        if chain is None:
+            return None
+
+        calls, puts = chain.calls, chain.puts
+        if calls.empty or puts.empty:
+            return None
+
+        # Find ATM strike
+        calls["_dist"] = (calls["strike"] - price).abs()
+        puts["_dist"] = (puts["strike"] - price).abs()
+        atm_call = calls.nsmallest(1, "_dist")
+        atm_put = puts.nsmallest(1, "_dist")
+
+        if atm_call.empty or atm_put.empty:
+            return None
+
+        call_mid = (float(atm_call["bid"].iloc[0]) + float(atm_call["ask"].iloc[0])) / 2
+        put_mid = (float(atm_put["bid"].iloc[0]) + float(atm_put["ask"].iloc[0])) / 2
+
+        # If bid/ask is 0, use lastPrice
+        if call_mid <= 0:
+            call_mid = float(atm_call["lastPrice"].iloc[0])
+        if put_mid <= 0:
+            put_mid = float(atm_put["lastPrice"].iloc[0])
+
+        expected_move_dollars = call_mid + put_mid
+        expected_move_pct = round(expected_move_dollars / price * 100, 2)
+
+        exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+        dte = max((exp_date - datetime.today().date()).days, 1)
+
+        return {
+            "ticker": ticker,
+            "price": round(price, 2),
+            "expiry": exp,
+            "dte": dte,
+            "expected_move_dollars": round(expected_move_dollars, 2),
+            "expected_move_pct": expected_move_pct,
+            "call_premium": round(call_mid, 2),
+            "put_premium": round(put_mid, 2),
+            "atm_strike": float(atm_call["strike"].iloc[0]),
+            "range_low": round(price - expected_move_dollars, 2),
+            "range_high": round(price + expected_move_dollars, 2),
+        }
+    except Exception as e:
+        logger.error("Expected move calculation failed", extra={"ticker": ticker, "error": str(e)})
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════
+# FEATURE 11: AI-POWERED GUIDANCE SUMMARIES
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=3600)
+def get_ai_earnings_summary(ticker, gemini_api_key, finnhub_key=None, newsapi_key=None):
+    """Aggregate recent earnings news and summarize with Gemini AI."""
+    if not gemini_api_key or genai is None:
+        return None
+    try:
+        # Gather recent news
+        news_items = get_stock_news(ticker, finnhub_key=finnhub_key, newsapi_key=newsapi_key)
+        if not news_items:
+            return None
+
+        headlines = "\n".join([f"- {n['title']} ({n['source']}, {n['date']})" for n in news_items[:10]])
+
+        # Get basic financial context
+        q = yahoo_quote(ticker)
+        price_ctx = f"Current price: ${q['price']:,.2f}, Change: {q['pct']:+.2f}%" if q else ""
+
+        prompt = (
+            f"You are a senior equity analyst. Analyze the following recent news headlines "
+            f"for {ticker} and provide a concise earnings/guidance summary.\n\n"
+            f"{price_ctx}\n\n"
+            f"Recent Headlines:\n{headlines}\n\n"
+            f"Provide:\n"
+            f"1. GUIDANCE SENTIMENT (Bullish/Neutral/Bearish)\n"
+            f"2. KEY THEMES (2-3 bullet points)\n"
+            f"3. RISK FLAGS (if any)\n"
+            f"4. CONSENSUS OUTLOOK (1 sentence)\n"
+            f"Keep it under 200 words. Use plain text, no markdown."
+        )
+
+        client = genai.Client(api_key=gemini_api_key)
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                temperature=0.3,
+                max_output_tokens=512,
+            ),
+        )
+        return {
+            "ticker": ticker,
+            "summary": response.text,
+            "news_count": len(news_items),
+        }
+    except Exception as e:
+        logger.error("AI earnings summary failed", extra={"ticker": ticker, "error": str(e)})
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════
+# FEATURE 12: VISUAL MARGIN EXPANSION CHART DATA
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=1800)
+def get_margin_chart_data(ticker):
+    """Get quarterly revenue + margin data for Plotly dual-axis chart."""
+    fin = get_full_financials(ticker)
+    if not fin:
+        return None
+
+    rows = []
+    for q_str, data_item in sorted(fin.items()):
+        rev = data_item.get("revenue")
+        gm = data_item.get("gross_margin")
+        om = data_item.get("op_margin")
+        nm = data_item.get("net_margin")
+
+        if rev is None:
+            continue
+
+        rows.append({
+            "quarter": q_str,
+            "revenue": rev,
+            "revenue_b": round(rev / 1e9, 2),
+            "gross_margin": round(gm, 1) if gm is not None else None,
+            "op_margin": round(om, 1) if om is not None else None,
+            "net_margin": round(nm, 1) if nm is not None else None,
+        })
+
+    return rows if rows else None

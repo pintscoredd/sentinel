@@ -42,6 +42,12 @@ from data_fetchers import (
     build_brief_context,
     fetch_btc_etf_flows, fetch_btc_etf_flows_fallback, _ETF_TICKERS,
     stat_arb_screener, get_finra_short_volume, bs_greeks_engine,
+    # ─── New Feature Imports ───
+    get_global_indices, get_net_liquidity, get_yield_curve_history,
+    get_cross_asset_volatility, get_macro_correlation_matrix,
+    get_sector_rrg, get_iv_term_structure, get_gamma_squeeze_scanner,
+    get_finnhub_earnings_calendar, get_expected_move,
+    get_ai_earnings_summary, get_margin_chart_data,
 )
 from ui_components import (
     CHART_LAYOUT, dark_fig, tv_chart, tv_mini, tv_tape,
@@ -1030,6 +1036,172 @@ with tabs[1]:
             d=datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else ""
             st.markdown(render_news_card(title,url,src,d,"bb-news bb-news-macro"), unsafe_allow_html=True)
 
+    # ════════════════════════════════════════════════════════════════════
+    # GLOBAL WEI MONITOR (Feature 1)
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+    st.markdown('<div class="bb-ph">🌍 GLOBAL EQUITY INDICES — WORLD MARKET MONITOR</div>', unsafe_allow_html=True)
+
+    with st.spinner("Loading global indices…"):
+        _wei_df = get_global_indices()
+
+    if not _wei_df.empty:
+        for _region in ["Americas", "EMEA", "APAC"]:
+            _region_df = _wei_df[_wei_df["Region"] == _region]
+            if _region_df.empty:
+                continue
+            st.markdown(f'<div style="color:#FF6600;font-size:10px;letter-spacing:2px;margin:8px 0 4px;font-family:monospace;font-weight:700">{_region.upper()}</div>', unsafe_allow_html=True)
+
+            _wei_display = _region_df[["Flag", "Index", "Value", "Change", "% Chg", "10D Vol", "30D Vol", "Sparkline"]].copy()
+            _wei_display["Value"] = _wei_display["Value"].apply(lambda x: f"{x:,.2f}")
+            _wei_display["Change"] = _wei_display["Change"].apply(lambda x: f"{x:+,.2f}")
+            _wei_display["% Chg"] = _wei_display["% Chg"].apply(lambda x: f"{x:+.2f}%")
+            _wei_display["10D Vol"] = _wei_display["10D Vol"].apply(lambda x: f"{x:.1f}%")
+            _wei_display["30D Vol"] = _wei_display["30D Vol"].apply(lambda x: f"{x:.1f}%")
+
+            st.dataframe(
+                _wei_display,
+                column_config={
+                    "Sparkline": st.column_config.LineChartColumn("Trend", width="small"),
+                    "Flag": st.column_config.TextColumn("", width="small"),
+                    "Index": st.column_config.TextColumn("Index", width="medium"),
+                    "Value": st.column_config.TextColumn("Last", width="small"),
+                    "Change": st.column_config.TextColumn("Chg", width="small"),
+                    "% Chg": st.column_config.TextColumn("%", width="small"),
+                    "10D Vol": st.column_config.TextColumn("10D σ", width="small"),
+                    "30D Vol": st.column_config.TextColumn("30D σ", width="small"),
+                },
+                hide_index=True,
+                use_container_width=True,
+            )
+    else:
+        st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Global index data loading…</p>', unsafe_allow_html=True)
+
+    # ════════════════════════════════════════════════════════════════════
+    # SECTOR RELATIVE ROTATION GRAPH (Feature 6)
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+    st.markdown('<div class="bb-ph">🔄 SECTOR RELATIVE ROTATION GRAPH — RRG</div>', unsafe_allow_html=True)
+
+    with st.spinner("Computing sector rotation…"):
+        _rrg_data = get_sector_rrg()
+
+    if _rrg_data:
+        _rrg_colors = {
+            "LEADING": "#00CC44", "WEAKENING": "#FFCC00",
+            "LAGGING": "#FF4444", "IMPROVING": "#00AAFF"
+        }
+        fig_rrg = dark_fig(450)
+
+        # Quadrant shading
+        fig_rrg.add_shape(type="rect", x0=100, y0=100, x1=105, y1=105, fillcolor="rgba(0,204,68,0.05)", line_width=0)
+        fig_rrg.add_shape(type="rect", x0=100, y0=95, x1=105, y1=100, fillcolor="rgba(255,204,0,0.05)", line_width=0)
+        fig_rrg.add_shape(type="rect", x0=95, y0=95, x1=100, y1=100, fillcolor="rgba(255,68,68,0.05)", line_width=0)
+        fig_rrg.add_shape(type="rect", x0=95, y0=100, x1=100, y1=105, fillcolor="rgba(0,170,255,0.05)", line_width=0)
+
+        # Add crosshairs at 100,100
+        fig_rrg.add_hline(y=100, line_dash="dash", line_color="#333", line_width=1)
+        fig_rrg.add_vline(x=100, line_dash="dash", line_color="#333", line_width=1)
+
+        for sector in _rrg_data:
+            color = _rrg_colors.get(sector["quadrant"], "#888")
+            fig_rrg.add_trace(go.Scatter(
+                x=[sector["rs_ratio"]], y=[sector["rs_momentum"]],
+                mode="markers+text",
+                marker=dict(size=12, color=color, line=dict(width=1, color="#000")),
+                text=[sector["sector"]],
+                textposition="top center",
+                textfont=dict(size=9, color=color, family="IBM Plex Mono"),
+                name=f"{sector['sector']} ({sector['quadrant']})",
+                hovertext=f"{sector['sector']}<br>RS-Ratio: {sector['rs_ratio']:.2f}<br>RS-Mom: {sector['rs_momentum']:.2f}<br>{sector['quadrant']}",
+                hoverinfo="text",
+                showlegend=False,
+            ))
+
+        # Quadrant labels
+        for label, x, y, color in [("LEADING", 101.5, 101.5, "#00CC44"), ("WEAKENING", 101.5, 98.5, "#FFCC00"),
+                                    ("LAGGING", 98.5, 98.5, "#FF4444"), ("IMPROVING", 98.5, 101.5, "#00AAFF")]:
+            fig_rrg.add_annotation(x=x, y=y, text=label, showarrow=False, font=dict(size=8, color=color, family="IBM Plex Mono"), opacity=0.4)
+
+        fig_rrg.update_layout(
+            margin=dict(l=40, r=40, t=30, b=40), height=450,
+            title=dict(text="RS-RATIO vs RS-MOMENTUM (🟢 Leading · 🟡 Weakening · 🔴 Lagging · 🔵 Improving)",
+                       font=dict(size=10, color="#FF6600"), x=0),
+            xaxis=dict(title="RS-Ratio", color="#555", gridcolor="#111", tickfont=dict(size=9)),
+            yaxis=dict(title="RS-Momentum", color="#555", gridcolor="#111", tickfont=dict(size=9)),
+        )
+        st.plotly_chart(fig_rrg, use_container_width=True)
+    else:
+        st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Sector RRG data loading…</p>', unsafe_allow_html=True)
+
+    # ════════════════════════════════════════════════════════════════════
+    # IV TERM STRUCTURE (Feature 7)
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+    _iv_left, _iv_right = st.columns([3, 2])
+    with _iv_left:
+        st.markdown('<div class="bb-ph">📐 IV TERM STRUCTURE — ATM IMPLIED VOLATILITY</div>', unsafe_allow_html=True)
+        _iv_ticker = st.text_input("IV Ticker", value="SPY", key="iv_ts_tkr", placeholder="SPY, QQQ, AAPL…")
+        with st.spinner("Loading IV term structure…"):
+            _iv_data = get_iv_term_structure(_iv_ticker.upper().strip())
+
+        if _iv_data:
+            _iv_dtes = [d["dte"] for d in _iv_data]
+            _iv_vals = [d["atm_iv"] for d in _iv_data]
+            _iv_labels = [d["expiry"] for d in _iv_data]
+
+            fig_iv = dark_fig(300)
+            fig_iv.add_trace(go.Scatter(
+                x=_iv_dtes, y=_iv_vals, mode="lines+markers+text",
+                line=dict(color="#FF6600", width=2),
+                marker=dict(size=8, color="#FF6600", line=dict(width=1, color="#000")),
+                text=[f"{v:.1f}%" for v in _iv_vals],
+                textposition="top center", textfont=dict(size=8, color="#FF8C00"),
+                hovertext=[f"Expiry: {l}<br>DTE: {d}<br>ATM IV: {v:.2f}%" for l, d, v in zip(_iv_labels, _iv_dtes, _iv_vals)],
+                hoverinfo="text",
+            ))
+            fig_iv.update_layout(
+                margin=dict(l=40, r=10, t=30, b=40), height=300,
+                title=dict(text=f"{_iv_ticker.upper()} IV TERM STRUCTURE", font=dict(size=10, color="#FF6600"), x=0),
+                xaxis=dict(title="DTE", color="#555", gridcolor="#111", tickfont=dict(size=9)),
+                yaxis=dict(title="ATM IV %", color="#555", gridcolor="#111", tickfont=dict(size=9), ticksuffix="%"),
+            )
+            st.plotly_chart(fig_iv, use_container_width=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">IV data unavailable.</p>', unsafe_allow_html=True)
+
+    with _iv_right:
+        st.markdown('<div class="bb-ph">🔫 GAMMA SQUEEZE SCANNER</div>', unsafe_allow_html=True)
+        with st.spinner("Scanning for squeeze candidates…"):
+            _squeeze_data = get_gamma_squeeze_scanner()
+
+        if _squeeze_data:
+            st.markdown(
+                '<div style="display:grid;grid-template-columns:55px 65px 60px 55px 55px 55px 90px;gap:4px;'
+                'padding:4px 8px;border-bottom:1px solid #FF6600;font-family:monospace;'
+                'font-size:8px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
+                '<span>TICKER</span><span>PRICE</span><span>SI %</span><span>SI DAYS</span>'
+                '<span>VOL ×</span><span>SCORE</span><span>SIGNAL</span></div>',
+                unsafe_allow_html=True)
+
+            for sq in _squeeze_data[:10]:
+                _si_c = "#FF4444" if sq["short_pct"] > 15 else "#FF8C00" if sq["short_pct"] > 8 else "#888"
+                _vr_c = "#FF4444" if sq["vol_ratio"] > 2.5 else "#FF8C00" if sq["vol_ratio"] > 1.5 else "#888"
+                _sc_c = "#FF4444" if sq["squeeze_score"] >= 5 else "#FF8C00" if sq["squeeze_score"] >= 3 else "#888"
+                st.markdown(
+                    f'<div style="display:grid;grid-template-columns:55px 65px 60px 55px 55px 55px 90px;gap:4px;'
+                    f'padding:4px 8px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px">'
+                    f'<span style="color:#FF6600;font-weight:700">{sq["ticker"]}</span>'
+                    f'<span style="color:#CCC">${sq["price"]:,.2f}</span>'
+                    f'<span style="color:{_si_c};font-weight:600">{sq["short_pct"]:.1f}%</span>'
+                    f'<span style="color:#888">{sq["short_ratio"]:.1f}</span>'
+                    f'<span style="color:{_vr_c};font-weight:600">{sq["vol_ratio"]:.1f}×</span>'
+                    f'<span style="color:{_sc_c};font-weight:700">{sq["squeeze_score"]:.1f}</span>'
+                    f'<span style="color:{_sc_c};font-size:9px">{sq["signal"]}</span></div>',
+                    unsafe_allow_html=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No squeeze candidates found.</p>', unsafe_allow_html=True)
+
 # ════════════════════════════════════════════════════════════════════
 # TAB 2 — SPX 0DTE
 # ════════════════════════════════════════════════════════════════════
@@ -1514,6 +1686,188 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
                         f'<div style="color:{dxy_c};font-size:14px;font-weight:600;margin-top:2px">{dxy_q["pct"]:+.2f}% ({dxy_q["change"]:+.2f})</div></div>', unsafe_allow_html=True)
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">DXY data unavailable</p>', unsafe_allow_html=True)
+
+        # ════════════════════════════════════════════════════════════════════
+        # NET LIQUIDITY INDICATOR (Feature 2)
+        # ════════════════════════════════════════════════════════════════════
+        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+        st.markdown('<div class="bb-ph">💧 NET LIQUIDITY INDICATOR — WALCL − TGA − RRP</div>', unsafe_allow_html=True)
+
+        with st.spinner("Computing net liquidity…"):
+            _nl_data = get_net_liquidity(st.session_state.fred_key)
+
+        if _nl_data is not None and not _nl_data.empty:
+            _nl_latest = _nl_data.iloc[-1]
+            _nl_prev = _nl_data.iloc[-2] if len(_nl_data) > 1 else _nl_latest
+            _nl_val = _nl_latest["Net_Liquidity_T"]
+            _nl_chg = _nl_val - _nl_prev["Net_Liquidity_T"]
+            _nl_c = "#00CC44" if _nl_chg >= 0 else "#FF4444"
+            _nl_sign = "+" if _nl_chg >= 0 else ""
+
+            # Summary cards
+            _nl_c1, _nl_c2, _nl_c3, _nl_c4 = st.columns(4)
+            with _nl_c1:
+                st.markdown(f'<div style="background:#0A0A0A;border:1px solid #1A1A1A;border-top:3px solid {_nl_c};padding:12px;font-family:monospace;text-align:center">'
+                            f'<div style="color:#555;font-size:9px;letter-spacing:1px">NET LIQUIDITY</div>'
+                            f'<div style="color:{_nl_c};font-size:20px;font-weight:700">${_nl_val:.2f}T</div>'
+                            f'<div style="color:{_nl_c};font-size:10px">{_nl_sign}{_nl_chg:.3f}T WoW</div></div>', unsafe_allow_html=True)
+            with _nl_c2:
+                st.markdown(f'<div style="background:#0A0A0A;border:1px solid #1A1A1A;border-top:3px solid #FF6600;padding:12px;font-family:monospace;text-align:center">'
+                            f'<div style="color:#555;font-size:9px;letter-spacing:1px">FED ASSETS (WALCL)</div>'
+                            f'<div style="color:#FF8C00;font-size:16px;font-weight:700">${_nl_latest["WALCL"]/1e6:.2f}T</div></div>', unsafe_allow_html=True)
+            with _nl_c3:
+                st.markdown(f'<div style="background:#0A0A0A;border:1px solid #1A1A1A;border-top:3px solid #FF4444;padding:12px;font-family:monospace;text-align:center">'
+                            f'<div style="color:#555;font-size:9px;letter-spacing:1px">TGA (DRAIN)</div>'
+                            f'<div style="color:#FF4444;font-size:16px;font-weight:700">${_nl_latest["TGA"]/1e6:.2f}T</div></div>', unsafe_allow_html=True)
+            with _nl_c4:
+                st.markdown(f'<div style="background:#0A0A0A;border:1px solid #1A1A1A;border-top:3px solid #FF4444;padding:12px;font-family:monospace;text-align:center">'
+                            f'<div style="color:#555;font-size:9px;letter-spacing:1px">RRP (DRAIN)</div>'
+                            f'<div style="color:#FF4444;font-size:16px;font-weight:700">${_nl_latest["RRP"]/1e6:.2f}T</div></div>', unsafe_allow_html=True)
+
+            # Net Liquidity chart
+            fig_nl = dark_fig(300)
+            fig_nl.add_trace(go.Scatter(
+                x=_nl_data["Date"], y=_nl_data["Net_Liquidity_T"],
+                mode="lines", name="Net Liquidity",
+                line=dict(color="#00CC44", width=2),
+                fill="tozeroy", fillcolor="rgba(0,204,68,0.08)",
+            ))
+            fig_nl.update_layout(
+                margin=dict(l=50, r=10, t=30, b=30), height=300,
+                title=dict(text="FED NET LIQUIDITY ($T) — WALCL − TGA − RRP", font=dict(size=10, color="#FF6600"), x=0),
+                xaxis=dict(color="#555", showgrid=False),
+                yaxis=dict(color="#555", gridcolor="#111", tickprefix="$", ticksuffix="T"),
+            )
+            st.plotly_chart(fig_nl, use_container_width=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Net liquidity data requires FRED API key with WALCL, WTREGEN, RRPONTSYD.</p>', unsafe_allow_html=True)
+
+        # ════════════════════════════════════════════════════════════════════
+        # YIELD CURVE 3D EVOLUTION (Feature 3)
+        # ════════════════════════════════════════════════════════════════════
+        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+        st.markdown('<div class="bb-ph">🏔️ YIELD CURVE 3D EVOLUTION — 52 WEEK HISTORY</div>', unsafe_allow_html=True)
+
+        with st.spinner("Loading yield curve evolution…"):
+            _yc3d_data = get_yield_curve_history(st.session_state.fred_key, lookback_weeks=52)
+
+        if _yc3d_data is not None and not _yc3d_data.empty:
+            # Take latest 8 snapshots for readable 3D surface
+            _yc3d_dates = sorted(_yc3d_data["Date"].unique())
+            _selected_dates = _yc3d_dates[-8:] if len(_yc3d_dates) > 8 else _yc3d_dates
+            _yc3d_filtered = _yc3d_data[_yc3d_data["Date"].isin(_selected_dates)]
+
+            fig_yc3d = dark_fig(450)
+            _colors_3d = ["#1a3a5c", "#2a5a8c", "#3a7abc", "#4a9adc", "#5abafc", "#8accff", "#bbddff", "#FF6600"]
+
+            for i, date in enumerate(_selected_dates):
+                _date_slice = _yc3d_filtered[_yc3d_filtered["Date"] == date].sort_values("Maturity_Num")
+                if _date_slice.empty:
+                    continue
+                _date_str = date.strftime("%b %d") if hasattr(date, 'strftime') else str(date)[:10]
+                _color = _colors_3d[min(i, len(_colors_3d) - 1)]
+                _opacity = 0.4 + (i / max(len(_selected_dates) - 1, 1)) * 0.6
+
+                fig_yc3d.add_trace(go.Scatter(
+                    x=_date_slice["Maturity"], y=_date_slice["Yield"],
+                    mode="lines+markers",
+                    name=_date_str,
+                    line=dict(color=_color, width=1.5 + i * 0.3),
+                    marker=dict(size=4, color=_color),
+                    opacity=_opacity,
+                ))
+
+            fig_yc3d.update_layout(
+                margin=dict(l=40, r=10, t=30, b=40), height=450,
+                title=dict(text="YIELD CURVE EVOLUTION — Opaque = Recent, Faded = Historical",
+                           font=dict(size=10, color="#FF6600"), x=0),
+                xaxis=dict(title="Maturity", color="#555", tickfont=dict(size=9), showgrid=False),
+                yaxis=dict(title="Yield (%)", color="#555", gridcolor="#111", tickfont=dict(size=9), ticksuffix="%"),
+                legend=dict(font=dict(size=8, color="#888"), bgcolor="rgba(0,0,0,0)"),
+            )
+            st.plotly_chart(fig_yc3d, use_container_width=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Yield curve 3D data loading…</p>', unsafe_allow_html=True)
+
+        # ════════════════════════════════════════════════════════════════════
+        # CROSS-ASSET VOLATILITY (Feature 4) + CORRELATION MATRIX (Feature 5)
+        # ════════════════════════════════════════════════════════════════════
+        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+        _vol_left, _vol_right = st.columns([3, 2])
+
+        with _vol_left:
+            st.markdown('<div class="bb-ph">⚡ CROSS-ASSET VOLATILITY MONITOR</div>', unsafe_allow_html=True)
+            with st.spinner("Loading volatility data…"):
+                _vol_data = get_cross_asset_volatility()
+
+            if _vol_data:
+                _vol_names = [v["label"] for v in _vol_data]
+                _vol_vals = [v["current"] for v in _vol_data]
+                _vol_pcts = [v["percentile"] for v in _vol_data]
+                _vol_colors = ["#FF4444" if v["regime"] == "ELEVATED" else "#FF8C00" if v["regime"] == "NORMAL" else "#00CC44" for v in _vol_data]
+
+                fig_vol_cross = dark_fig(300)
+                fig_vol_cross.add_trace(go.Bar(
+                    x=_vol_names, y=_vol_vals,
+                    marker=dict(color=_vol_colors, line=dict(width=0), opacity=0.9),
+                    text=[f"{v:.1f}" for v in _vol_vals],
+                    textposition="outside", textfont=dict(size=10, color="#FF8C00"),
+                    hovertext=[f"{v['label']}<br>Current: {v['current']:.2f}<br>Pctile: {v['percentile']:.0f}%<br>Regime: {v['regime']}" for v in _vol_data],
+                    hoverinfo="text",
+                ))
+                fig_vol_cross.update_layout(
+                    margin=dict(l=40, r=10, t=30, b=30), height=300,
+                    title=dict(text="VIX · GVZ · OVX · EVZ — Current Levels (🟢 Low · 🟡 Normal · 🔴 Elevated)",
+                               font=dict(size=10, color="#FF6600"), x=0),
+                    xaxis=dict(color="#555", tickfont=dict(size=9)),
+                    yaxis=dict(color="#555", gridcolor="#111", tickfont=dict(size=9)),
+                )
+                st.plotly_chart(fig_vol_cross, use_container_width=True)
+
+                # Percentile bars
+                for v in _vol_data:
+                    _p_c = "#FF4444" if v["percentile"] > 75 else "#FF8C00" if v["percentile"] > 50 else "#00CC44"
+                    st.markdown(
+                        f'<div style="display:flex;align-items:center;gap:8px;margin:2px 0;font-family:monospace;font-size:10px">'
+                        f'<span style="color:#888;min-width:80px">{v["label"][:12]}</span>'
+                        f'<div style="flex:1;height:8px;background:#111;border-radius:2px;overflow:hidden">'
+                        f'<div style="width:{v["percentile"]}%;height:100%;background:{_p_c}"></div></div>'
+                        f'<span style="color:{_p_c};font-weight:700;min-width:40px;text-align:right">{v["percentile"]:.0f}%</span>'
+                        f'<span style="color:#555;font-size:8px;min-width:55px">{v["regime"]}</span></div>',
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Volatility data loading…</p>', unsafe_allow_html=True)
+
+        with _vol_right:
+            st.markdown('<div class="bb-ph">🔗 60-DAY MACRO CORRELATION MATRIX</div>', unsafe_allow_html=True)
+            with st.spinner("Computing correlations…"):
+                _corr_data = get_macro_correlation_matrix()
+
+            if _corr_data is not None:
+                import plotly.figure_factory as ff
+                _corr_vals = _corr_data.values.tolist()
+                _corr_labels = list(_corr_data.columns)
+                _corr_text = [[f"{v:.2f}" for v in row] for row in _corr_vals]
+
+                fig_corr = go.Figure(data=go.Heatmap(
+                    z=_corr_vals, x=_corr_labels, y=_corr_labels,
+                    text=_corr_text, texttemplate="%{text}",
+                    colorscale=[[0, "#FF4444"], [0.5, "#111111"], [1, "#00CC44"]],
+                    zmin=-1, zmax=1,
+                    textfont=dict(size=10, color="#CCC"),
+                ))
+                fig_corr.update_layout(
+                    paper_bgcolor="#000", plot_bgcolor="#000",
+                    font=dict(color="#888", family="IBM Plex Mono"),
+                    margin=dict(l=80, r=10, t=30, b=50), height=350,
+                    title=dict(text="PEARSON ρ — 60 DAY", font=dict(size=10, color="#FF6600"), x=0),
+                    xaxis=dict(tickfont=dict(size=9, color="#888")),
+                    yaxis=dict(tickfont=dict(size=9, color="#888"), autorange="reversed"),
+                )
+                st.plotly_chart(fig_corr, use_container_width=True)
+            else:
+                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Correlation matrix loading…</p>', unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════
 # TAB 4 — CRYPTO
@@ -2209,6 +2563,35 @@ with tabs[7]:
     with ec2:
         st.markdown('<div class="bb-ph">📈 QUICK EARNINGS CHART + MATRIX</div>', unsafe_allow_html=True)
         earn_tkr = st.text_input("Ticker for chart & matrix", placeholder="NVDA, AAPL…", key="ec")
+
+        # ── OPTIONS-IMPLIED EXPECTED MOVE (Feature 10) ──
+        if earn_tkr:
+            _em_tkr = earn_tkr.upper().strip()
+            with st.spinner(f"Computing expected move for {_em_tkr}…"):
+                _em_result = get_expected_move(_em_tkr)
+            if _em_result:
+                _em_range_color = "#FF6600"
+                st.markdown(
+                    f'<div style="background:#0A0500;border:1px solid #FF6600;border-left:4px solid #FF6600;'
+                    f'padding:12px 16px;margin-bottom:10px;font-family:monospace">'
+                    f'<div style="color:#FF6600;font-size:10px;letter-spacing:1px;margin-bottom:6px">'
+                    f'OPTIONS-IMPLIED EXPECTED MOVE — {_em_result["expiry"]} ({_em_result["dte"]}DTE)</div>'
+                    f'<div style="display:flex;justify-content:space-between;align-items:center">'
+                    f'<div style="text-align:center">'
+                    f'<div style="color:#FF4444;font-size:18px;font-weight:700">${_em_result["range_low"]:,.2f}</div>'
+                    f'<div style="color:#555;font-size:8px">LOW</div></div>'
+                    f'<div style="text-align:center">'
+                    f'<div style="color:#FFF;font-size:24px;font-weight:900">${_em_result["price"]:,.2f}</div>'
+                    f'<div style="color:#FF6600;font-size:12px;font-weight:700">±${_em_result["expected_move_dollars"]:,.2f} ({_em_result["expected_move_pct"]:+.2f}%)</div></div>'
+                    f'<div style="text-align:center">'
+                    f'<div style="color:#00CC44;font-size:18px;font-weight:700">${_em_result["range_high"]:,.2f}</div>'
+                    f'<div style="color:#555;font-size:8px">HIGH</div></div>'
+                    f'</div>'
+                    f'<div style="margin-top:8px;display:flex;gap:16px;font-size:9px;color:#888">'
+                    f'<span>Call: ${_em_result["call_premium"]:.2f}</span>'
+                    f'<span>Put: ${_em_result["put_premium"]:.2f}</span>'
+                    f'<span>ATM Strike: ${_em_result["atm_strike"]:,.2f}</span></div>'
+                    f'</div>', unsafe_allow_html=True)
         if earn_tkr:
             et = earn_tkr.upper().strip()
             with st.spinner("Detecting exchange…"):
@@ -2653,7 +3036,87 @@ with tabs[7]:
                         
                     st.markdown('</div>', unsafe_allow_html=True)
 
-            # ── Stock-specific news (after matrix) ──
+            # ═══════════════════════════════════════════════════════
+            # VISUAL MARGIN EXPANSION CHART (Feature 12)
+            # ═══════════════════════════════════════════════════════
+            st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+            st.markdown(f'<div class="bb-ph">📊 MARGIN EXPANSION — {et}</div>', unsafe_allow_html=True)
+            with st.spinner("Loading margin data…"):
+                _margin_data = get_margin_chart_data(et)
+
+            if _margin_data:
+                _m_labels = [d["quarter"][:10] for d in _margin_data]
+                _m_rev = [d["revenue_b"] for d in _margin_data]
+                _m_gm = [d["gross_margin"] for d in _margin_data]
+                _m_om = [d["op_margin"] for d in _margin_data]
+                _m_nm = [d["net_margin"] for d in _margin_data]
+
+                fig_margin = dark_fig(300)
+                # Revenue bars on primary axis
+                fig_margin.add_trace(go.Bar(
+                    x=_m_labels, y=_m_rev, name="Revenue ($B)",
+                    marker=dict(color="rgba(255,102,0,0.15)", line=dict(color="#FF6600", width=1)),
+                    hovertext=[f"Rev: ${r:.1f}B" for r in _m_rev], hoverinfo="text",
+                ))
+                # Margin lines on secondary axis
+                if any(v is not None for v in _m_gm):
+                    fig_margin.add_trace(go.Scatter(
+                        x=_m_labels, y=_m_gm, name="Gross Margin",
+                        mode="lines+markers", yaxis="y2",
+                        line=dict(color="#00CC44", width=2), marker=dict(size=5),
+                    ))
+                if any(v is not None for v in _m_om):
+                    fig_margin.add_trace(go.Scatter(
+                        x=_m_labels, y=_m_om, name="Op Margin",
+                        mode="lines+markers", yaxis="y2",
+                        line=dict(color="#00AAFF", width=2), marker=dict(size=5),
+                    ))
+                if any(v is not None for v in _m_nm):
+                    fig_margin.add_trace(go.Scatter(
+                        x=_m_labels, y=_m_nm, name="Net Margin",
+                        mode="lines+markers", yaxis="y2",
+                        line=dict(color="#FF8C00", width=2), marker=dict(size=5),
+                    ))
+                fig_margin.update_layout(
+                    margin=dict(l=40, r=50, t=30, b=40), height=300,
+                    title=dict(text=f"{et} MARGIN EXPANSION + REVENUE", font=dict(size=10, color="#FF6600"), x=0),
+                    xaxis=dict(color="#555", tickfont=dict(size=7), tickangle=-45, showgrid=False),
+                    yaxis=dict(color="#555", gridcolor="#111", tickprefix="$", ticksuffix="B", title=None),
+                    yaxis2=dict(overlaying="y", side="right", showgrid=False, ticksuffix="%",
+                                tickfont=dict(size=8, color="#888"), title=None),
+                    legend=dict(font=dict(size=8, color="#888"), bgcolor="rgba(0,0,0,0)",
+                                orientation="h", x=0, y=1.08),
+                    barmode="overlay",
+                )
+                st.plotly_chart(fig_margin, use_container_width=True)
+            else:
+                st.markdown(f'<p style="color:#555;font-family:monospace;font-size:11px">Margin data unavailable for {et}.</p>', unsafe_allow_html=True)
+
+            # ═══════════════════════════════════════════════════════
+            # AI-POWERED GUIDANCE SUMMARY (Feature 11)
+            # ═══════════════════════════════════════════════════════
+            if st.session_state.get("gemini_key"):
+                st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+                st.markdown(f'<div class="bb-ph">🤖 AI GUIDANCE SUMMARY — {et}</div>', unsafe_allow_html=True)
+                with st.spinner(f"Generating AI summary for {et}…"):
+                    _ai_summary = get_ai_earnings_summary(
+                        et,
+                        gemini_api_key=st.session_state.gemini_key,
+                        finnhub_key=st.session_state.get("finnhub_key"),
+                        newsapi_key=st.session_state.get("newsapi_key"),
+                    )
+                if _ai_summary:
+                    _summary_text = _ai_summary["summary"].replace("\n", "<br>")
+                    st.markdown(
+                        f'<div style="background:#0A0500;border:1px solid #FF6600;border-left:4px solid #FF6600;'
+                        f'padding:14px 16px;font-family:monospace;font-size:11px;color:#CCC;line-height:1.8">'
+                        f'<div style="color:#FF6600;font-size:10px;letter-spacing:1px;margin-bottom:8px">'
+                        f'⚡ SENTINEL AI ({_ai_summary["news_count"]} news sources analyzed)</div>'
+                        f'{_summary_text}</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">AI summary unavailable. Check Gemini key.</p>', unsafe_allow_html=True)
+
+            # ── Stock-specific news (after margin + AI) ──
             st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
             st.markdown('<div class="bb-ph" style="margin-top:10px">📰 NEWS — {}</div>'.format(et), unsafe_allow_html=True)
             with st.spinner("Loading stock news…"):
