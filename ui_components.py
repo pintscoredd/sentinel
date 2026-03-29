@@ -228,7 +228,7 @@ def render_options_table(df, side="calls", current_price=None):
 
 
 def render_scored_options(contracts, side="calls"):
-    """Render a compact scored options table (top 2 contracts)."""
+    """Render a compact scored options table (top 2 contracts) with Greeks."""
     if not contracts:
         return '<p style="color:#555;font-family:monospace;font-size:12px">No scored contracts</p>'
     cls = "opt-call" if side == "calls" else "opt-put"
@@ -243,15 +243,19 @@ def render_scored_options(contracts, side="calls"):
         iv = c.get("iv", 0)
         sc = c.get("score", 0)
         voi = c.get("voi", 0)
+        delta = c.get("delta", 0)
+        vega = c.get("vega", 0)
         sc_color = "#00CC44" if sc >= 0.3 else "#FF8C00" if sc >= 0.15 else "#FF4444"
         rows += (f'<tr><td class="{cls}">{s:.2f}</td>'
                  f'<td>{lp:.2f}</td><td>{b:.2f}</td><td>{a:.2f}</td>'
                  f'<td>{v:,}</td><td>{oi:,}</td><td>{iv:.1%}</td>'
+                 f'<td style="color:#BB88FF">{delta:.2f}</td>'
+                 f'<td style="color:#44AACC">{vega:.3f}</td>'
                  f'<td style="font-weight:700;color:#FF8C00">{voi:.2f}</td>'
                  f'<td style="font-weight:700;color:{sc_color}">{sc:.4f}</td></tr>')
     return (f'<table class="opt-tbl"><thead><tr>'
             f'<th>Strike</th><th>Last</th><th>Bid</th><th>Ask</th>'
-            f'<th>Vol</th><th>OI</th><th>IV</th><th>V/OI</th><th>Score</th>'
+            f'<th>Vol</th><th>OI</th><th>IV</th><th>Δ</th><th>Vega</th><th>V/OI</th><th>Score</th>'
             f'</tr></thead><tbody>{rows}</tbody></table>')
 
 
@@ -299,15 +303,17 @@ def render_stat_arb_cards(data):
         pval = row["pvalue"]
         coint = row["coint"]
         sig = row["signal"]
+        direction = row.get("direction", f"{t1} ~ {t2}")
+        entry_thresh = row.get("entry_thresh", 2.0)
         
-        # Color encoding based on Z-Score
-        z_color = "#FF4444" if z > 2 else ("#00CC44" if z < -2 else "#FF8C00" if abs(z)>1 else "#888")
+        # Color encoding based on Z-Score vs dynamic threshold
+        z_color = "#FF4444" if z > entry_thresh else ("#00CC44" if z < -entry_thresh else "#FF8C00" if abs(z) > entry_thresh * 0.6 else "#888")
         
         # Cointegration status indicator
-        coint_dot = "🟢" if coint else "🔴"
+        coint_dot = "\U0001f7e2" if coint else "\U0001f534"
         
-        # Format the signal label
-        sig_color = "#00CC44" if "Long T1" in sig else "#FF4444" if "Short T1" in sig else "#888"
+        # Format the signal label — detect Long/Short in signal text
+        sig_color = "#00CC44" if "Long" in sig else "#FF4444" if "Short" in sig else "#888"
         if "Neutral" in sig: sig_color = "#888"
         
         html += f"""
@@ -322,10 +328,15 @@ def render_stat_arb_cards(data):
         <span>Half-Life: {hl:.1f}d</span>
         <span>{coint_dot} Coint (p={pval:.3f})</span>
     </div>
+    <div style="display:flex; justify-content:space-between; color:#666; font-size:9px; margin-top:3px;">
+        <span>Direction: {direction}</span>
+        <span>Entry ±{entry_thresh:.2f}σ</span>
+    </div>
 </div>
 """
     html += '</div>'
     return html
+
 # ════════════════════════════════════════════════════════════════════
 # INSIDER TRANSACTIONS
 # ════════════════════════════════════════════════════════════════════
@@ -1156,7 +1167,7 @@ def render_crypto_etf_chart(df, height=420, is_estimated=False):
             marker_color=color,
             marker_line_width=0,
             opacity=0.9,
-            hovertemplate=f"<b>{ticker}</b><br>%{{x|%b %d}}<br>$%{{y:,.1f}}M<extra></extra>",
+            hovertemplate=f"<b>{ticker}</b><br>%{{x|%b %d}}<br>$%{{y:,.2f}}B<extra></extra>",
         ))
 
     # Cumulative trendline
@@ -1169,7 +1180,7 @@ def render_crypto_etf_chart(df, height=420, is_estimated=False):
             mode="lines",
             line=dict(color="#FFFFFF", width=2, dash="solid"),
             yaxis="y2",
-            hovertemplate="<b>Cumulative</b><br>%{x|%b %d}<br>$%{y:,.0f}M<extra></extra>",
+            hovertemplate="<b>Cumulative</b><br>%{x|%b %d}<br>$%{y:,.2f}B<extra></extra>",
         ))
 
 
@@ -1188,7 +1199,7 @@ def render_crypto_etf_chart(df, height=420, is_estimated=False):
             tickfont=dict(size=9, color="#888"),
         ),
         yaxis=dict(
-            title=dict(text="Daily Net Flow ($M)", font=dict(size=9, color="#666")),
+            title=dict(text="Daily Directional Flow Proxy ($B)", font=dict(size=9, color="#666")),
             gridcolor="#111111",
             color="#555555",
             showgrid=True,
@@ -1198,7 +1209,7 @@ def render_crypto_etf_chart(df, height=420, is_estimated=False):
             zerolinewidth=1,
         ),
         yaxis2=dict(
-            title=dict(text="Cumulative ($M)", font=dict(size=9, color="#888")),
+            title=dict(text="Cumulative ($B)", font=dict(size=9, color="#888")),
             overlaying="y",
             side="right",
             showgrid=False,

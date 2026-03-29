@@ -48,6 +48,8 @@ from data_fetchers import (
     get_sector_rrg, get_iv_term_structure, get_gamma_squeeze_scanner,
     get_finnhub_earnings_calendar, get_expected_move,
     get_ai_earnings_summary, get_margin_chart_data,
+    # ─── FEAT additions ───
+    get_iv_skew, get_rv_iv_spread, get_cot_positioning, get_economic_surprise_index,
 )
 from ui_components import (
     CHART_LAYOUT, dark_fig, tv_chart, tv_mini, tv_tape,
@@ -451,6 +453,7 @@ DEFAULTS = {
     "fred_key": _get_secret("FRED_API_KEY"),
     "finnhub_key": _get_secret("FINNHUB_API_KEY"),
     "newsapi_key": _get_secret("NEWSAPI_KEY"),
+    "cftc_key": _get_secret("CFTC_API_KEY"),
     "chat_history":[],
     "watchlist": _load_watchlist(),
     "macro_theses":"", "geo_watch":"",
@@ -476,6 +479,7 @@ with st.sidebar:
         ("Yahoo Finance", True, "always on"),
         ("Polymarket",    True, "always on"),
         ("GDELT",         True, "always on"),
+        ("CFTC COT",      True, "always on (free CSV)"),
         ("Alpaca (0DTE)", _alpaca_ok, "ALPACA_API_KEY"),
         ("FRED",          bool(st.session_state.fred_key), "FRED_API_KEY"),
         ("Finnhub",       bool(st.session_state.finnhub_key), "FINNHUB_API_KEY"),
@@ -500,6 +504,9 @@ with st.sidebar:
     _finnhub_input = st.text_input("Finnhub Key", value="", type="password", placeholder="paste key to override…", key="finnhub_override")
     if _finnhub_input:
         st.session_state.finnhub_key = _finnhub_input.strip()
+    _cftc_input = st.text_input("CFTC API Key", value="", type="password", placeholder="optional — CSV is free", key="cftc_override")
+    if _cftc_input:
+        st.session_state.cftc_key = _cftc_input.strip()
 
     st.markdown('<hr style="border-top:1px solid #222;margin:8px 0">', unsafe_allow_html=True)
     st.markdown('<div style="color:#FF6600;font-size:9px;letter-spacing:2px;font-weight:700">MY CONTEXT</div>', unsafe_allow_html=True)
@@ -830,10 +837,12 @@ with tabs[1]:
                     with wc5: bs_side = st.selectbox("Type", ["call", "put"], key=f"bs_side_{tkr}")
                     
                     bs_res = bs_greeks_engine(bs_s, bs_k, bs_t / 365.0, 0.045, bs_v / 100.0, bs_side)
-                    rc1, rc2, rc3 = st.columns(3)
+                    rc1, rc2, rc3, rc4, rc5 = st.columns(5)
                     rc1.metric("Delta", f"{bs_res['delta']:.4f}")
                     rc2.metric("Gamma", f"{bs_res['gamma']:.6f}")
                     rc3.metric("Theta (Daily)", f"{bs_res['theta']:.4f}")
+                    rc4.metric("Vega (1%)", f"{bs_res.get('vega', 0):.4f}")
+                    rc5.metric("Rho (1%)", f"{bs_res.get('rho', 0):.4f}")
 
                 with st.expander("📊 **FULL OPTIONS CHAIN**", expanded=False):
                     fc, fp = st.columns(2)
@@ -1179,6 +1188,85 @@ with tabs[1]:
                     unsafe_allow_html=True)
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No squeeze candidates found.</p>', unsafe_allow_html=True)
+
+    # ════════════════════════════════════════════════════════════════════
+    # FEAT-03: RV vs IV Spread — Vol Premium Signal
+    # ════════════════════════════════════════════════════════════════════
+    with st.spinner("Computing RV/IV spread…"):
+        _rv_iv = get_rv_iv_spread(_iv_ticker.upper().strip() if '_iv_ticker' in dir() else "SPY")
+    if _rv_iv:
+        _rv_c1, _rv_c2, _rv_c3, _rv_c4 = st.columns(4)
+        with _rv_c1:
+            st.markdown(
+                f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:3px solid #FF8C00;'
+                f'padding:10px;font-family:monospace;text-align:center">'
+                f'<div style="color:#555;font-size:8px;letter-spacing:1px">RV20 (REALIZED)</div>'
+                f'<div style="color:#FFF;font-size:16px;font-weight:700">{_rv_iv["rv20"]:.1f}%</div></div>',
+                unsafe_allow_html=True)
+        with _rv_c2:
+            st.markdown(
+                f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:3px solid #FF8C00;'
+                f'padding:10px;font-family:monospace;text-align:center">'
+                f'<div style="color:#555;font-size:8px;letter-spacing:1px">FRONT IV ({_rv_iv["dte"]}D)</div>'
+                f'<div style="color:#FFF;font-size:16px;font-weight:700">{_rv_iv["front_iv"]:.1f}%</div></div>',
+                unsafe_allow_html=True)
+        with _rv_c3:
+            st.markdown(
+                f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:3px solid #FF8C00;'
+                f'padding:10px;font-family:monospace;text-align:center">'
+                f'<div style="color:#555;font-size:8px;letter-spacing:1px">RV - IV SPREAD</div>'
+                f'<div style="color:{_rv_iv["signal_color"]};font-size:16px;font-weight:700">{_rv_iv["spread"]:+.1f}%</div></div>',
+                unsafe_allow_html=True)
+        with _rv_c4:
+            st.markdown(
+                f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:3px solid {_rv_iv["signal_color"]};'
+                f'padding:10px;font-family:monospace;text-align:center">'
+                f'<div style="color:#555;font-size:8px;letter-spacing:1px">VOL SIGNAL</div>'
+                f'<div style="color:{_rv_iv["signal_color"]};font-size:16px;font-weight:900">{_rv_iv["signal"]}</div></div>',
+                unsafe_allow_html=True)
+
+    # ════════════════════════════════════════════════════════════════════
+    # FEAT-02: IV Skew Surface — 25-Delta Put/Call Skew
+    # ════════════════════════════════════════════════════════════════════
+    with st.spinner("Computing IV skew surface…"):
+        _skew_data = get_iv_skew(_iv_ticker.upper().strip() if '_iv_ticker' in dir() else "SPY")
+    if _skew_data:
+        st.markdown('<div class="bb-ph">📈 25-DELTA IV SKEW SURFACE</div>', unsafe_allow_html=True)
+        _sk_dtes = [d["dte"] for d in _skew_data]
+        _sk_atm = [d["iv_atm"] for d in _skew_data]
+        _sk_25c = [d.get("iv_25c") for d in _skew_data]
+        _sk_25p = [d.get("iv_25p") for d in _skew_data]
+        _sk_skew = [d["skew"] for d in _skew_data]
+
+        fig_skew = dark_fig(280)
+        fig_skew.add_trace(go.Scatter(x=_sk_dtes, y=_sk_atm, name="ATM IV",
+            mode="lines+markers", line=dict(color="#FF8C00", width=2),
+            marker=dict(size=6)))
+        if any(v is not None for v in _sk_25c):
+            fig_skew.add_trace(go.Scatter(x=_sk_dtes, y=_sk_25c, name="25Δ Call IV",
+                mode="lines+markers", line=dict(color="#00CC44", width=1, dash="dash"),
+                marker=dict(size=5)))
+        if any(v is not None for v in _sk_25p):
+            fig_skew.add_trace(go.Scatter(x=_sk_dtes, y=_sk_25p, name="25Δ Put IV",
+                mode="lines+markers", line=dict(color="#FF4444", width=1, dash="dash"),
+                marker=dict(size=5)))
+        # Skew as bars on secondary y-axis
+        _skew_colors = ["#FF4444" if s > 0 else "#00CC44" for s in _sk_skew]
+        fig_skew.add_trace(go.Bar(x=_sk_dtes, y=_sk_skew, name="Skew (P-C)",
+            marker_color=_skew_colors, opacity=0.4, yaxis="y2"))
+
+        fig_skew.update_layout(
+            margin=dict(l=40, r=60, t=30, b=40), height=280,
+            title=dict(text=f"{_iv_ticker.upper()} IV SKEW (25Δ PUT - CALL)", font=dict(size=10, color="#FF6600"), x=0),
+            xaxis=dict(title="DTE", color="#555", gridcolor="#111", tickfont=dict(size=9)),
+            yaxis=dict(title="IV %", color="#555", gridcolor="#111", tickfont=dict(size=9), ticksuffix="%"),
+            yaxis2=dict(title="Skew %", overlaying="y", side="right", color="#555",
+                       tickfont=dict(size=9, color="#888"), showgrid=False),
+            legend=dict(font=dict(size=8, color="#888"), bgcolor="rgba(0,0,0,0)",
+                       orientation="h", x=0, y=1.08),
+            barmode="overlay",
+        )
+        st.plotly_chart(fig_skew, use_container_width=True)
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
@@ -1892,14 +1980,16 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
                 st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Volatility data loading…</p>', unsafe_allow_html=True)
 
         with _vol_right:
-            st.markdown('<div class="bb-ph">🔗 60-DAY MACRO CORRELATION MATRIX</div>', unsafe_allow_html=True)
+            st.markdown('<div class="bb-ph">🔗 CROSS-ASSET CORRELATION MATRIX (7 ASSETS)</div>', unsafe_allow_html=True)
             with st.spinner("Computing correlations…"):
                 _corr_data = get_macro_correlation_matrix()
 
-            if _corr_data is not None:
-                import plotly.figure_factory as ff
-                _corr_vals = _corr_data.values.tolist()
-                _corr_labels = list(_corr_data.columns)
+            if _corr_data is not None and isinstance(_corr_data, dict):
+                _corr_method = st.radio("Method", ["Pearson ρ", "Spearman ρₛ"], horizontal=True, key="corr_method", label_visibility="collapsed")
+                _corr_key = "pearson" if "Pearson" in _corr_method else "spearman"
+                _corr_df = _corr_data[_corr_key]
+                _corr_vals = _corr_df.values.tolist()
+                _corr_labels = list(_corr_df.columns)
                 _corr_text = [[f"{v:.2f}" for v in row] for row in _corr_vals]
 
                 fig_corr = go.Figure(data=go.Heatmap(
@@ -1907,19 +1997,89 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
                     text=_corr_text, texttemplate="%{text}",
                     colorscale=[[0, "#FF4444"], [0.5, "#111111"], [1, "#00CC44"]],
                     zmin=-1, zmax=1,
-                    textfont=dict(size=10, color="#CCC"),
+                    textfont=dict(size=9, color="#CCC"),
                 ))
+                _lb = _corr_data.get("lookback_days", 60)
+                _method_label = "PEARSON" if _corr_key == "pearson" else "SPEARMAN"
                 fig_corr.update_layout(
                     paper_bgcolor="#000", plot_bgcolor="#000",
                     font=dict(color="#888", family="IBM Plex Mono"),
-                    margin=dict(l=80, r=10, t=30, b=50), height=350,
-                    title=dict(text="PEARSON ρ — 60 DAY", font=dict(size=10, color="#FF6600"), x=0),
-                    xaxis=dict(tickfont=dict(size=9, color="#888")),
-                    yaxis=dict(tickfont=dict(size=9, color="#888"), autorange="reversed"),
+                    margin=dict(l=80, r=10, t=30, b=50), height=380,
+                    title=dict(text=f"{_method_label} — {_lb} DAY (7 ASSETS)", font=dict(size=10, color="#FF6600"), x=0),
+                    xaxis=dict(tickfont=dict(size=8, color="#888")),
+                    yaxis=dict(tickfont=dict(size=8, color="#888"), autorange="reversed"),
                 )
                 st.plotly_chart(fig_corr, use_container_width=True)
             else:
                 st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Correlation matrix loading…</p>', unsafe_allow_html=True)
+
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+    # ════════════════════════════════════════════════════════════════════
+    # FEAT-05: ECONOMIC SURPRISE INDEX + FEAT-04: CFTC COT
+    # ════════════════════════════════════════════════════════════════════
+    _esi_col, _cot_col = st.columns([1, 2])
+
+    with _esi_col:
+        st.markdown('<div class="bb-ph">📊 ECONOMIC SURPRISE INDEX</div>', unsafe_allow_html=True)
+        with st.spinner("Computing ESI…"):
+            _esi = get_economic_surprise_index(st.session_state.fred_key)
+        if _esi:
+            st.markdown(
+                f'<div style="background:#080808;border:1px solid #1A1A1A;border-left:4px solid {_esi["label_color"]};'
+                f'padding:14px 18px;font-family:monospace;margin-bottom:8px">'
+                f'<div style="display:flex;justify-content:space-between;align-items:center">'
+                f'<div>'
+                f'<div style="color:#555;font-size:9px;letter-spacing:1px">MACRO SURPRISES</div>'
+                f'<div style="color:{_esi["label_color"]};font-size:22px;font-weight:900;margin-top:4px">{_esi["label"]}</div>'
+                f'</div>'
+                f'<div style="text-align:right">'
+                f'<div style="color:{_esi["label_color"]};font-size:18px;font-weight:700">{_esi["avg_surprise_pct"]:+.1f}%</div>'
+                f'<div style="color:#555;font-size:8px">AVG SURPRISE</div>'
+                f'</div></div></div>',
+                unsafe_allow_html=True)
+            for _ei in _esi.get("items", [])[:5]:
+                _s_c = "#00CC44" if _ei["surprise_pct"] > 0 else "#FF4444"
+                st.markdown(
+                    f'<div style="display:flex;justify-content:space-between;padding:3px 8px;'
+                    f'font-family:monospace;font-size:10px;border-bottom:1px solid #0D0D0D">'
+                    f'<span style="color:#888;flex:1">{_ei["name"][:30]}</span>'
+                    f'<span style="color:{_s_c};font-weight:600;min-width:50px;text-align:right">{_ei["surprise_pct"]:+.1f}%</span>'
+                    f'</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">ESI data requires macro calendar with actuals.</p>', unsafe_allow_html=True)
+
+    with _cot_col:
+        st.markdown('<div class="bb-ph">🏛️ INSTITUTIONAL POSITIONING (CFTC COT)</div>', unsafe_allow_html=True)
+        with st.spinner("Loading CFTC data…"):
+            _cot = get_cot_positioning()
+        if _cot:
+            # Header row
+            st.markdown(
+                '<div style="display:grid;grid-template-columns:1fr 100px 90px 90px;gap:8px;'
+                'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
+                'font-size:8px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
+                '<span>CONTRACT</span><span>NET POS</span><span>WK CHG</span><span>SIGNAL</span></div>',
+                unsafe_allow_html=True)
+            for _ct in _cot:
+                _chg_c = "#00CC44" if _ct["net_change"] > 0 else "#FF4444" if _ct["net_change"] < 0 else "#888"
+                _chg_sign = "+" if _ct["net_change"] > 0 else ""
+                st.markdown(
+                    f'<div style="display:grid;grid-template-columns:1fr 100px 90px 90px;gap:8px;'
+                    f'padding:5px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px">'
+                    f'<span style="color:#FFF;font-weight:600">{_ct["name"]}</span>'
+                    f'<span style="color:{_ct["signal_color"]};font-weight:700">{_ct["net_noncomm"]:,}</span>'
+                    f'<span style="color:{_chg_c}">{_chg_sign}{_ct["net_change"]:,}</span>'
+                    f'<span style="color:{_ct["signal_color"]};font-size:9px;font-weight:700">{_ct["signal"]}</span></div>',
+                    unsafe_allow_html=True)
+            st.markdown(
+                f'<div style="color:#444;font-size:8px;font-family:monospace;margin-top:4px">'
+                f'Source: CFTC Commitment of Traders | Updated weekly (Fridays) | '
+                f'Last: {_cot[0].get("date", "N/A") if _cot else "N/A"}</div>',
+                unsafe_allow_html=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">CFTC COT data unavailable.</p>', unsafe_allow_html=True)
+
 
 # ════════════════════════════════════════════════════════════════════
 # TAB 4 — CRYPTO
@@ -1986,7 +2146,7 @@ with tabs[4]:
 
     # ── Institutional BTC ETF Flows ───────────────────────────────────
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-    st.markdown('<div class="bb-ph">📊 INSTITUTIONAL BTC ETF FLOWS — DAILY NET</div>', unsafe_allow_html=True)
+    st.markdown('<div class="bb-ph">📊 BTC ETF DIRECTIONAL FLOW PROXY — DAILY NET (NOT AUM FLOWS)</div>', unsafe_allow_html=True)
     with st.spinner("Loading ETF flow data…"):
         _etf_df = fetch_btc_etf_flows()
         _etf_estimated = False
@@ -2004,6 +2164,15 @@ with tabs[4]:
                 'volume × price action. Actual fund flow data from Farside Investors was unavailable.</div>',
                 unsafe_allow_html=True
             )
+        # FIX-13: Clarification caption
+        st.markdown(
+            '<div style="background:#050505;border-left:3px solid #555;padding:6px 12px;'
+            'font-family:monospace;font-size:9px;color:#666;margin-top:4px">'
+            'ℹ️ This is a directional volume approximation (volume × typical price × direction), '
+            'not real AUM fund flow data. Values are in billions ($B). '
+            'Treat as a sentiment proxy, not as actual institutional capital flows.</div>',
+            unsafe_allow_html=True
+        )
 
         # ── Mini summary dashboard for latest day ──────────────────────
         try:
@@ -2026,7 +2195,7 @@ with tabs[4]:
                 # Net Flow
                 f'<div style="text-align:center">'
                 f'<div style="color:#555;font-size:9px;letter-spacing:1px">NET FLOW</div>'
-                f'<div style="color:{_net_color};font-size:16px;font-weight:700">{_net_sign}${abs(_net):,.0f}M</div>'
+                f'<div style="color:{_net_color};font-size:16px;font-weight:700">{_net_sign}${abs(_net):,.2f}B</div>'
                 f'<div style="color:#444;font-size:8px">{_date_str}</div>'
                 f'</div>'
                 # Inflows
@@ -2045,7 +2214,7 @@ with tabs[4]:
                 f'<div style="text-align:center">'
                 f'<div style="color:#555;font-size:9px;letter-spacing:1px">TOP MOVER</div>'
                 f'<div style="color:{_top_color};font-size:16px;font-weight:700">{_top_name}</div>'
-                f'<div style="color:{_top_color};font-size:9px">{_top_sign}${abs(_top_val):,.0f}M</div>'
+                f'<div style="color:{_top_color};font-size:9px">{_top_sign}${abs(_top_val):,.2f}B</div>'
                 f'</div>'
                 f'</div>',
                 unsafe_allow_html=True

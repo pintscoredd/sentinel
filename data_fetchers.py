@@ -93,25 +93,8 @@ def get_yf_ticker(ticker):
 
 
 # ════════════════════════════════════════════════════════════════════
-# UTILITY FUNCTIONS & ONLINE VARIANCE
+# UTILITY FUNCTIONS
 # ════════════════════════════════════════════════════════════════════
-
-class OnlineVariance:
-    """Welford's Online Algorithm for O(1) running variance on tick streams."""
-    def __init__(self):
-        self.count = 0
-        self.mean = 0.0
-        self.M2 = 0.0
-
-    def update(self, new_value):
-        self.count += 1
-        delta = new_value - self.mean
-        self.mean += delta / self.count
-        delta2 = new_value - self.mean
-        self.M2 += delta * delta2
-
-    def variance(self):
-        return self.M2 / self.count if self.count > 1 else 0.0
 
 
 def _safe_float(v, default=0.0):
@@ -349,17 +332,30 @@ def vix_price():
 
 @st.cache_data(ttl=3600)
 def vix_with_percentile():
+    """VIX with 1Y and 3Y percentile ranks + regime divergence flag."""
     try:
-        h = get_yf_ticker("^VIX").history(period="1y")
+        h = get_yf_ticker("^VIX").history(period="3y")
         if h.empty or len(h) < 20:
             return None, None, None
         current = h["Close"].iloc[-1]
-        pct_rank = (h["Close"] < current).mean() * 100   # percentile rank
-        # Posture based on percentile
-        if pct_rank < 30:   posture = "RISK-ON"
-        elif pct_rank < 65: posture = "NEUTRAL"
-        else:               posture = "RISK-OFF"
-        return round(current, 2), round(pct_rank, 1), posture
+        
+        # 3Y percentile rank (full history)
+        pct_3y = (h["Close"] < current).mean() * 100
+        
+        # 1Y percentile rank (last ~252 trading days)
+        h_1y = h.tail(252)
+        pct_1y = (h_1y["Close"] < current).mean() * 100 if len(h_1y) >= 20 else pct_3y
+        
+        # Posture based on 1Y percentile
+        if pct_1y < 30:   posture = "RISK-ON"
+        elif pct_1y < 65: posture = "NEUTRAL"
+        else:             posture = "RISK-OFF"
+        
+        # FIX-10: Regime divergence flag — 1Y says fear but 3Y says normal
+        if pct_1y > 70 and pct_3y < 50:
+            posture += " (REGIME: structurally normal)"
+        
+        return round(current, 2), round(pct_1y, 1), posture
     except Exception:
         return None, None, None
 
@@ -469,17 +465,20 @@ def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=
         except:
             fred_key = None
         r_risk_free = get_risk_free_rate(fred_key)        
-        def _bs_delta(S, K, T, r, sigma, side):
-            if S <= 0 or K <= 0 or T <= 0 or sigma <= 0: return 0.5
-            d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
-            return norm.cdf(d1) if side == "call" else norm.cdf(d1) - 1.0
 
         if current_price and current_price > 0 and "strike" in df.columns:
-            df["_delta_proxy"] = df.apply(
-                lambda r: abs(_bs_delta(current_price, r.get("strike", current_price), T_approx, r_risk_free, max(r.get("impliedVolatility", 0.2), 0.01), side)), axis=1
-            )
+            # Use full bs_greeks_engine for Delta + Vega + Rho
+            def _row_greeks(row):
+                sigma = max(row.get("impliedVolatility", 0.2), 0.01)
+                g = bs_greeks_engine(current_price, row.get("strike", current_price), T_approx, r_risk_free, sigma, side)
+                return pd.Series({"_delta_proxy": abs(g["delta"]), "_vega": g.get("vega", 0.0), "_rho": g.get("rho", 0.0), "_delta_raw": g["delta"]})
+            greeks_df = df.apply(_row_greeks, axis=1)
+            df = pd.concat([df, greeks_df], axis=1)
         else:
             df["_delta_proxy"] = 0.5
+            df["_vega"] = 0.0
+            df["_rho"] = 0.0
+            df["_delta_raw"] = 0.5 if side == "call" else -0.5
 
         df["_score"] = (df["_norm_voi"] * w1 + df["_iv_pct"] * w2 - (df["_delta_proxy"] - 0.5).abs() * w3)
 
@@ -496,6 +495,9 @@ def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=
                 "voi": round(float(r.get("_voi", 0)), 2),
                 "score": round(float(r.get("_score", 0)), 4),
                 "side": side,
+                "delta": round(float(r.get("_delta_raw", 0)), 4),
+                "vega": round(float(r.get("_vega", 0)), 4),
+                "rho": round(float(r.get("_rho", 0)), 4),
             })
         return rows
 
@@ -513,61 +515,110 @@ def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=
 
     return result
 
-def bs_price(S, K, T, r, sigma, side="call"):
-    """Calculate theoretical option price using Black-Scholes."""
+def bs_price(S, K, T, r, sigma, side="call", q=0.0):
+    """Calculate theoretical option price using Black-Scholes with dividend yield.
+    
+    Args:
+        S: Spot price
+        K: Strike price  
+        T: Time to expiry in years
+        r: Risk-free rate
+        sigma: Volatility
+        side: 'call' or 'put'
+        q: Continuous dividend yield (default 0.0)
+    """
     try:
         # Prevent math domain errors on edge cases
         if T <= 0 or sigma <= 0 or S <= 0 or K <= 0: return 0.0
-        d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+        S_adj = S * math.exp(-q * T)
+        d1 = (math.log(S / K) + (r - q + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
         d2 = d1 - sigma * math.sqrt(T)
         if side == "call":
-            p = S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
+            p = S_adj * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
         else:
-            p = K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+            p = K * math.exp(-r * T) * norm.cdf(-d2) - S_adj * norm.cdf(-d1)
         return max(p, 0.0)
     except Exception:
         return 0.0
 
-def get_iv_newton(S, K, T, r, target_price, side="call"):
-    """Newton-Raphson root solver to back out Implied Volatility from market price.
-    Returns None if the solver fails to converge, signaling the caller to
+def get_iv_brentq(S, K, T, r, target_price, side="call", q=0.0):
+    """Brentq bracket solver to back out Implied Volatility from market price.
+    
+    Uses scipy.optimize.brentq over [1e-6, 10.0] — bracket-guaranteed convergence
+    without requiring a good initial seed. Far more robust than Newton-Raphson
+    for deep ITM/OTM options.
+    
+    Returns None if the solver fails, signaling the caller to
     fall back to broker-provided IV instead of injecting a bogus 0.0.
     """
-    from scipy.optimize import newton
+    from scipy.optimize import brentq
     if target_price <= 0 or S <= 0 or K <= 0 or T <= 0: return None
     
     def objective(sigma):
-        return bs_price(S, K, T, r, sigma, side) - target_price
-        
+        return bs_price(S, K, T, r, sigma, side, q) - target_price
+    
     try:
-        iv = newton(objective, x0=0.20, tol=1e-4, maxiter=50)
+        # Verify bracket: price at low vol should be below target, at high vol above
+        lo_val = objective(1e-6)
+        hi_val = objective(10.0)
+        if lo_val * hi_val > 0:
+            # Target price outside achievable range — no valid IV
+            return None
+        iv = brentq(objective, 1e-6, 10.0, xtol=1e-6, maxiter=100)
         return float(max(iv, 0.0))
     except Exception:
         return None
 
-def bs_greeks_engine(S, K, T, r, sigma, side="call"):
-    """True Black-Scholes Greeks Engine computing Delta, Gamma, Theta locally for 'what-if' shifting."""
+# Backward-compatible alias
+def get_iv_newton(S, K, T, r, target_price, side="call", q=0.0):
+    """Alias for get_iv_brentq — kept for backward compatibility."""
+    return get_iv_brentq(S, K, T, r, target_price, side, q)
+
+def bs_greeks_engine(S, K, T, r, sigma, side="call", q=0.0):
+    """True Black-Scholes Greeks Engine with dividend yield.
+    
+    Returns Delta, Gamma, Theta, Vega, and Rho.
+    Vega and Rho are expressed per 1% move (divided by 100).
+    """
     if S <= 0 or K <= 0 or T <= 0 or sigma <= 0:
-        return {"delta": 0.5 if side == "call" else -0.5, "gamma": 0.0, "theta": 0.0}
+        return {"delta": 0.5 if side == "call" else -0.5, "gamma": 0.0, "theta": 0.0, "vega": 0.0, "rho": 0.0}
     try:
-        d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+        S_adj = S * math.exp(-q * T)
+        d1 = (math.log(S / K) + (r - q + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
         d2 = d1 - sigma * math.sqrt(T)
         N_d1 = norm.cdf(d1)
         N_d2 = norm.cdf(d2)
         n_d1 = norm.pdf(d1)
+        discount = math.exp(-r * T)
         
-        delta = N_d1 if side == "call" else N_d1 - 1.0
-        gamma = n_d1 / (S * sigma * math.sqrt(T))
+        # Delta (adjusted for dividends)
+        delta = math.exp(-q * T) * N_d1 if side == "call" else math.exp(-q * T) * (N_d1 - 1.0)
         
-        theta_d1 = -(S * n_d1 * sigma) / (2 * math.sqrt(T))
+        # Gamma
+        gamma = math.exp(-q * T) * n_d1 / (S * sigma * math.sqrt(T))
+        
+        # Theta
+        theta_d1 = -(S_adj * n_d1 * sigma) / (2 * math.sqrt(T))
         if side == "call":
-            theta = (theta_d1 - r * K * math.exp(-r * T) * N_d2) / 365.0
+            theta = (theta_d1 + q * S_adj * N_d1 - r * K * discount * N_d2) / 365.0
         else:
-            theta = (theta_d1 + r * K * math.exp(-r * T) * norm.cdf(-d2)) / 365.0
+            theta = (theta_d1 - q * S_adj * norm.cdf(-d1) + r * K * discount * norm.cdf(-d2)) / 365.0
+        
+        # Vega: sensitivity to 1% move in IV  →  S * e^(-qT) * N'(d1) * sqrt(T) / 100
+        vega = S_adj * n_d1 * math.sqrt(T) / 100.0
+        
+        # Rho: sensitivity to 1% move in rates
+        if side == "call":
+            rho = K * T * discount * N_d2 / 100.0
+        else:
+            rho = -K * T * discount * norm.cdf(-d2) / 100.0
             
-        return {"delta": round(delta, 4), "gamma": round(gamma, 6), "theta": round(theta, 4)}
+        return {
+            "delta": round(delta, 4), "gamma": round(gamma, 6), "theta": round(theta, 4),
+            "vega": round(vega, 4), "rho": round(rho, 4)
+        }
     except Exception:
-        return {"delta": 0.0, "gamma": 0.0, "theta": 0.0}
+        return {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0, "rho": 0.0}
 
 @st.cache_data(ttl=21600)
 def get_finra_short_volume(ticker):
@@ -593,7 +644,12 @@ def get_finra_short_volume(ticker):
 
 @st.cache_data(ttl=3600)
 def stat_arb_screener(pairs=None):
-    """Statistical Arbitrage Screener using Engle-Granger Cointegration & OLS Half-Life."""
+    """Statistical Arbitrage Screener using Engle-Granger Cointegration & OLS Half-Life.
+    
+    FIX-07: Tests cointegration in both directions, keeps lower p-value.
+    FIX-08: Uses OU equilibrium mean instead of biased full-window average.
+    FIX-09: Scales entry thresholds by half-life.
+    """
     try:
         import statsmodels.api as sm
         from statsmodels.tsa.stattools import coint
@@ -618,44 +674,70 @@ def stat_arb_screener(pairs=None):
             df = pd.DataFrame({t1: stk1, t2: stk2}).dropna()
             if len(df) < 100:
                 continue
-                
-            # Engle-Granger Cointegration Test
-            score, pvalue, _ = coint(df[t1], df[t2])
             
-            # OLS for Hedge Ratio (Beta)
-            Y = df[t1]
-            X = sm.add_constant(df[t2])
+            # FIX-07: Test cointegration in both directions, keep lower p-value
+            _, pvalue_fwd, _ = coint(df[t1], df[t2])
+            _, pvalue_rev, _ = coint(df[t2], df[t1])
+            
+            if pvalue_fwd <= pvalue_rev:
+                pvalue = pvalue_fwd
+                dep, indep = t1, t2
+                direction_label = f"{t1} ~ {t2}"
+            else:
+                pvalue = pvalue_rev
+                dep, indep = t2, t1
+                direction_label = f"{t2} ~ {t1}"
+            
+            # OLS for Hedge Ratio (Beta) using the canonical direction
+            Y = df[dep]
+            X = sm.add_constant(df[indep])
             model = sm.OLS(Y, X).fit()
             beta = model.params.iloc[1]
             
-            # Spread = Y - beta * X
-            spread = df[t1] - beta * df[t2]
-            mean_spread = spread.mean()
+            # Spread = dep - beta * indep
+            spread = df[dep] - beta * df[indep]
             std_spread = spread.std()
-            z_score = (spread.iloc[-1] - mean_spread) / std_spread
             
             # Ornstein-Uhlenbeck Process for Half-Life
             spread_lag = spread.shift(1).dropna()
             spread_diff = spread.diff().dropna()
             lag_with_const = sm.add_constant(spread_lag)
             ou_model = sm.OLS(spread_diff, lag_with_const).fit()
+            ou_intercept = ou_model.params.iloc[0]
             ou_lambda = -ou_model.params.iloc[1]
             half_life = np.log(2) / ou_lambda if ou_lambda > 0 else float('inf')
             
+            # FIX-08: Use OU equilibrium mean instead of biased full-window mean
+            if ou_lambda > 0:
+                eq_mean = ou_intercept / ou_lambda
+            else:
+                eq_mean = spread.mean()  # fallback if OU not mean-reverting
+            
+            z_score = (spread.iloc[-1] - eq_mean) / std_spread if std_spread > 0 else 0.0
+            
+            # FIX-09: Scale entry thresholds by half-life
+            # Fast-reverting (3-day HL) → tight thresholds (~1.0)
+            # Slow-reverting (60-day HL) → wide thresholds (~2.5)
+            clamped_hl = max(3.0, min(float(half_life), 60.0))
+            entry_thresh = 1.0 + (clamped_hl / 60.0) * 1.5
+            lean_thresh = entry_thresh * 0.6
+            
             signal = "Neutral"
-            if z_score < -2: signal = "Long T1 / Short T2"
-            elif z_score > 2: signal = "Short T1 / Long T2"
-            elif z_score < -1: signal = "Leaning Long T1"
-            elif z_score > 1: signal = "Leaning Short T1"
+            if z_score < -entry_thresh: signal = f"Long {dep} / Short {indep}"
+            elif z_score > entry_thresh: signal = f"Short {dep} / Long {indep}"
+            elif z_score < -lean_thresh: signal = f"Leaning Long {dep}"
+            elif z_score > lean_thresh: signal = f"Leaning Short {dep}"
             
             results.append({
                 "t1": t1, "t2": t2,
+                "direction": direction_label,
                 "pvalue": round(float(pvalue), 4),
                 "zscore": round(float(z_score), 2),
                 "half_life": round(float(half_life), 1),
                 "beta": round(float(beta), 3),
                 "coint": pvalue < 0.05,
-                "signal": signal
+                "signal": signal,
+                "entry_thresh": round(entry_thresh, 2),
             })
         except Exception:
             continue
@@ -711,12 +793,20 @@ def calc_stock_fear_greed():
     try:
         scores = []
 
-        # --- Signal 1: VIX Level (market volatility) ---
+        # --- Signal 1: VIX Level — 1-year rolling percentile rank (self-calibrating) ---
         v = yahoo_quote("^VIX")
         if v:
             vix = v["price"]
-            # VIX 10=100 (extreme greed), VIX 40=0 (extreme fear), linear
-            vix_score = max(0, min(100, 100 - (vix - 10) / 30 * 100))
+            # FIX-05: Use 1Y rolling percentile rank instead of hardcoded linear bounds
+            try:
+                vix_hist = get_yf_ticker("^VIX").history(period="1y")
+                if vix_hist is not None and len(vix_hist) >= 20:
+                    pct_rank = (vix_hist["Close"] < vix).mean()  # 0..1
+                    vix_score = (1 - pct_rank) * 100  # high percentile = fear = low score
+                else:
+                    vix_score = max(0, min(100, 100 - (vix - 10) / 30 * 100))  # fallback
+            except Exception:
+                vix_score = max(0, min(100, 100 - (vix - 10) / 30 * 100))  # fallback
             scores.append(("VIX", vix_score))
 
         # --- Signal 2: Market Momentum (SPY vs 125-day MA) ---
@@ -1320,14 +1410,15 @@ def find_gamma_flip(gex_profile):
 def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
     """Multi-factor quantitative SPX daily direction predictor.
     
-    Combines 7 weighted signals rooted in options market microstructure:
-    1. Gamma Regime    — positive gamma = mean-reverting (dealer hedging dampens moves)
-    2. Net GEX Tilt    — call vs put gamma imbalance shows directional flow
-    3. VWAP Deviation  — institutional volume anchor; reversion signal
-    4. Put/Call Ratio  — sentiment skew from OI distribution
-    5. Max Pain Gravity — expiry pin effect attracts price
-    6. VIX Term Struct  — contango = calm, backwardation = panic
-    7. VIX Level        — regime classification (low/normal/elevated/crisis)
+    Combines 8 weighted signals rooted in options market microstructure:
+    1. Gamma Regime       — positive gamma = mean-reverting (dealer hedging dampens moves)
+    2. Net GEX Tilt       — call vs put gamma imbalance shows directional flow
+    3. Typical Price Pos  — daily (H+L+C)/3 anchor; reversion signal
+    4. Put/Call Ratio     — sentiment skew from OI distribution
+    5. Max Pain Gravity   — expiry pin effect attracts price
+    6. Vol Regime         — combined VIX term structure + level (2×2 grid)
+    7. RSI(14)            — momentum oscillator: overbought/oversold
+    8. MACD(12,26,9)      — trend following momentum signal
     
     Returns dict with direction, confidence, score, and per-signal breakdown.
     """
@@ -1400,24 +1491,25 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
             score += contrib
 
     # ──────────────────────────────────────────────────────────
-    # SIGNAL 3: VWAP Deviation (weight: 2.5)
-    # Price > VWAP = institutional buyers in control
-    # Price < VWAP = institutional sellers in control
+    # SIGNAL 3: Typical Price vs Average (weight: 2.5)
+    # FIX-11: Renamed from "VWAP Position" — (H+L+C)/3 is Typical Price, not VWAP
+    # Price > typical price average = buyers in control
+    # Price < typical price average = sellers in control
     # ──────────────────────────────────────────────────────────
     vwap_dev = (spot - vwap) / vwap * 100
     if abs(vwap_dev) > 0.05:
         if vwap_dev > 0:
             contrib = min(vwap_dev * 8, 2.5)  # scaled, capped at 2.5
-            signals.append(("VWAP Position", f"{vwap_dev:+.2f}% above", contrib,
-                           f"BULLISH — Spot ${spot:,.0f} above VWAP ${vwap:,.0f}", "#00CC44"))
+            signals.append(("Typical Price vs Avg", f"{vwap_dev:+.2f}% above", contrib,
+                           f"BULLISH — Spot ${spot:,.0f} above daily typical price (H+L+C)/3 ${vwap:,.0f}", "#00CC44"))
         else:
             contrib = max(vwap_dev * 8, -2.5)
-            signals.append(("VWAP Position", f"{vwap_dev:+.2f}% below", contrib,
-                           f"BEARISH — Spot ${spot:,.0f} below VWAP ${vwap:,.0f}", "#FF4444"))
+            signals.append(("Typical Price vs Avg", f"{vwap_dev:+.2f}% below", contrib,
+                           f"BEARISH — Spot ${spot:,.0f} below daily typical price (H+L+C)/3 ${vwap:,.0f}", "#FF4444"))
         score += contrib
     else:
-        signals.append(("VWAP Position", f"{vwap_dev:+.2f}%", 0.0,
-                       "NEUTRAL — Spot at VWAP equilibrium", "#888888"))
+        signals.append(("Typical Price vs Avg", f"{vwap_dev:+.2f}%", 0.0,
+                       "NEUTRAL — Spot at typical price equilibrium", "#888888"))
 
     # ──────────────────────────────────────────────────────────
     # SIGNAL 4: Put/Call Ratio (weight: 2.0)
@@ -1470,41 +1562,130 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
                            "PINNED — Spot near max pain; expect low range", "#888888"))
 
     # ──────────────────────────────────────────────────────────
-    # SIGNAL 6: VIX Term Structure (weight: 1.5)
-    # Contango = normal, stable regime. Backwardation = fear, crash risk.
+    # SIGNAL 6: Vol Regime (weight: 2.0)
+    # FIX-06: Collapsed VIX Term Structure + VIX Level into a single signal
+    # to avoid double-counting volatility. Uses a 2×2 grid:
+    #   contango + low vol  = +1.5 (bullish)
+    #   contango + elevated = +0.5 (neutral-ish)
+    #   backwardation + moderate = -1.0
+    #   backwardation + crisis  = -2.0
     # ──────────────────────────────────────────────────────────
     if contango is not None:
-        if contango:
-            contrib = 1.0
-            signals.append(("VIX Term Structure", "Contango", contrib,
-                           "BULLISH — Normal vol regime, calm markets", "#00CC44"))
+        is_contango = bool(contango)
+        if is_contango and vix < 20:
+            contrib = 1.5
+            vol_desc = "BULLISH — Contango + low vol: calm, risk-on regime"
+            vol_color = "#00CC44"
+            vol_val = f"Contango, VIX {vix:.1f}"
+        elif is_contango and vix >= 20:
+            contrib = 0.5
+            vol_desc = "NEUTRAL — Contango but elevated VIX: cautious calm"
+            vol_color = "#FF8C00"
+            vol_val = f"Contango, VIX {vix:.1f}"
+        elif not is_contango and vix <= 30:
+            contrib = -1.0
+            vol_desc = "BEARISH — Backwardation + moderate VIX: stress building"
+            vol_color = "#FF4444"
+            vol_val = f"Backwardation, VIX {vix:.1f}"
+        else:  # backwardation + vix > 30
+            contrib = -2.0
+            vol_desc = "CRISIS — Backwardation + extreme VIX: panic regime"
+            vol_color = "#FF4444"
+            vol_val = f"Backwardation, VIX {vix:.1f}"
+        signals.append(("Vol Regime", vol_val, contrib, vol_desc, vol_color))
+        score += contrib
+    elif vix is not None:
+        # Fallback if contango data unavailable — use VIX level only
+        if vix < 15:
+            contrib = 0.5
+            signals.append(("Vol Regime", f"VIX {vix:.1f}", contrib,
+                           "LOW VOL — Complacent, slight upward drift bias", "#00CC44"))
+        elif vix <= 20:
+            contrib = 0.0
+            signals.append(("Vol Regime", f"VIX {vix:.1f}", contrib,
+                           "NORMAL — Standard volatility regime", "#888888"))
+        elif vix <= 30:
+            contrib = -1.0
+            signals.append(("Vol Regime", f"VIX {vix:.1f}", contrib,
+                           "ELEVATED — Hedging spike", "#FF8C00"))
         else:
             contrib = -1.5
-            signals.append(("VIX Term Structure", "Backwardation", contrib,
-                           "BEARISH — Inverted vol curve signals stress/panic", "#FF4444"))
+            signals.append(("Vol Regime", f"VIX {vix:.1f}", contrib,
+                           "CRISIS — Extreme fear", "#FF4444"))
         score += contrib
 
     # ──────────────────────────────────────────────────────────
-    # SIGNAL 7: VIX Level Regime (weight: 1.0)
-    # VIX < 15 = complacency. 15-20 = normal. 20-30 = elevated. >30 = crisis.
+    # SIGNAL 7: RSI(14) — Momentum Oscillator (weight: ±1.0/1.5)
     # ──────────────────────────────────────────────────────────
-    if vix < 15:
-        contrib = 0.5
-        signals.append(("VIX Level", f"{vix:.1f}", contrib,
-                       "LOW VOL — Complacent, slight upward drift bias", "#00CC44"))
-    elif vix <= 20:
-        contrib = 0.0
-        signals.append(("VIX Level", f"{vix:.1f}", contrib,
-                       "NORMAL — Standard volatility regime", "#888888"))
-    elif vix <= 30:
-        contrib = -1.0
-        signals.append(("VIX Level", f"{vix:.1f}", contrib,
-                       "ELEVATED — Put buying dominant, hedging spike", "#FF8C00"))
-    else:
-        contrib = -1.5
-        signals.append(("VIX Level", f"{vix:.1f}", contrib,
-                       "CRISIS — Extreme fear, large gap risk", "#FF4444"))
-    score += contrib
+    try:
+        import numpy as np
+        spy_hist = get_yf_ticker("SPY").history(period="60d")
+        if spy_hist is not None and len(spy_hist) >= 20:
+            _closes = spy_hist["Close"]
+            # RSI(14) calculation
+            _delta_r = _closes.diff()
+            _gain = _delta_r.where(_delta_r > 0, 0.0).rolling(14).mean()
+            _loss = (-_delta_r.where(_delta_r < 0, 0.0)).rolling(14).mean()
+            _rs = _gain / _loss.replace(0, np.nan)
+            _rsi = 100.0 - (100.0 / (1.0 + _rs))
+            rsi_val = float(_rsi.iloc[-1]) if not _rsi.empty else 50.0
+
+            if rsi_val >= 70:
+                contrib = -1.0
+                signals.append(("RSI(14)", f"{rsi_val:.1f}", contrib,
+                               "OVERBOUGHT — Momentum exhaustion, mean-reversion likely", "#FF4444"))
+            elif rsi_val <= 30:
+                contrib = 1.5
+                signals.append(("RSI(14)", f"{rsi_val:.1f}", contrib,
+                               "OVERSOLD — Extreme pessimism, bounce setup", "#00CC44"))
+            elif 55 <= rsi_val < 70:
+                contrib = 0.5
+                signals.append(("RSI(14)", f"{rsi_val:.1f}", contrib,
+                               "BULLISH MOMENTUM — Trend strength building", "#00CC44"))
+            elif 30 < rsi_val <= 45:
+                contrib = -0.5
+                signals.append(("RSI(14)", f"{rsi_val:.1f}", contrib,
+                               "BEARISH MOMENTUM — Selling pressure dominant", "#FF4444"))
+            else:
+                contrib = 0.0
+                signals.append(("RSI(14)", f"{rsi_val:.1f}", contrib,
+                               "NEUTRAL — No directional edge from momentum", "#888888"))
+            score += contrib
+
+            # SIGNAL 8: MACD(12,26,9) — Trend Following (weight: ±0.5/1.5)
+            _ema12 = _closes.ewm(span=12, adjust=False).mean()
+            _ema26 = _closes.ewm(span=26, adjust=False).mean()
+            _macd_line = _ema12 - _ema26
+            _signal_line = _macd_line.ewm(span=9, adjust=False).mean()
+            _histogram = _macd_line - _signal_line
+
+            hist_now = float(_histogram.iloc[-1])
+            hist_prev = float(_histogram.iloc[-2]) if len(_histogram) >= 2 else 0.0
+
+            # Crossover detection
+            if hist_now > 0 and hist_prev <= 0:
+                contrib = 1.5
+                signals.append(("MACD", f"Histogram {hist_now:+.2f}", contrib,
+                               "BULLISH CROSSOVER — MACD crossed above signal line", "#00CC44"))
+            elif hist_now < 0 and hist_prev >= 0:
+                contrib = -1.5
+                signals.append(("MACD", f"Histogram {hist_now:+.2f}", contrib,
+                               "BEARISH CROSSOVER — MACD crossed below signal line", "#FF4444"))
+            elif hist_now > 0:
+                contrib = 0.5
+                signals.append(("MACD", f"Histogram {hist_now:+.2f}", contrib,
+                               "BULLISH — MACD above signal, momentum positive", "#00CC44"))
+            elif hist_now < 0:
+                contrib = -0.5
+                signals.append(("MACD", f"Histogram {hist_now:+.2f}", contrib,
+                               "BEARISH — MACD below signal, momentum negative", "#FF4444"))
+            else:
+                contrib = 0.0
+                signals.append(("MACD", "Flat", contrib,
+                               "NEUTRAL — No MACD signal", "#888888"))
+            score += contrib
+    except Exception:
+        pass  # Technical signals are optional; don't break if yf fails
 
     # ──────────────────────────────────────────────────────────
     # DECISION: weighted score → direction + confidence
@@ -3237,8 +3418,8 @@ def fetch_btc_etf_flows():
                 if prev_close <= 0 or curr_close <= 0: continue
                 vwap = (curr_high + curr_low + curr_close) / 3.0
                 direction = 1.0 if (curr_close - prev_close) >= 0 else -1.0
-                # Using VWAP for accumulation mathematically handles intraday volatility
-                ticker_flows[_pd.Timestamp.fromtimestamp(ts).normalize()] = round((volume * vwap * direction * 0.10) / 1e6, 2)
+                # FIX-13: Removed arbitrary 0.10 multiplier; express in billions
+                ticker_flows[_pd.Timestamp.fromtimestamp(ts).normalize()] = round((volume * vwap * direction) / 1e9, 4)
             if ticker_flows: all_flows[ticker] = ticker_flows
             _time.sleep(1.0)
         except Exception as e:
@@ -3267,7 +3448,8 @@ def fetch_btc_etf_flows_fallback():
                 prev_close = hist["Close"].shift(1)
                 vwap = (hist["High"] + hist["Low"] + hist["Close"]) / 3.0
                 direction = (hist["Close"] - prev_close).apply(lambda x: 1.0 if x >= 0 else -1.0)
-                all_data[ticker] = ((hist["Volume"] * vwap * direction * 0.10) / 1e6).iloc[1:]
+                # FIX-13: Removed arbitrary 0.10 multiplier; express in billions
+                all_data[ticker] = ((hist["Volume"] * vwap * direction) / 1e9).iloc[1:]
             except Exception as e:
                 logger.error("BTC ETF Fallback flow error for %s: %s", ticker, str(e))
                 continue
@@ -3559,19 +3741,23 @@ def get_cross_asset_volatility():
 
 
 # ════════════════════════════════════════════════════════════════════
-# FEATURE 5: MACRO CORRELATION MATRIX (60-day Pearson)
+# FEATURE 5: MACRO CORRELATION MATRIX (Pearson + Spearman)
 # ════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=3600)
 def get_macro_correlation_matrix(lookback_days=60):
-    """Compute 60-day Pearson correlation matrix for cross-asset analysis."""
+    """Compute Pearson and Spearman correlation matrices for cross-asset analysis.
+    
+    FEAT-06: Expanded from 5 to 7 assets (added ^TNX + HYG).
+    Returns dict with {pearson, spearman, labels, lookback_days} or None.
+    """
     import numpy as np
     if yf is None:
         return None
 
     assets = {
         "SPY": "S&P 500", "TLT": "Bonds (20Y)", "GLD": "Gold",
-        "USO": "Oil", "UUP": "Dollar",
+        "USO": "Oil", "UUP": "Dollar", "^TNX": "10Y Yield", "HYG": "HY Credit",
     }
     tickers = list(assets.keys())
 
@@ -3590,12 +3776,21 @@ def get_macro_correlation_matrix(lookback_days=60):
         if returns.empty or len(returns) < 20:
             return None
 
-        corr_matrix = returns.corr()
-        labels = [assets.get(t, t) for t in corr_matrix.columns]
-        corr_matrix.columns = labels
-        corr_matrix.index = labels
+        pearson = returns.corr(method="pearson")
+        spearman = returns.corr(method="spearman")
+        labels = [assets.get(t, t) for t in pearson.columns]
+        
+        pearson.columns = labels
+        pearson.index = labels
+        spearman.columns = labels
+        spearman.index = labels
 
-        return corr_matrix
+        return {
+            "pearson": pearson,
+            "spearman": spearman,
+            "labels": labels,
+            "lookback_days": lookback_days,
+        }
     except Exception as e:
         logger.error("Correlation matrix calculation failed", extra={"error": str(e)})
         return None
@@ -3781,6 +3976,343 @@ def get_iv_term_structure(ticker="SPY"):
 
 
 # ════════════════════════════════════════════════════════════════════
+# FEATURE 7B: IV SKEW SURFACE — 25-DELTA PUT/CALL SKEW
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=600)
+def get_iv_skew(ticker="SPY"):
+    """Compute 25-delta put/call IV skew across first 6 expiries.
+    
+    For each expiry, finds strikes closest to 25-delta for calls and puts
+    using bs_greeks_engine, then computes ATM IV, 25Δ call IV, 25Δ put IV,
+    and the skew (put IV - call IV).
+    
+    Zero additional API calls — uses option chains already being fetched.
+    """
+    if yf is None:
+        return None
+    try:
+        tk = get_yf_ticker(ticker)
+        if tk is None:
+            return None
+
+        fi = tk.fast_info
+        price = getattr(fi, "last_price", None)
+        if price is None or price <= 0:
+            h = tk.history(period="1d")
+            price = float(h["Close"].iloc[-1]) if not h.empty else None
+        if price is None:
+            return None
+
+        exps = list(tk.options)
+        if not exps:
+            return None
+
+        selected_exps = exps[:min(6, len(exps))]
+        today = datetime.today().date()
+        r = 0.045  # risk-free rate assumption
+
+        results = []
+        for exp in selected_exps:
+            try:
+                chain = tk.option_chain(exp)
+                if chain is None:
+                    continue
+                calls, puts = chain.calls, chain.puts
+                if calls.empty or puts.empty:
+                    continue
+
+                exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+                dte = max((exp_date - today).days, 1)
+                T = dte / 365.0
+
+                # ATM IV (closest strike to spot)
+                calls["_dist"] = (calls["strike"] - price).abs()
+                atm_call = calls.nsmallest(1, "_dist")
+                atm_iv = float(atm_call["impliedVolatility"].iloc[0]) if not atm_call.empty else None
+
+                # Find 25-delta call strike: iterate OTM calls, find closest to |delta| = 0.25
+                otm_calls = calls[calls["strike"] >= price].copy()
+                if not otm_calls.empty and "impliedVolatility" in otm_calls.columns:
+                    otm_calls["_delta"] = otm_calls.apply(
+                        lambda row: abs(bs_greeks_engine(price, row["strike"], T, r, max(row.get("impliedVolatility", 0.2), 0.01), "call")["delta"]),
+                        axis=1)
+                    otm_calls["_d25_diff"] = (otm_calls["_delta"] - 0.25).abs()
+                    c25_row = otm_calls.nsmallest(1, "_d25_diff")
+                    iv_25c = float(c25_row["impliedVolatility"].iloc[0]) if not c25_row.empty else None
+                else:
+                    iv_25c = None
+
+                # Find 25-delta put strike: iterate OTM puts, find closest to |delta| = 0.25
+                otm_puts = puts[puts["strike"] <= price].copy()
+                if not otm_puts.empty and "impliedVolatility" in otm_puts.columns:
+                    otm_puts["_delta"] = otm_puts.apply(
+                        lambda row: abs(bs_greeks_engine(price, row["strike"], T, r, max(row.get("impliedVolatility", 0.2), 0.01), "put")["delta"]),
+                        axis=1)
+                    otm_puts["_d25_diff"] = (otm_puts["_delta"] - 0.25).abs()
+                    p25_row = otm_puts.nsmallest(1, "_d25_diff")
+                    iv_25p = float(p25_row["impliedVolatility"].iloc[0]) if not p25_row.empty else None
+                else:
+                    iv_25p = None
+
+                if atm_iv is None:
+                    continue
+
+                skew = ((iv_25p or 0) - (iv_25c or 0)) * 100
+                skew_label = "PUT PREMIUM" if skew > 2 else "CALL PREMIUM" if skew < -2 else "FLAT"
+
+                results.append({
+                    "expiry": exp,
+                    "dte": dte,
+                    "iv_atm": round(atm_iv * 100, 2),
+                    "iv_25c": round(iv_25c * 100, 2) if iv_25c else None,
+                    "iv_25p": round(iv_25p * 100, 2) if iv_25p else None,
+                    "skew": round(skew, 2),
+                    "skew_label": skew_label,
+                })
+            except Exception:
+                continue
+
+        return results if results else None
+    except Exception as e:
+        logger.error("IV skew fetch failed", extra={"error": str(e)})
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════
+# FEATURE 7C: REALIZED VS IMPLIED VOLATILITY SPREAD
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=600)
+def get_rv_iv_spread(ticker="SPY"):
+    """Compute 20-day realized vol vs front-month ATM IV.
+    
+    RV20 - IV spread is the canonical vol premium signal:
+      spread > +3%  → SELL VOL (IV cheap relative to realized)
+      spread < -3%  → BUY VOL  (IV expensive relative to realized)
+    
+    Zero new API calls — uses yf history + existing IV term structure.
+    """
+    import numpy as np
+    try:
+        tk = get_yf_ticker(ticker)
+        if tk is None:
+            return None
+        h = tk.history(period="60d")
+        if h is None or len(h) < 25:
+            return None
+
+        # 20-day realized volatility (annualized, close-to-close)
+        returns = h["Close"].pct_change().dropna()
+        rv20 = float(returns.tail(20).std() * np.sqrt(252) * 100)
+
+        # Front-month ATM IV from existing term structure
+        iv_data = get_iv_term_structure(ticker)
+        if iv_data and len(iv_data) > 0:
+            front_iv = iv_data[0]["atm_iv"]
+            dte = iv_data[0]["dte"]
+        else:
+            return None
+
+        spread = rv20 - front_iv
+        if spread > 3:
+            signal, signal_color = "SELL VOL", "#FF4444"
+        elif spread < -3:
+            signal, signal_color = "BUY VOL", "#00CC44"
+        else:
+            signal, signal_color = "NEUTRAL", "#888888"
+
+        return {
+            "rv20": round(rv20, 2),
+            "front_iv": round(front_iv, 2),
+            "spread": round(spread, 2),
+            "signal": signal,
+            "signal_color": signal_color,
+            "dte": dte,
+        }
+    except Exception as e:
+        logger.error("RV/IV spread failed", extra={"error": str(e)})
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════
+# FEATURE 7D: CFTC COMMITMENT OF TRADERS (COT) INSTITUTIONAL POSITIONING
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=86400)
+def get_cot_positioning():
+    """Fetch CFTC Commitment of Traders data for key futures contracts.
+    
+    Parses net non-commercial positions for ES, NQ, GC, CL, ZN from the
+    CFTC bulk CSV (free, no API key). Updates weekly on Fridays.
+    """
+    import io
+    import zipfile
+    
+    # Contract code map: CFTC commodity code → display name
+    CONTRACT_MAP = {
+        "13874+": ("S&P 500 (ES)", "ES"),
+        "209742": ("Nasdaq 100 (NQ)", "NQ"),
+        "088691": ("Gold (GC)", "GC"),
+        "067651": ("WTI Crude (CL)", "CL"),
+        "043602": ("10Y T-Note (ZN)", "ZN"),
+    }
+
+    year = datetime.today().year
+    results = []
+
+    try:
+        # Try current year first, then previous year if not yet available
+        for yr in [year, year - 1]:
+            url = f"https://www.cftc.gov/files/dea/history/fut_fin_xls_{yr}.zip"
+            try:
+                resp = requests.get(url, timeout=30)
+                if resp.status_code != 200:
+                    continue
+                with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
+                    csv_names = [n for n in z.namelist() if n.endswith('.csv') or n.endswith('.txt')]
+                    if not csv_names:
+                        continue
+                    with z.open(csv_names[0]) as f:
+                        import csv as _csv
+                        raw_text = io.TextIOWrapper(f, encoding='utf-8', errors='replace')
+                        reader = _csv.DictReader(raw_text)
+                        
+                        # Collect last 2 weeks of data for each contract
+                        contract_data = {}
+                        for row in reader:
+                            cftc_code = (row.get("CFTC_Contract_Market_Code") or "").strip()
+                            if cftc_code not in CONTRACT_MAP:
+                                continue
+                            name, symbol = CONTRACT_MAP[cftc_code]
+                            try:
+                                noncomm_long = int(float(row.get("NonComm_Positions_Long_All", 0)))
+                                noncomm_short = int(float(row.get("NonComm_Positions_Short_All", 0)))
+                                net = noncomm_long - noncomm_short
+                                report_date = row.get("Report_Date_as_YYYY-MM-DD", "")
+                                if cftc_code not in contract_data:
+                                    contract_data[cftc_code] = []
+                                contract_data[cftc_code].append({
+                                    "name": name, "symbol": symbol,
+                                    "net_noncomm": net, "date": report_date,
+                                    "long": noncomm_long, "short": noncomm_short,
+                                })
+                            except (ValueError, TypeError):
+                                continue
+
+                        # Get latest + previous for weekly change
+                        for cftc_code, entries in contract_data.items():
+                            entries.sort(key=lambda x: x["date"], reverse=True)
+                            if not entries:
+                                continue
+                            latest = entries[0]
+                            prev_net = entries[1]["net_noncomm"] if len(entries) > 1 else latest["net_noncomm"]
+                            net_change = latest["net_noncomm"] - prev_net
+
+                            if latest["net_noncomm"] > 0:
+                                signal, signal_color = "NET LONG", "#00CC44"
+                            elif latest["net_noncomm"] < 0:
+                                signal, signal_color = "NET SHORT", "#FF4444"
+                            else:
+                                signal, signal_color = "FLAT", "#888888"
+
+                            results.append({
+                                "name": latest["name"],
+                                "symbol": latest["symbol"],
+                                "net_noncomm": latest["net_noncomm"],
+                                "net_change": net_change,
+                                "date": latest["date"],
+                                "signal": signal,
+                                "signal_color": signal_color,
+                            })
+                if results:
+                    break
+            except Exception:
+                continue
+
+        return results if results else None
+    except Exception as e:
+        logger.error("CFTC COT fetch failed", extra={"error": str(e)})
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════
+# FEATURE 7E: ECONOMIC SURPRISE INDEX (ESI PROXY)
+# ════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=3600)
+def get_economic_surprise_index(fred_key=None):
+    """Compute Economic Surprise Index from macro calendar actual vs forecast.
+    
+    For HIGH importance events with both actual and forecast populated,
+    computes surprise_pct = (actual - forecast) / |forecast| * 100.
+    Averages across major releases: CPI, NFP, PCE, GDP, Retail Sales, ISM.
+    
+    Zero new API calls — processes data from get_macro_calendar().
+    """
+    try:
+        cal = get_macro_calendar(fred_key)
+        if not cal:
+            return None
+
+        MARKET_MOVERS = ["cpi", "nonfarm", "payroll", "pce", "gdp", "retail sales", "ism"]
+        items = []
+        for ev in cal:
+            if ev.get("importance") != "HIGH":
+                continue
+            actual_str = str(ev.get("actual", "")).strip().replace("%", "").replace(",", "")
+            forecast_str = str(ev.get("forecast", "")).strip().replace("%", "").replace(",", "")
+            if not actual_str or not forecast_str:
+                continue
+            try:
+                actual = float(actual_str)
+                forecast = float(forecast_str)
+            except (ValueError, TypeError):
+                continue
+            if abs(forecast) < 0.001:
+                continue
+
+            name = ev.get("name", "")
+            name_l = name.lower()
+            is_mover = any(kw in name_l for kw in MARKET_MOVERS)
+            surprise_pct = (actual - forecast) / abs(forecast) * 100
+
+            items.append({
+                "name": name,
+                "date": str(ev.get("date", "")),
+                "actual": actual,
+                "forecast": forecast,
+                "surprise_pct": round(surprise_pct, 2),
+                "is_market_mover": is_mover,
+            })
+
+        if not items:
+            return None
+
+        # Average of market-mover surprises (or all if insufficient)
+        mover_items = [i for i in items if i["is_market_mover"]]
+        avg_pool = mover_items if len(mover_items) >= 2 else items
+        avg_surprise = sum(i["surprise_pct"] for i in avg_pool) / len(avg_pool)
+
+        if avg_surprise > 1.0:
+            label, label_color = "BEATS", "#00CC44"
+        elif avg_surprise < -1.0:
+            label, label_color = "MISSES", "#FF4444"
+        else:
+            label, label_color = "IN LINE", "#FF8C00"
+
+        return {
+            "items": items[:10],
+            "avg_surprise_pct": round(avg_surprise, 2),
+            "label": label,
+            "label_color": label_color,
+        }
+    except Exception as e:
+        logger.error("Economic surprise index failed", extra={"error": str(e)})
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════
 # FEATURE 8: GAMMA SQUEEZE SCANNER
 # ════════════════════════════════════════════════════════════════════
 
@@ -3792,11 +4324,12 @@ def get_gamma_squeeze_scanner():
         return None
 
     # Universe of meme/squeeze-prone stocks + high SI names
+    # FIX-01: Removed BBBY, WISH, GOEV — all delisted; yf.download returns empty data
     SCAN_UNIVERSE = [
-        "GME", "AMC", "BBBY", "KOSS", "BB", "NOK", "PLTR", "SOFI",
+        "GME", "AMC", "KOSS", "BB", "NOK", "PLTR", "SOFI",
         "RIVN", "LCID", "MARA", "RIOT", "COIN", "CVNA", "UPST",
-        "SNOW", "DKNG", "SPCE", "BYND", "FUBO", "WKHS", "GOEV",
-        "TLRY", "SNDL", "CLOV", "WISH", "SKLZ", "RKT", "OPEN",
+        "SNOW", "DKNG", "SPCE", "BYND", "FUBO", "WKHS",
+        "TLRY", "SNDL", "CLOV", "SKLZ", "RKT", "OPEN",
     ]
 
     try:
