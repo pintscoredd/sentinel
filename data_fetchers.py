@@ -1126,7 +1126,9 @@ def finnhub_officers(ticker, key):
         if tk:
             # 1. Extract from insider_transactions FIRST (generic titles like "Officer")
             try:
-                idf = tk.insider_transactions
+                idf = tk.insider_transactions if hasattr(tk, "insider_transactions") else None
+                if idf is None and hasattr(tk, "get_insider_transactions"):
+                    idf = tk.get_insider_transactions()
                 if idf is not None and not idf.empty:
                     if 'Insider' in idf.columns and 'Position' in idf.columns:
                         for _, row in idf.iterrows():
@@ -1134,6 +1136,13 @@ def finnhub_officers(ticker, key):
                             pos = str(row['Position']).strip()
                             if ins_name and pos and ins_name not in role_map:
                                 role_map[ins_name] = pos
+                rh = tk.get_insider_roster_holders() if hasattr(tk, "get_insider_roster_holders") else None
+                if rh is not None and not rh.empty and 'Name' in rh.columns and 'Position' in rh.columns:
+                    for _, row in rh.iterrows():
+                        ins_name = str(row['Name']).strip().upper()
+                        pos = str(row['Position']).strip()
+                        if ins_name and pos and ins_name not in role_map:
+                            role_map[ins_name] = pos
             except:
                 pass
 
@@ -3907,7 +3916,7 @@ def get_iv_term_structure(ticker="SPY"):
         # Get current price
         fi = tk.fast_info
         price = getattr(fi, "last_price", None)
-        if price is None or price <= 0:
+        if price is None or float(price) <= 0:
             h = tk.history(period="1d")
             price = float(h["Close"].iloc[-1]) if not h.empty else None
         if price is None:
@@ -3998,7 +4007,7 @@ def get_iv_skew(ticker="SPY"):
 
         fi = tk.fast_info
         price = getattr(fi, "last_price", None)
-        if price is None or price <= 0:
+        if price is None or float(price) <= 0:
             h = tk.history(period="1d")
             price = float(h["Close"].iloc[-1]) if not h.empty else None
         if price is None:
@@ -4385,7 +4394,7 @@ def get_gamma_squeeze_scanner():
                 if short_ratio > 5:
                     squeeze_score += 1.0
 
-                if squeeze_score < 2.0:
+                if squeeze_score < 1.0:
                     continue
 
                 # Signal classification

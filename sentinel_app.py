@@ -327,6 +327,14 @@ font-family: var(--mono); font-size: 14px; align-items: center; width:100%;
 }
 .fut-row:hover { background: var(--bg2); }
 
+/* WEI ROW */
+.wei-row {
+display: grid; grid-template-columns: 35px 2fr 1.5fr 1.5fr 1fr 1fr 1fr;
+gap: 6px; padding: 5px 10px; border-bottom: 1px solid var(--bg3);
+font-family: var(--mono); font-size: 14px; align-items: center; width:100%;
+}
+.wei-row:hover { background: var(--bg2); }
+
 /* THEATER */
 .theater-row {
 display: flex; justify-content: space-between; align-items: center;
@@ -894,7 +902,7 @@ with tabs[1]:
             if _region_df.empty:
                 continue
             st.markdown(
-                f'<div class="fut-row" style="color:#FF6600;font-size:9px;letter-spacing:2px;'
+                f'<div class="wei-row" style="color:#FF6600;font-size:9px;letter-spacing:2px;'
                 f'border-bottom:1px solid #333;padding:4px 0;margin-top:6px">'
                 f'<span>{_region.upper()}</span>'
                 f'<span>INDEX</span><span>LAST</span><span>CHG</span><span>%</span>'
@@ -906,14 +914,14 @@ with tabs[1]:
                 _c = "#00CC44" if _pct_val >= 0 else "#FF4444"
                 _arr = "▲" if _pct_val >= 0 else "▼"
                 st.markdown(
-                    f'<div class="fut-row">'
-                    f'<span style="color:#FF6600;font-size:12px">{row["Flag"]}</span>'
-                    f'<span style="color:#CCC;font-size:11px">{row["Index"]}</span>'
-                    f'<span style="color:#FFF;font-weight:600">{row["Value"]}</span>'
-                    f'<span style="color:{_c}">{row["Change"]}</span>'
-                    f'<span style="color:{_c};font-weight:700">{_arr} {row["% Chg"]}</span>'
-                    f'<span style="color:#888">{row["10D Vol"]}</span>'
-                    f'<span style="color:#888">{row["30D Vol"]}</span>'
+                    f'<div class="wei-row">'
+                    f'<span style="font-size:20px">{row["Flag"]}</span>'
+                    f'<span style="color:#FFF;font-size:14px;font-weight:700">{row["Index"]}</span>'
+                    f'<span style="color:{_c};font-weight:600">{row["Value"]:.3f}</span>'
+                    f'<span style="color:{_c}">{row["Change"]:.3f}</span>'
+                    f'<span style="color:{_c};font-weight:700">{_arr} {_pct_val:.3f}%</span>'
+                    f'<span style="color:#888">{row["10D Vol"]:.3f}</span>'
+                    f'<span style="color:#888">{row["30D Vol"]:.3f}</span>'
                     f'</div>',
                     unsafe_allow_html=True)
     else:
