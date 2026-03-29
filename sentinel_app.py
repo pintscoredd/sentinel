@@ -852,32 +852,32 @@ with tabs[1]:
                     with fp:
                         st.markdown('<div style="color:#FF4444;font-size:9px;font-weight:700;letter-spacing:2px">▼ ALL PUTS</div>', unsafe_allow_html=True)
                         st.markdown(render_options_table(puts, "puts", q["price"]), unsafe_allow_html=True)
-        else:
-            options_chain.clear(tkr, selected_exp)
-            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Options unavailable for this ticker.</p>', unsafe_allow_html=True)
-
-        st.markdown('<div class="bb-ph" style="margin-top:12px">🔍 INSIDER TRANSACTIONS</div>', unsafe_allow_html=True)
-        if st.session_state.finnhub_key:
-            with st.spinner("Loading insider data…"):
-                ins = finnhub_insider(tkr, st.session_state.finnhub_key)
-            if ins:
-                st.markdown(render_insider_cards(ins[:10], tkr, st.session_state.finnhub_key), unsafe_allow_html=True)
             else:
-                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No recent insider transactions found.</p>', unsafe_allow_html=True)
-        else:
-            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Add Finnhub key in sidebar.</p>', unsafe_allow_html=True)
+                options_chain.clear(tkr, selected_exp)
+                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Options unavailable for this ticker.</p>', unsafe_allow_html=True)
 
-        st.markdown('<div class="bb-ph" style="margin-top:12px">📉 SHORT VOLUME & DARK POOL PROXY (FINRA/YF)</div>', unsafe_allow_html=True)
-        finra = get_finra_short_volume(tkr)
-        if finra:
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Short % of Float", f"{finra['short_pct_float']}%")
-            c2.metric("Short Shares", f"{finra['short_shares']:,}")
-            c3.metric("Days to Cover", f"{finra['days_to_cover']}")
+            st.markdown('<div class="bb-ph" style="margin-top:12px">🔍 INSIDER TRANSACTIONS</div>', unsafe_allow_html=True)
+            if st.session_state.finnhub_key:
+                with st.spinner("Loading insider data…"):
+                    ins = finnhub_insider(tkr, st.session_state.finnhub_key)
+                if ins:
+                    st.markdown(render_insider_cards(ins[:10], tkr, st.session_state.finnhub_key), unsafe_allow_html=True)
+                else:
+                    st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No recent insider transactions found.</p>', unsafe_allow_html=True)
+            else:
+                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Add Finnhub key in sidebar.</p>', unsafe_allow_html=True)
+
+            st.markdown('<div class="bb-ph" style="margin-top:12px">📉 SHORT VOLUME & DARK POOL PROXY (FINRA/YF)</div>', unsafe_allow_html=True)
+            finra = get_finra_short_volume(tkr)
+            if finra:
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Short % of Float", f"{finra['short_pct_float']}%")
+                c2.metric("Short Shares", f"{finra['short_shares']:,}")
+                c3.metric("Days to Cover", f"{finra['days_to_cover']}")
+            else:
+                st.markdown('<div style="color:#555;font-size:11px">Short volume data unavailable for this ticker.</div>', unsafe_allow_html=True)
         else:
-            st.markdown('<div style="color:#555;font-size:11px">Short volume data unavailable for this ticker.</div>', unsafe_allow_html=True)
-    else:
-        st.error(f"No data for '{tkr}'. Check ticker symbol.")
+            st.error(f"No data for '{tkr}'. Check ticker symbol.")
 
     # ════════════════════════════════════════════════════════════════════
     # GLOBAL WEI MONITOR — above Futures
