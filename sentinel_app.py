@@ -843,32 +843,72 @@ with tabs[1]:
                     with fp:
                         st.markdown('<div style="color:#FF4444;font-size:9px;font-weight:700;letter-spacing:2px">▼ ALL PUTS</div>', unsafe_allow_html=True)
                         st.markdown(render_options_table(puts, "puts", q["price"]), unsafe_allow_html=True)
-            else:
-                options_chain.clear(tkr, selected_exp)
-                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Options unavailable for this ticker.</p>', unsafe_allow_html=True)
-
-            st.markdown('<div class="bb-ph" style="margin-top:12px">🔍 INSIDER TRANSACTIONS</div>', unsafe_allow_html=True)
-            if st.session_state.finnhub_key:
-                with st.spinner("Loading insider data…"):
-                    ins = finnhub_insider(tkr, st.session_state.finnhub_key)
-                if ins:
-                    st.markdown(render_insider_cards(ins[:10], tkr, st.session_state.finnhub_key), unsafe_allow_html=True)
-                else:
-                    st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No recent insider transactions found.</p>', unsafe_allow_html=True)
-            else:
-                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Add Finnhub key in sidebar.</p>', unsafe_allow_html=True)
-
-            st.markdown('<div class="bb-ph" style="margin-top:12px">📉 SHORT VOLUME & DARK POOL PROXY (FINRA/YF)</div>', unsafe_allow_html=True)
-            finra = get_finra_short_volume(tkr)
-            if finra:
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Short % of Float", f"{finra['short_pct_float']}%")
-                c2.metric("Short Shares", f"{finra['short_shares']:,}")
-                c3.metric("Days to Cover", f"{finra['days_to_cover']}")
-            else:
-                st.markdown('<div style="color:#555;font-size:11px">Short volume data unavailable for this ticker.</div>', unsafe_allow_html=True)
         else:
-            st.error(f"No data for '{tkr}'. Check ticker symbol.")
+            options_chain.clear(tkr, selected_exp)
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Options unavailable for this ticker.</p>', unsafe_allow_html=True)
+
+        st.markdown('<div class="bb-ph" style="margin-top:12px">🔍 INSIDER TRANSACTIONS</div>', unsafe_allow_html=True)
+        if st.session_state.finnhub_key:
+            with st.spinner("Loading insider data…"):
+                ins = finnhub_insider(tkr, st.session_state.finnhub_key)
+            if ins:
+                st.markdown(render_insider_cards(ins[:10], tkr, st.session_state.finnhub_key), unsafe_allow_html=True)
+            else:
+                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No recent insider transactions found.</p>', unsafe_allow_html=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Add Finnhub key in sidebar.</p>', unsafe_allow_html=True)
+
+        st.markdown('<div class="bb-ph" style="margin-top:12px">📉 SHORT VOLUME & DARK POOL PROXY (FINRA/YF)</div>', unsafe_allow_html=True)
+        finra = get_finra_short_volume(tkr)
+        if finra:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Short % of Float", f"{finra['short_pct_float']}%")
+            c2.metric("Short Shares", f"{finra['short_shares']:,}")
+            c3.metric("Days to Cover", f"{finra['days_to_cover']}")
+        else:
+            st.markdown('<div style="color:#555;font-size:11px">Short volume data unavailable for this ticker.</div>', unsafe_allow_html=True)
+    else:
+        st.error(f"No data for '{tkr}'. Check ticker symbol.")
+
+    # ════════════════════════════════════════════════════════════════════
+    # GLOBAL WEI MONITOR — above Futures
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+    st.markdown('<div class="bb-ph">🌍 GLOBAL EQUITY INDICES — WORLD MARKET MONITOR</div>', unsafe_allow_html=True)
+
+    with st.spinner("Loading global indices…"):
+        _wei_df = get_global_indices()
+
+    if not _wei_df.empty:
+        for _region in ["Americas", "EMEA", "APAC"]:
+            _region_df = _wei_df[_wei_df["Region"] == _region]
+            if _region_df.empty:
+                continue
+            st.markdown(
+                f'<div class="fut-row" style="color:#FF6600;font-size:9px;letter-spacing:2px;'
+                f'border-bottom:1px solid #333;padding:4px 0;margin-top:6px">'
+                f'<span>{_region.upper()}</span>'
+                f'<span>INDEX</span><span>LAST</span><span>CHG</span><span>%</span>'
+                f'<span>10D σ</span><span>30D σ</span>'
+                f'</div>',
+                unsafe_allow_html=True)
+            for _, row in _region_df.iterrows():
+                _pct_val = float(row["% Chg"].replace("%","")) if isinstance(row["% Chg"], str) else row["% Chg"]
+                _c = "#00CC44" if _pct_val >= 0 else "#FF4444"
+                _arr = "▲" if _pct_val >= 0 else "▼"
+                st.markdown(
+                    f'<div class="fut-row">'
+                    f'<span style="color:#FF6600;font-size:12px">{row["Flag"]}</span>'
+                    f'<span style="color:#CCC;font-size:11px">{row["Index"]}</span>'
+                    f'<span style="color:#FFF;font-weight:600">{row["Value"]}</span>'
+                    f'<span style="color:{_c}">{row["Change"]}</span>'
+                    f'<span style="color:{_c};font-weight:700">{_arr} {row["% Chg"]}</span>'
+                    f'<span style="color:#888">{row["10D Vol"]}</span>'
+                    f'<span style="color:#888">{row["30D Vol"]}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True)
+    else:
+        st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Global index data loading…</p>', unsafe_allow_html=True)
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
@@ -893,7 +933,7 @@ with tabs[1]:
                     f'<span style="color:#AAA;font-size:10px">{f["name"]}</span>'
                     f'<span style="color:#FFF;font-weight:600">{fmt_p(f["price"])}</span>'
                     f'<span style="color:{c};font-weight:700">{arr}{abs(f["pct"]):.2f}%</span>'
-                    f'<span style="color:{c}">{"+"+str(f["change"]) if f["change"]>=0 else str(f["change"])}</span>'
+                    f'<span style="color:{c}">{chr(43)+str(f["change"]) if f["change"]>=0 else str(f["change"])}</span>'
                     f'<span style="color:{sig_c};font-size:10px;font-weight:700">{sig_lbl}</span>'
                     f'</div>', unsafe_allow_html=True)
         else:
@@ -903,6 +943,122 @@ with tabs[1]:
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
+    # ════════════════════════════════════════════════════════════════════
+    # SECTOR % CHANGE — above Top Movers
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown('<div class="bb-ph">📊 SECTOR PERFORMANCE — % CHANGE</div>', unsafe_allow_html=True)
+    sec_df = sector_etfs()
+    if not sec_df.empty:
+        ss = sec_df.sort_values("Pct")
+        fig2 = go.Figure(go.Bar(x=ss["Pct"],y=ss["Sector"],orientation="h",
+            marker=dict(color=[pct_color(x) for x in ss["Pct"]],line=dict(width=0)),
+            text=ss["Pct"].apply(lambda x: f"{x:+.2f}%"),textposition="outside",
+            textfont=dict(color="#FF8C00",size=10)))
+        fig2.update_layout(**CHART_LAYOUT,height=350,xaxis_title="% Change",margin=dict(l=0,r=70,t=10,b=0))
+        st.plotly_chart(fig2, width="stretch")
+
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+    # ════════════════════════════════════════════════════════════════════
+    # SECTOR RELATIVE ROTATION GRAPH — under % change
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown('<div class="bb-ph">🔄 SECTOR RELATIVE ROTATION GRAPH — RRG</div>', unsafe_allow_html=True)
+
+    with st.spinner("Computing sector rotation…"):
+        _rrg_data = get_sector_rrg()
+
+    if _rrg_data:
+        _rrg_colors = {
+            "LEADING": "#00CC44", "WEAKENING": "#FFCC00",
+            "LAGGING": "#FF4444", "IMPROVING": "#00AAFF"
+        }
+        fig_rrg = dark_fig(500)
+
+        # Compute dynamic axis bounds from actual data for tighter zoom
+        _rrg_ratios = [s["rs_ratio"] for s in _rrg_data]
+        _rrg_moms   = [s["rs_momentum"] for s in _rrg_data]
+        _x_pad = max(abs(r - 100) for r in _rrg_ratios) * 1.35 + 0.3
+        _y_pad = max(abs(m - 100) for m in _rrg_moms) * 1.35 + 0.3
+        _x_pad = max(_x_pad, 1.0)
+        _y_pad = max(_y_pad, 1.0)
+        _x0, _x1 = 100 - _x_pad, 100 + _x_pad
+        _y0, _y1 = 100 - _y_pad, 100 + _y_pad
+
+        # Quadrant background fills (clipped to data range)
+        fig_rrg.add_shape(type="rect", x0=100, y0=100, x1=_x1, y1=_y1, fillcolor="rgba(0,204,68,0.06)",  line_width=0, layer="below")
+        fig_rrg.add_shape(type="rect", x0=100, y0=_y0, x1=_x1, y1=100, fillcolor="rgba(255,204,0,0.06)", line_width=0, layer="below")
+        fig_rrg.add_shape(type="rect", x0=_x0, y0=_y0, x1=100, y1=100, fillcolor="rgba(255,68,68,0.06)",  line_width=0, layer="below")
+        fig_rrg.add_shape(type="rect", x0=_x0, y0=100, x1=100, y1=_y1, fillcolor="rgba(0,170,255,0.06)", line_width=0, layer="below")
+
+        # Crosshairs
+        fig_rrg.add_hline(y=100, line_dash="dot", line_color="#2A2A2A", line_width=1)
+        fig_rrg.add_vline(x=100, line_dash="dot", line_color="#2A2A2A", line_width=1)
+
+        for sector in _rrg_data:
+            color = _rrg_colors.get(sector["quadrant"], "#888")
+            fig_rrg.add_trace(go.Scatter(
+                x=[sector["rs_ratio"]], y=[sector["rs_momentum"]],
+                mode="markers+text",
+                marker=dict(size=14, color=color, line=dict(width=1.5, color="#000")),
+                text=[sector["sector"]],
+                textposition="top center",
+                textfont=dict(size=10, color=color, family="IBM Plex Mono"),
+                name=sector["sector"],
+                hovertext=(
+                    f"{sector['sector']}<br>"
+                    f"RS-Ratio: {sector['rs_ratio']:.2f}<br>"
+                    f"RS-Mom: {sector['rs_momentum']:.2f}<br>"
+                    f"{sector['quadrant']}"
+                ),
+                hoverinfo="text",
+                showlegend=False,
+            ))
+
+        # Quadrant corner labels (placed near the edges of the data range)
+        _ql_x_r = _x0 + (_x1 - _x0) * 0.78
+        _ql_x_l = _x0 + (_x1 - _x0) * 0.22
+        _ql_y_t = _y0 + (_y1 - _y0) * 0.88
+        _ql_y_b = _y0 + (_y1 - _y0) * 0.12
+        for label, x, y, color in [
+            ("LEADING",   _ql_x_r, _ql_y_t, "#00CC44"),
+            ("WEAKENING", _ql_x_r, _ql_y_b, "#FFCC00"),
+            ("LAGGING",   _ql_x_l, _ql_y_b, "#FF4444"),
+            ("IMPROVING", _ql_x_l, _ql_y_t, "#00AAFF"),
+        ]:
+            fig_rrg.add_annotation(
+                x=x, y=y, text=label, showarrow=False,
+                font=dict(size=9, color=color, family="IBM Plex Mono"),
+                opacity=0.5,
+            )
+
+        fig_rrg.update_layout(
+            margin=dict(l=50, r=30, t=40, b=50), height=500,
+            title=dict(
+                text="RS-RATIO vs RS-MOMENTUM  —  🟢 Leading · 🟡 Weakening · 🔴 Lagging · 🔵 Improving",
+                font=dict(size=10, color="#FF6600"), x=0,
+            ),
+            xaxis=dict(
+                title="RS-Ratio (Strength vs SPY)",
+                range=[_x0, _x1],
+                color="#555", gridcolor="#111",
+                tickfont=dict(size=9), zeroline=False,
+            ),
+            yaxis=dict(
+                title="RS-Momentum",
+                range=[_y0, _y1],
+                color="#555", gridcolor="#111",
+                tickfont=dict(size=9), zeroline=False,
+            ),
+        )
+        st.plotly_chart(fig_rrg, use_container_width=True)
+    else:
+        st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Sector RRG data loading…</p>', unsafe_allow_html=True)
+
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+    # ════════════════════════════════════════════════════════════════════
+    # TOP MOVERS — Gainers / Losers
+    # ════════════════════════════════════════════════════════════════════
     st.markdown('<div class="bb-ph">🏆 TOP MOVERS — S&P 500 UNIVERSE</div>', unsafe_allow_html=True)
     with st.spinner("Scanning S&P 500 for top movers…"):
         gainers, losers = top_movers()
@@ -944,6 +1100,9 @@ with tabs[1]:
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
+    # ════════════════════════════════════════════════════════════════════
+    # STATISTICAL ARBITRAGE
+    # ════════════════════════════════════════════════════════════════════
     st.markdown('<div class="bb-ph">⚖️ STATISTICAL ARBITRAGE (Cointegration Screener)</div>', unsafe_allow_html=True)
     with st.spinner("Running Engle-Granger tests..."):
         arb_df = stat_arb_screener()
@@ -953,17 +1112,76 @@ with tabs[1]:
         st.markdown('<div style="color:#555;font-size:11px">Stat Arb data unavailable (statsmodels missing or fetch failed).</div>', unsafe_allow_html=True)
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-    sec_df = sector_etfs()
-    if not sec_df.empty:
-        ss = sec_df.sort_values("Pct")
-        fig2 = go.Figure(go.Bar(x=ss["Pct"],y=ss["Sector"],orientation="h",
-            marker=dict(color=[pct_color(x) for x in ss["Pct"]],line=dict(width=0)),
-            text=ss["Pct"].apply(lambda x: f"{x:+.2f}%"),textposition="outside",
-            textfont=dict(color="#FF8C00",size=10)))
-        fig2.update_layout(**CHART_LAYOUT,height=350,xaxis_title="% Change",margin=dict(l=0,r=70,t=10,b=0))
-        st.plotly_chart(fig2, width="stretch")
+
+    # ════════════════════════════════════════════════════════════════════
+    # IV TERM STRUCTURE + GAMMA SQUEEZE — under Stat Arb
+    # ════════════════════════════════════════════════════════════════════
+    _iv_left, _iv_right = st.columns([3, 2])
+    with _iv_left:
+        st.markdown('<div class="bb-ph">📐 IV TERM STRUCTURE — ATM IMPLIED VOLATILITY</div>', unsafe_allow_html=True)
+        _iv_ticker = st.text_input("IV Ticker", value="SPY", key="iv_ts_tkr", placeholder="SPY, QQQ, AAPL…")
+        with st.spinner("Loading IV term structure…"):
+            _iv_data = get_iv_term_structure(_iv_ticker.upper().strip())
+
+        if _iv_data:
+            _iv_dtes   = [d["dte"]    for d in _iv_data]
+            _iv_vals   = [d["atm_iv"] for d in _iv_data]
+            _iv_labels = [d["expiry"] for d in _iv_data]
+
+            fig_iv = dark_fig(300)
+            fig_iv.add_trace(go.Scatter(
+                x=_iv_dtes, y=_iv_vals, mode="lines+markers+text",
+                line=dict(color="#FF6600", width=2),
+                marker=dict(size=8, color="#FF6600", line=dict(width=1, color="#000")),
+                text=[f"{v:.1f}%" for v in _iv_vals],
+                textposition="top center", textfont=dict(size=8, color="#FF8C00"),
+                hovertext=[f"Expiry: {l}<br>DTE: {d}<br>ATM IV: {v:.2f}%" for l, d, v in zip(_iv_labels, _iv_dtes, _iv_vals)],
+                hoverinfo="text",
+            ))
+            fig_iv.update_layout(
+                margin=dict(l=40, r=10, t=30, b=40), height=300,
+                title=dict(text=f"{_iv_ticker.upper()} IV TERM STRUCTURE", font=dict(size=10, color="#FF6600"), x=0),
+                xaxis=dict(title="DTE", color="#555", gridcolor="#111", tickfont=dict(size=9)),
+                yaxis=dict(title="ATM IV %", color="#555", gridcolor="#111", tickfont=dict(size=9), ticksuffix="%"),
+            )
+            st.plotly_chart(fig_iv, use_container_width=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">IV data unavailable.</p>', unsafe_allow_html=True)
+
+    with _iv_right:
+        st.markdown('<div class="bb-ph">🔫 GAMMA SQUEEZE SCANNER</div>', unsafe_allow_html=True)
+        with st.spinner("Scanning for squeeze candidates…"):
+            _squeeze_data = get_gamma_squeeze_scanner()
+
+        if _squeeze_data:
+            st.markdown(
+                '<div style="display:grid;grid-template-columns:55px 65px 60px 55px 55px 55px 90px;gap:4px;'
+                'padding:4px 8px;border-bottom:1px solid #FF6600;font-family:monospace;'
+                'font-size:8px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
+                '<span>TICKER</span><span>PRICE</span><span>SI %</span><span>SI DAYS</span>'
+                '<span>VOL ×</span><span>SCORE</span><span>SIGNAL</span></div>',
+                unsafe_allow_html=True)
+
+            for sq in _squeeze_data[:10]:
+                _si_c = "#FF4444" if sq["short_pct"] > 15 else "#FF8C00" if sq["short_pct"] > 8 else "#888"
+                _vr_c = "#FF4444" if sq["vol_ratio"] > 2.5 else "#FF8C00" if sq["vol_ratio"] > 1.5 else "#888"
+                _sc_c = "#FF4444" if sq["squeeze_score"] >= 5 else "#FF8C00" if sq["squeeze_score"] >= 3 else "#888"
+                st.markdown(
+                    f'<div style="display:grid;grid-template-columns:55px 65px 60px 55px 55px 55px 90px;gap:4px;'
+                    f'padding:4px 8px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px">'
+                    f'<span style="color:#FF6600;font-weight:700">{sq["ticker"]}</span>'
+                    f'<span style="color:#CCC">${sq["price"]:,.2f}</span>'
+                    f'<span style="color:{_si_c};font-weight:600">{sq["short_pct"]:.1f}%</span>'
+                    f'<span style="color:#888">{sq["short_ratio"]:.1f}</span>'
+                    f'<span style="color:{_vr_c};font-weight:600">{sq["vol_ratio"]:.1f}×</span>'
+                    f'<span style="color:{_sc_c};font-weight:700">{sq["squeeze_score"]:.1f}</span>'
+                    f'<span style="color:{_sc_c};font-size:9px">{sq["signal"]}</span></div>',
+                    unsafe_allow_html=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No squeeze candidates found.</p>', unsafe_allow_html=True)
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
     st.markdown('<div class="bb-ph">🗺 S&P 500 MARKET HEATMAP — FINVIZ STYLE</div>', unsafe_allow_html=True)
     with st.spinner("Building heatmap (scanning ~120 stocks)…"):
         hm_data = get_heatmap_data()
@@ -1035,172 +1253,6 @@ with tabs[1]:
             ts=art.get("datetime",0)
             d=datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else ""
             st.markdown(render_news_card(title,url,src,d,"bb-news bb-news-macro"), unsafe_allow_html=True)
-
-    # ════════════════════════════════════════════════════════════════════
-    # GLOBAL WEI MONITOR (Feature 1)
-    # ════════════════════════════════════════════════════════════════════
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-    st.markdown('<div class="bb-ph">🌍 GLOBAL EQUITY INDICES — WORLD MARKET MONITOR</div>', unsafe_allow_html=True)
-
-    with st.spinner("Loading global indices…"):
-        _wei_df = get_global_indices()
-
-    if not _wei_df.empty:
-        for _region in ["Americas", "EMEA", "APAC"]:
-            _region_df = _wei_df[_wei_df["Region"] == _region]
-            if _region_df.empty:
-                continue
-            st.markdown(f'<div style="color:#FF6600;font-size:10px;letter-spacing:2px;margin:8px 0 4px;font-family:monospace;font-weight:700">{_region.upper()}</div>', unsafe_allow_html=True)
-
-            _wei_display = _region_df[["Flag", "Index", "Value", "Change", "% Chg", "10D Vol", "30D Vol", "Sparkline"]].copy()
-            _wei_display["Value"] = _wei_display["Value"].apply(lambda x: f"{x:,.2f}")
-            _wei_display["Change"] = _wei_display["Change"].apply(lambda x: f"{x:+,.2f}")
-            _wei_display["% Chg"] = _wei_display["% Chg"].apply(lambda x: f"{x:+.2f}%")
-            _wei_display["10D Vol"] = _wei_display["10D Vol"].apply(lambda x: f"{x:.1f}%")
-            _wei_display["30D Vol"] = _wei_display["30D Vol"].apply(lambda x: f"{x:.1f}%")
-
-            st.dataframe(
-                _wei_display,
-                column_config={
-                    "Sparkline": st.column_config.LineChartColumn("Trend", width="small"),
-                    "Flag": st.column_config.TextColumn("", width="small"),
-                    "Index": st.column_config.TextColumn("Index", width="medium"),
-                    "Value": st.column_config.TextColumn("Last", width="small"),
-                    "Change": st.column_config.TextColumn("Chg", width="small"),
-                    "% Chg": st.column_config.TextColumn("%", width="small"),
-                    "10D Vol": st.column_config.TextColumn("10D σ", width="small"),
-                    "30D Vol": st.column_config.TextColumn("30D σ", width="small"),
-                },
-                hide_index=True,
-                use_container_width=True,
-            )
-    else:
-        st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Global index data loading…</p>', unsafe_allow_html=True)
-
-    # ════════════════════════════════════════════════════════════════════
-    # SECTOR RELATIVE ROTATION GRAPH (Feature 6)
-    # ════════════════════════════════════════════════════════════════════
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-    st.markdown('<div class="bb-ph">🔄 SECTOR RELATIVE ROTATION GRAPH — RRG</div>', unsafe_allow_html=True)
-
-    with st.spinner("Computing sector rotation…"):
-        _rrg_data = get_sector_rrg()
-
-    if _rrg_data:
-        _rrg_colors = {
-            "LEADING": "#00CC44", "WEAKENING": "#FFCC00",
-            "LAGGING": "#FF4444", "IMPROVING": "#00AAFF"
-        }
-        fig_rrg = dark_fig(450)
-
-        # Quadrant shading
-        fig_rrg.add_shape(type="rect", x0=100, y0=100, x1=105, y1=105, fillcolor="rgba(0,204,68,0.05)", line_width=0)
-        fig_rrg.add_shape(type="rect", x0=100, y0=95, x1=105, y1=100, fillcolor="rgba(255,204,0,0.05)", line_width=0)
-        fig_rrg.add_shape(type="rect", x0=95, y0=95, x1=100, y1=100, fillcolor="rgba(255,68,68,0.05)", line_width=0)
-        fig_rrg.add_shape(type="rect", x0=95, y0=100, x1=100, y1=105, fillcolor="rgba(0,170,255,0.05)", line_width=0)
-
-        # Add crosshairs at 100,100
-        fig_rrg.add_hline(y=100, line_dash="dash", line_color="#333", line_width=1)
-        fig_rrg.add_vline(x=100, line_dash="dash", line_color="#333", line_width=1)
-
-        for sector in _rrg_data:
-            color = _rrg_colors.get(sector["quadrant"], "#888")
-            fig_rrg.add_trace(go.Scatter(
-                x=[sector["rs_ratio"]], y=[sector["rs_momentum"]],
-                mode="markers+text",
-                marker=dict(size=12, color=color, line=dict(width=1, color="#000")),
-                text=[sector["sector"]],
-                textposition="top center",
-                textfont=dict(size=9, color=color, family="IBM Plex Mono"),
-                name=f"{sector['sector']} ({sector['quadrant']})",
-                hovertext=f"{sector['sector']}<br>RS-Ratio: {sector['rs_ratio']:.2f}<br>RS-Mom: {sector['rs_momentum']:.2f}<br>{sector['quadrant']}",
-                hoverinfo="text",
-                showlegend=False,
-            ))
-
-        # Quadrant labels
-        for label, x, y, color in [("LEADING", 101.5, 101.5, "#00CC44"), ("WEAKENING", 101.5, 98.5, "#FFCC00"),
-                                    ("LAGGING", 98.5, 98.5, "#FF4444"), ("IMPROVING", 98.5, 101.5, "#00AAFF")]:
-            fig_rrg.add_annotation(x=x, y=y, text=label, showarrow=False, font=dict(size=8, color=color, family="IBM Plex Mono"), opacity=0.4)
-
-        fig_rrg.update_layout(
-            margin=dict(l=40, r=40, t=30, b=40), height=450,
-            title=dict(text="RS-RATIO vs RS-MOMENTUM (🟢 Leading · 🟡 Weakening · 🔴 Lagging · 🔵 Improving)",
-                       font=dict(size=10, color="#FF6600"), x=0),
-            xaxis=dict(title="RS-Ratio", color="#555", gridcolor="#111", tickfont=dict(size=9)),
-            yaxis=dict(title="RS-Momentum", color="#555", gridcolor="#111", tickfont=dict(size=9)),
-        )
-        st.plotly_chart(fig_rrg, use_container_width=True)
-    else:
-        st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Sector RRG data loading…</p>', unsafe_allow_html=True)
-
-    # ════════════════════════════════════════════════════════════════════
-    # IV TERM STRUCTURE (Feature 7)
-    # ════════════════════════════════════════════════════════════════════
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-    _iv_left, _iv_right = st.columns([3, 2])
-    with _iv_left:
-        st.markdown('<div class="bb-ph">📐 IV TERM STRUCTURE — ATM IMPLIED VOLATILITY</div>', unsafe_allow_html=True)
-        _iv_ticker = st.text_input("IV Ticker", value="SPY", key="iv_ts_tkr", placeholder="SPY, QQQ, AAPL…")
-        with st.spinner("Loading IV term structure…"):
-            _iv_data = get_iv_term_structure(_iv_ticker.upper().strip())
-
-        if _iv_data:
-            _iv_dtes = [d["dte"] for d in _iv_data]
-            _iv_vals = [d["atm_iv"] for d in _iv_data]
-            _iv_labels = [d["expiry"] for d in _iv_data]
-
-            fig_iv = dark_fig(300)
-            fig_iv.add_trace(go.Scatter(
-                x=_iv_dtes, y=_iv_vals, mode="lines+markers+text",
-                line=dict(color="#FF6600", width=2),
-                marker=dict(size=8, color="#FF6600", line=dict(width=1, color="#000")),
-                text=[f"{v:.1f}%" for v in _iv_vals],
-                textposition="top center", textfont=dict(size=8, color="#FF8C00"),
-                hovertext=[f"Expiry: {l}<br>DTE: {d}<br>ATM IV: {v:.2f}%" for l, d, v in zip(_iv_labels, _iv_dtes, _iv_vals)],
-                hoverinfo="text",
-            ))
-            fig_iv.update_layout(
-                margin=dict(l=40, r=10, t=30, b=40), height=300,
-                title=dict(text=f"{_iv_ticker.upper()} IV TERM STRUCTURE", font=dict(size=10, color="#FF6600"), x=0),
-                xaxis=dict(title="DTE", color="#555", gridcolor="#111", tickfont=dict(size=9)),
-                yaxis=dict(title="ATM IV %", color="#555", gridcolor="#111", tickfont=dict(size=9), ticksuffix="%"),
-            )
-            st.plotly_chart(fig_iv, use_container_width=True)
-        else:
-            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">IV data unavailable.</p>', unsafe_allow_html=True)
-
-    with _iv_right:
-        st.markdown('<div class="bb-ph">🔫 GAMMA SQUEEZE SCANNER</div>', unsafe_allow_html=True)
-        with st.spinner("Scanning for squeeze candidates…"):
-            _squeeze_data = get_gamma_squeeze_scanner()
-
-        if _squeeze_data:
-            st.markdown(
-                '<div style="display:grid;grid-template-columns:55px 65px 60px 55px 55px 55px 90px;gap:4px;'
-                'padding:4px 8px;border-bottom:1px solid #FF6600;font-family:monospace;'
-                'font-size:8px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
-                '<span>TICKER</span><span>PRICE</span><span>SI %</span><span>SI DAYS</span>'
-                '<span>VOL ×</span><span>SCORE</span><span>SIGNAL</span></div>',
-                unsafe_allow_html=True)
-
-            for sq in _squeeze_data[:10]:
-                _si_c = "#FF4444" if sq["short_pct"] > 15 else "#FF8C00" if sq["short_pct"] > 8 else "#888"
-                _vr_c = "#FF4444" if sq["vol_ratio"] > 2.5 else "#FF8C00" if sq["vol_ratio"] > 1.5 else "#888"
-                _sc_c = "#FF4444" if sq["squeeze_score"] >= 5 else "#FF8C00" if sq["squeeze_score"] >= 3 else "#888"
-                st.markdown(
-                    f'<div style="display:grid;grid-template-columns:55px 65px 60px 55px 55px 55px 90px;gap:4px;'
-                    f'padding:4px 8px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px">'
-                    f'<span style="color:#FF6600;font-weight:700">{sq["ticker"]}</span>'
-                    f'<span style="color:#CCC">${sq["price"]:,.2f}</span>'
-                    f'<span style="color:{_si_c};font-weight:600">{sq["short_pct"]:.1f}%</span>'
-                    f'<span style="color:#888">{sq["short_ratio"]:.1f}</span>'
-                    f'<span style="color:{_vr_c};font-weight:600">{sq["vol_ratio"]:.1f}×</span>'
-                    f'<span style="color:{_sc_c};font-weight:700">{sq["squeeze_score"]:.1f}</span>'
-                    f'<span style="color:{_sc_c};font-size:9px">{sq["signal"]}</span></div>',
-                    unsafe_allow_html=True)
-        else:
-            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No squeeze candidates found.</p>', unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════
 # TAB 2 — SPX 0DTE
