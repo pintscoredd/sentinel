@@ -289,7 +289,7 @@ def get_futures():
         pass
     return rows
 
-@st.cache_resource(ttl=300)
+@st.cache_data(ttl=300)
 def get_heatmap_data():
     SECTOR_STOCKS = {
         "Technology": ["AAPL", "MSFT", "NVDA", "AVGO", "META", "ORCL", "AMD", "INTC", "QCOM", "TXN", "ADBE", "CRM", "INTU", "IBM", "ACN"],
@@ -323,21 +323,29 @@ def multi_quotes(tickers):
     return [q for t in tickers if (q := yahoo_quote(t))]
 
 @st.cache_data(ttl=300)
-def vix_price():
+def get_spy_history():
     try:
-        h = get_yf_ticker("^VIX").history(period="5d")
-        return round(h["Close"].iloc[-1], 2) if not h.empty else None
-    except:
-        return None
+        t = get_yf_ticker("SPY")
+        return t.history(period="1y") if t else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
 
-@st.cache_data(ttl=3600)
-def vix_with_percentile():
-    """VIX with 1Y and 3Y percentile ranks + regime divergence flag."""
+@st.cache_data(ttl=300)
+def get_tlt_history():
+    try:
+        t = get_yf_ticker("TLT")
+        return t.history(period="1y") if t else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+@st.cache_data(ttl=300)
+def get_vix_full():
+    """VIX with current price, 1Y and 3Y percentile ranks + regime divergence flag."""
     try:
         h = get_yf_ticker("^VIX").history(period="3y")
         if h.empty or len(h) < 20:
             return None, None, None
-        current = h["Close"].iloc[-1]
+        current = round(float(h["Close"].iloc[-1]), 2)
         
         # 3Y percentile rank (full history)
         pct_3y = (h["Close"] < current).mean() * 100
@@ -355,7 +363,7 @@ def vix_with_percentile():
         if pct_1y > 70 and pct_3y < 50:
             posture += " (REGIME: structurally normal)"
         
-        return round(current, 2), round(pct_1y, 1), posture
+        return current, round(pct_1y, 1), posture
     except Exception:
         return None, None, None
 
@@ -664,12 +672,21 @@ def stat_arb_screener(pairs=None):
     end = datetime.today()
     start = end - timedelta(days=252)
     
+    # Bulk download all unique tickers to prevent sequential per-pair delays
+    all_tickers = list(set([t for pair in pairs for t in pair]))
+    try:
+        bulk_data = yf.download(all_tickers, start=start, end=end, progress=False, threads=True)["Close"]
+    except Exception as e:
+        logger.error(f"stat_arb_screener bulk download failed: {e}")
+        return None
+    
     for t1, t2 in pairs:
         try:
-            stk1 = yf.download(t1, start=start, end=end, progress=False)["Close"].dropna()
-            stk2 = yf.download(t2, start=start, end=end, progress=False)["Close"].dropna()
-            if isinstance(stk1, pd.DataFrame): stk1 = stk1.iloc[:, 0]
-            if isinstance(stk2, pd.DataFrame): stk2 = stk2.iloc[:, 0]
+            if isinstance(bulk_data, pd.DataFrame):
+                stk1 = bulk_data[t1].dropna()
+                stk2 = bulk_data[t2].dropna()
+            else:
+                continue
             
             df = pd.DataFrame({t1: stk1, t2: stk2}).dropna()
             if len(df) < 100:
@@ -794,27 +811,18 @@ def calc_stock_fear_greed():
         scores = []
 
         # --- Signal 1: VIX Level — 1-year rolling percentile rank (self-calibrating) ---
-        v = yahoo_quote("^VIX")
-        if v:
-            vix = v["price"]
-            # FIX-05: Use 1Y rolling percentile rank instead of hardcoded linear bounds
-            try:
-                vix_hist = get_yf_ticker("^VIX").history(period="1y")
-                if vix_hist is not None and len(vix_hist) >= 20:
-                    pct_rank = (vix_hist["Close"] < vix).mean()  # 0..1
-                    vix_score = (1 - pct_rank) * 100  # high percentile = fear = low score
-                else:
-                    vix_score = max(0, min(100, 100 - (vix - 10) / 30 * 100))  # fallback
-            except Exception:
-                vix_score = max(0, min(100, 100 - (vix - 10) / 30 * 100))  # fallback
+        vix_info = get_vix_full()
+        if vix_info and vix_info[0] is not None:
+            vix, pct_1y, _ = vix_info
+            vix_score = 100 - pct_1y
             scores.append(("VIX", vix_score))
 
         # --- Signal 2: Market Momentum (SPY vs 125-day MA) ---
         try:
-            h = get_yf_ticker("SPY").history(period="7mo")
+            h = get_spy_history().tail(130)
             if len(h) >= 125:
-                current = h["Close"].iloc[-1]
-                ma125 = h["Close"].iloc[-125:].mean()
+                current = float(h["Close"].iloc[-1])
+                ma125 = float(h["Close"].tail(125).mean())
                 # How far above/below MA, mapped 0-100
                 pct_above = (current / ma125 - 1) * 100
                 mom_score = max(0, min(100, 50 + pct_above * 5))
@@ -824,13 +832,14 @@ def calc_stock_fear_greed():
 
         # --- Signal 3: Safe Haven Demand (TLT vs SPY 20-day relative perf) ---
         try:
-            tlt = yahoo_quote("TLT")
-            spy = yahoo_quote("SPY")
-            if tlt and spy:
-                # Positive TLT outperformance = fear; underperformance = greed
-                relative = tlt["pct"] - spy["pct"]
-                # TLT outperforms by >1% → fear (score 0-30); underperforms → greed (70-100)
-                sh_score = max(0, min(100, 50 - relative * 15))
+            tlt_hist = get_tlt_history().tail(21)
+            spy_hist = get_spy_history().tail(21)
+            if len(tlt_hist) >= 20 and len(spy_hist) >= 20:
+                t_ret = (tlt_hist["Close"].iloc[-1] / tlt_hist["Close"].iloc[0] - 1) * 100
+                s_ret = (spy_hist["Close"].iloc[-1] / spy_hist["Close"].iloc[0] - 1) * 100
+                relative_20d = t_ret - s_ret
+                # Score mapping: Positive 20d outperformance of TLT -> fear
+                sh_score = max(0, min(100, 50 - relative_20d * 5))
                 scores.append(("SafeHaven", sh_score))
         except Exception:
             pass
@@ -946,7 +955,7 @@ def build_brief_context():
         headlines_block = "LIVE GEO HEADLINES: unavailable (GDELT timeout — use model knowledge for recent conflicts)"
 
     try:
-        macro_qs = multi_quotes(["^TNX", "^TYX", "DX-Y.NYB", "GC=F", "CL=F", "TLT", "GLD", "UUP", "HYG", "LQD"])
+        macro_qs = multi_quotes(["^TNX", "^TYX", "DX-Y.NYB", "GC=F", "TLT", "UUP", "HYG", "LQD"])
         macro_lines = []
         labels = {"^TNX": "10Y Yield", "^TYX": "30Y Yield", "DX-Y.NYB": "DXY",
                   "GC=F": "Gold", "CL=F": "WTI Crude", "TLT": "TLT (20Y Bond)",
@@ -1628,7 +1637,7 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
     # ──────────────────────────────────────────────────────────
     try:
         import numpy as np
-        spy_hist = get_yf_ticker("SPY").history(period="60d")
+        spy_hist = get_spy_history().tail(60)
         if spy_hist is not None and len(spy_hist) >= 20:
             _closes = spy_hist["Close"]
             # RSI(14) calculation
@@ -3765,11 +3774,14 @@ def get_macro_correlation_matrix(lookback_days=60):
     if yf is None:
         return None
 
-    assets = {
-        "SPY": "S&P 500", "TLT": "Bonds (20Y)", "GLD": "Gold",
-        "USO": "Oil", "UUP": "Dollar", "^TNX": "10Y Yield", "HYG": "HY Credit",
+    assets_bulk = {
+        "GLD": "Gold", "USO": "Oil", "UUP": "Dollar", "^TNX": "10Y Yield", "HYG": "HY Credit",
     }
-    tickers = list(assets.keys())
+    assets = {
+        "SPY": "S&P 500", "TLT": "Bonds (20Y)",
+        **assets_bulk
+    }
+    tickers = list(assets_bulk.keys())
 
     try:
         data = yf.download(tickers, period=f"{lookback_days + 10}d", progress=False, threads=True)
@@ -3777,9 +3789,16 @@ def get_macro_correlation_matrix(lookback_days=60):
             return None
 
         if isinstance(data.columns, pd.MultiIndex):
-            closes = data["Close"]
+            closes = data["Close"].copy()
         else:
-            closes = data[["Close"]]
+            closes = data[["Close"]].copy()
+
+        spy_hist = get_spy_history().tail(lookback_days + 10)
+        tlt_hist = get_tlt_history().tail(lookback_days + 10)
+        if not spy_hist.empty:
+            closes["SPY"] = spy_hist["Close"]
+        if not tlt_hist.empty:
+            closes["TLT"] = tlt_hist["Close"]
 
         returns = closes.pct_change().dropna().tail(lookback_days)
 
@@ -3824,7 +3843,7 @@ def get_sector_rrg():
         "XLRE": "Real Estate", "XLI": "Industrials",
     }
 
-    tickers = list(sector_etf_map.keys()) + ["SPY"]
+    tickers = list(sector_etf_map.keys())
 
     try:
         data = yf.download(tickers, period="6mo", progress=False, threads=True)
@@ -3836,7 +3855,8 @@ def get_sector_rrg():
         else:
             return None
 
-        spy_close = closes["SPY"].dropna()
+        spy_hist = get_spy_history().tail(130)
+        spy_close = spy_hist["Close"].dropna()
         if spy_close.empty or len(spy_close) < 60:
             return None
 
@@ -4348,7 +4368,8 @@ def get_gamma_squeeze_scanner():
         if data.empty:
             return []
 
-        rows = []
+        # PRE-FILTER to avoid N+1 .info() calls!
+        pre_filtered = []
         for ticker in SCAN_UNIVERSE:
             try:
                 if isinstance(data.columns, pd.MultiIndex):
@@ -4366,6 +4387,29 @@ def get_gamma_squeeze_scanner():
 
                 # Volume surge ratio
                 vol_ratio = round(latest_vol / avg_vol_20d, 2) if avg_vol_20d > 0 else 0.0
+                if vol_ratio > 0.5:
+                    pre_filtered.append({
+                        "ticker": ticker,
+                        "current_price": current_price,
+                        "avg_vol_20d": avg_vol_20d,
+                        "latest_vol": latest_vol,
+                        "vol_ratio": vol_ratio
+                    })
+            except (KeyError, IndexError):
+                continue
+
+        # Top 10 by volume surge to fetch .info
+        pre_filtered.sort(key=lambda x: x["vol_ratio"], reverse=True)
+        top_candidates = pre_filtered[:10]
+
+        rows = []
+        for cand in top_candidates:
+            try:
+                ticker = cand["ticker"]
+                current_price = cand["current_price"]
+                avg_vol_20d = cand["avg_vol_20d"]
+                latest_vol = cand["latest_vol"]
+                vol_ratio = cand["vol_ratio"]
 
                 # Short interest data via yfinance info
                 tk = get_yf_ticker(ticker)
@@ -4374,7 +4418,6 @@ def get_gamma_squeeze_scanner():
                 info = tk.info or {}
                 short_pct = _safe_float(info.get("shortPercentOfFloat", 0)) * 100
                 short_ratio = _safe_float(info.get("shortRatio", 0))
-                shares_short = _safe_int(info.get("sharesShort", 0))
 
                 # Score: combine short interest + volume surge
                 squeeze_score = 0.0

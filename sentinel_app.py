@@ -48,6 +48,7 @@ from data_fetchers import (
     get_sector_rrg, get_iv_term_structure, get_gamma_squeeze_scanner,
     get_finnhub_earnings_calendar, get_expected_move,
     get_ai_earnings_summary, get_margin_chart_data,
+    get_vix_full, get_spy_history, get_tlt_history,
     # ─── FEAT additions ───
     get_iv_skew, get_rv_iv_spread, get_cot_positioning, get_economic_surprise_index,
 )
@@ -470,6 +471,23 @@ DEFAULTS = {
 for k,v in DEFAULTS.items():
     if k not in st.session_state: st.session_state[k]=v
 
+@st.cache_data(ttl=3600)
+def warm_caches_on_startup(watchlist):
+    import threading
+    def _warm():
+        try:
+            get_vix_full()
+            sector_etfs()
+            get_futures()
+            polymarket_events(30)
+            multi_quotes(watchlist)
+        except Exception as e:
+            pass
+    threading.Thread(target=_warm, daemon=True).start()
+    return True
+
+warm_caches_on_startup(st.session_state.watchlist)
+
 # ════════════════════════════════════════════════════════════════════
 # SIDEBAR
 # ════════════════════════════════════════════════════════════════════
@@ -541,12 +559,13 @@ tabs = st.tabs(["BRIEF","MARKETS","SPX 0DTE","MACRO","CRYPTO","POLYMARKET","GEO"
 with tabs[0]:
     st.markdown('<div class="bb-ph">⚡ SENTINEL MORNING BRIEF</div>', unsafe_allow_html=True)
 
-    @st.fragment(run_every="30s")
+    @st.fragment(run_every="60s")
     def render_morning_brief_header():
         ref_col, mkt_col = st.columns([1, 1])
         with ref_col:
             if st.button("↺ REFRESH ALL DATA"):
                 st.cache_data.clear(); st.rerun()
+            st.markdown(f'<div style="color:#888;font-size:10px;margin-top:4px">Last updated: {now_pst()}</div>', unsafe_allow_html=True)
         with mkt_col:
             mkt_status, mkt_color, mkt_detail = is_market_open()
             st.markdown(
@@ -555,7 +574,7 @@ with tabs[0]:
                 f' <span style="color:#555;font-size:10px">{mkt_detail}</span></div>',
                 unsafe_allow_html=True)
 
-        KEY_T = {"SPY":"S&P 500","QQQ":"Nasdaq 100","DIA":"Dow Jones","IWM":"Russell 2K",
+        KEY_T = {"SPY":"S&P 500","^SPX":"SPX","DIA":"Dow Jones","IWM":"Russell 2K",
                 "^TNX":"10Y Yield","DX-Y.NYB":"USD Index","GLD":"Gold","CL=F":"WTI Crude","BTC-USD":"Bitcoin"}
         qs = multi_quotes(list(KEY_T.keys()))
         if qs:
@@ -574,7 +593,10 @@ with tabs[0]:
     with L:
         st.markdown('<div class="bb-ph">⚡ MARKET SENTIMENT</div>', unsafe_allow_html=True)
         s1,s2,s3 = st.columns(3)
-        v = vix_price()
+        
+        vix_info = get_vix_full()
+        v = vix_info[0] if vix_info else None
+        
         vix_q = yahoo_quote("^VIX")
         with s1:
             if v:
@@ -588,9 +610,9 @@ with tabs[0]:
                 sfg_c = "#00CC44" if sfg_val>=55 else ("#FF4444" if sfg_val<35 else "#FF8C00")
                 st.markdown(f'<div class="fg-gauge"><div class="fg-num" style="color:{sfg_c}">{sfg_val}</div><div class="fg-lbl" style="color:{sfg_c}">{sfg_lbl}</div><div style="color:#555;font-size:8px;margin-top:2px">STOCK MARKET F&G</div></div>', unsafe_allow_html=True)
         with s3:
-            vix_val, vix_pct, posture = vix_with_percentile()
+            vix_val, vix_pct, posture = vix_info if vix_info else (None, None, None)
             if vix_val:
-                pc = {"RISK-ON": "#00CC44", "NEUTRAL": "#FF8C00", "RISK-OFF": "#FF4444"}[posture]
+                pc = {"RISK-ON": "#00CC44", "NEUTRAL": "#FF8C00", "RISK-OFF": "#FF4444"}.get(posture[:8] if posture else "NEUTRAL", "#FF8C00")
                 st.markdown(
                     f'<div class="fg-gauge">'
                     f'<div style="color:#888;font-size:9px">POSTURE</div>'
@@ -803,7 +825,8 @@ with tabs[1]:
                     exp_fmt = str(exp_date)
 
                 try:
-                    current_vix = vix_price()
+                    v_info = get_vix_full()
+                    current_vix = v_info[0] if v_info else 20.0
                 except:
                     current_vix = 20.0
 
@@ -861,7 +884,7 @@ with tabs[1]:
                         st.markdown('<div style="color:#FF4444;font-size:9px;font-weight:700;letter-spacing:2px">▼ ALL PUTS</div>', unsafe_allow_html=True)
                         st.markdown(render_options_table(puts, "puts", q["price"]), unsafe_allow_html=True)
             else:
-                options_chain.clear(tkr, selected_exp)
+                options_chain.clear()  # Bust entire cache; clear(args) is fragile on misses
                 st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Options unavailable for this ticker.</p>', unsafe_allow_html=True)
 
             st.markdown('<div class="bb-ph" style="margin-top:12px">🔍 INSIDER TRANSACTIONS</div>', unsafe_allow_html=True)
