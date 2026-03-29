@@ -4174,7 +4174,7 @@ def get_cot_positioning():
     try:
         # Try current year first, then previous year if not yet available
         for yr in [year, year - 1]:
-            url = f"https://www.cftc.gov/files/dea/history/fut_fin_txt_{yr}.zip"
+            url = f"https://www.cftc.gov/files/dea/history/deacot{yr}.zip"
             try:
                 resp = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15)"})
                 if resp.status_code != 200:
