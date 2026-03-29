@@ -2336,15 +2336,16 @@ def get_macro_overview(fred_key):
     return {"signals": signals, "total_score": total_score, "max_score": max_score, "pct": pct, "env_label": env_label, "env_color": env_color, "env_desc": env_desc}
 
 @st.cache_data(ttl=3600)
-def get_macro_calendar(fred_key=None):
+def get_macro_calendar(fred_key=None, days_back=0):
     from datetime import date as _date, timedelta as _td
     import calendar as _cal
     today = _date.today()
+    start_date = today - _td(days=days_back)
     horizon = today + _td(days=45)
     results = []
 
     try:
-        params = {"from": today.strftime("%Y-%m-%d"), "to": horizon.strftime("%Y-%m-%d")}
+        params = {"from": start_date.strftime("%Y-%m-%d"), "to": horizon.strftime("%Y-%m-%d")}
         fk = st.secrets.get("FINNHUB_API_KEY") or st.secrets.get("finnhub_api_key") or ""
         if fk: params["token"] = str(fk).strip()
         data = _fetch_robust_json("https://finnhub.io/api/v1/calendar/economic", params=params, timeout=12)
@@ -2360,7 +2361,7 @@ def get_macro_calendar(fred_key=None):
             if not (is_high or is_med or impact in ("HIGH","MEDIUM")): continue
             try: ev_date = _date.fromisoformat((ev.get("time") or "")[:10])
             except Exception: continue
-            if not (today <= ev_date <= horizon): continue
+            if not (start_date <= ev_date <= horizon): continue
             results.append({
                 "date": ev_date, "name": name, "importance": "HIGH" if is_high else "MEDIUM", "time": "",
                 "actual": str(ev.get("actual","")) if ev.get("actual") is not None else "",
@@ -2375,7 +2376,7 @@ def get_macro_calendar(fred_key=None):
 
     if fred_key:
         try:
-            data = _fetch_robust_json("https://api.stlouisfed.org/fred/releases/dates", params={"api_key": fred_key, "file_type": "json", "realtime_start": today.strftime("%Y-%m-%d"), "realtime_end": horizon.strftime("%Y-%m-%d"), "limit": 150, "sort_order": "asc", "include_release_dates_with_no_data": "false"}, timeout=12)
+            data = _fetch_robust_json("https://api.stlouisfed.org/fred/releases/dates", params={"api_key": fred_key, "file_type": "json", "realtime_start": start_date.strftime("%Y-%m-%d"), "realtime_end": horizon.strftime("%Y-%m-%d"), "limit": 150, "sort_order": "asc", "include_release_dates_with_no_data": "false"}, timeout=12)
             FRED_NAMES = {"10":("CPI","HIGH"), "21":("Jobs Report","HIGH"), "46":("PCE","HIGH"), "20":("GDP","HIGH"), "9":("FOMC","HIGH"), "15":("PPI","MEDIUM"), "14":("Retail Sales","MEDIUM"), "17":("Industrial Production","MEDIUM"), "19":("Housing Starts","MEDIUM"), "11":("Consumer Confidence","MEDIUM"), "22":("Initial Jobless Claims","MEDIUM"), "175":("ISM Mfg PMI","MEDIUM"), "184":("ISM Services PMI","MEDIUM"), "13":("Durable Goods","MEDIUM"), "69":("ADP Employment","MEDIUM"), "23":("JOLTS","MEDIUM"), "55":("Trade Balance","MEDIUM")}
             for rel in data.get("release_dates", []):
                 rid = str(rel.get("release_id",""))
@@ -2384,7 +2385,7 @@ def get_macro_calendar(fred_key=None):
                 for d in rel.get("release_dates",[]):
                     try:
                         rel_date = _date.fromisoformat(d)
-                        if today <= rel_date <= horizon: results.append({"date":rel_date,"name":name,"importance":imp, "time":"","actual":"","forecast":"","previous":"","source":"fred"})
+                        if start_date <= rel_date <= horizon: results.append({"date":rel_date,"name":name,"importance":imp, "time":"","actual":"","forecast":"","previous":"","source":"fred"})
                     except: continue
             if results:
                 results.sort(key=lambda x: x["date"])
@@ -4173,9 +4174,9 @@ def get_cot_positioning():
     try:
         # Try current year first, then previous year if not yet available
         for yr in [year, year - 1]:
-            url = f"https://www.cftc.gov/files/dea/history/fut_fin_xls_{yr}.zip"
+            url = f"https://www.cftc.gov/files/dea/history/fut_fin_txt_{yr}.zip"
             try:
-                resp = requests.get(url, timeout=30)
+                resp = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15)"})
                 if resp.status_code != 200:
                     continue
                 with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
@@ -4260,7 +4261,7 @@ def get_economic_surprise_index(fred_key=None):
     Zero new API calls — processes data from get_macro_calendar().
     """
     try:
-        cal = get_macro_calendar(fred_key)
+        cal = get_macro_calendar(fred_key, days_back=60)
         if not cal:
             return None
 
