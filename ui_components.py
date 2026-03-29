@@ -716,7 +716,7 @@ SENTINEL BRIEFING — {EXACT DATE FROM INJECTION} {TIME PST}
   Retail/Inst : [notable divergence if any]
   Contrarian  : [is sentiment extreme enough to fade?]
   Positioning : [allocation recommendation given sentiment]
-  CONFIDENCE  : [level]
+  CONFIDENCE: [level]
 
 ═══ /earnings — EARNINGS INTEL ═══
   EARNINGS INTEL — [date PST]
@@ -731,11 +731,19 @@ SENTINEL BRIEFING — {EXACT DATE FROM INJECTION} {TIME PST}
 • Plain-English questions get the same analytical rigor without the slash-command structure."""
 
 GEMINI_MODELS = [
-    "gemini-2.5-flash-preview-05-20",  # latest Gemini 2.5 preview
-    "gemini-2.5-flash",                # stable 2.5
-    "gemini-2.0-flash",                # stable 2.0
-    "gemini-2.0-flash-lite",           # lightweight fallback
+    "gemini-3.1-pro",
+    "gemini-3.0-flash",
+    "gemini-3-flash",
+    "gemini-2.5-flash",
 ]
+
+def format_gemini_msg(raw: str) -> str:
+    import re as _re
+    raw = _re.sub(r'`([^`\n]+)`', r'\1', raw)          # strip backtick code spans
+    raw = _re.sub(r'\*\*([^*]+)\*\*', r'\1', raw)    # strip bold **
+    raw = _re.sub(r'\*([^*\n]+)\*', r'\1', raw)       # strip italic *
+    raw = raw.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+    return raw.replace("\n", "<br>")
 
 def list_gemini_models(key):
     """List available Gemini models via the new google-genai SDK."""
@@ -748,26 +756,22 @@ def list_gemini_models(key):
 
 def gemini_response(user_msg, history, context=""):
     """
-    Send a message to Gemini using the google-genai SDK.
+    Send a message to Gemini using the google-genai SDK, streaming the output.
     `context` is the output of market_snapshot_str() — it already contains
     the current date/time AND live market prices as a structured string.
-    These are injected at the very top of the user message so the model
-    cannot hallucinate the date from training data.
     """
     if not st.session_state.gemini_key:
-        return "⚠️ Add your Gemini API key in .streamlit/secrets.toml."
+        yield "⚠️ Add your Gemini API key in .streamlit/secrets.toml."
+        return
     try:
         from google import genai
         from google.genai import types
 
         client = genai.Client(api_key=st.session_state.gemini_key)
 
-        # ── Build the enriched user message ──────────────────────────────────
-        # context already contains: "CURRENT DATE/TIME: ...\nLIVE MARKET DATA: ..."
-        # Append any user-configured session context below that.
         ctx_sections = []
         if context:
-            ctx_sections.append(context)                          # date + live prices (always first)
+            ctx_sections.append(context)
         if getattr(st.session_state, "macro_theses", None):
             ctx_sections.append(f"USER MACRO THESIS: {st.session_state.macro_theses}")
         if getattr(st.session_state, "geo_watch", None):
@@ -778,18 +782,16 @@ def gemini_response(user_msg, history, context=""):
         header = "\n".join(ctx_sections)
         full_user_msg = f"{header}\n\n{user_msg}" if header else user_msg
 
-        # ── Convert chat history to new SDK Content objects ───────────────────
         contents = []
         for m in history[-12:]:
             role = "user" if m["role"] == "user" else "model"
             contents.append(types.Content(role=role, parts=[types.Part(text=m["content"])]))
         contents.append(types.Content(role="user", parts=[types.Part(text=full_user_msg)]))
 
-        # ── Try each model in priority order ─────────────────────────────────
         errors = []
         for model_name in GEMINI_MODELS:
             try:
-                response = client.models.generate_content(
+                response = client.models.generate_content_stream(
                     model=model_name,
                     contents=contents,
                     config=types.GenerateContentConfig(
@@ -798,7 +800,10 @@ def gemini_response(user_msg, history, context=""):
                         temperature=0.35,
                     ),
                 )
-                return f"*[{model_name}]*\n\n{response.text}"
+                yield f"*[{model_name}]*\n\n"
+                for chunk in response:
+                    yield chunk.text
+                return
             except Exception as e:
                 err_str = str(e)
                 errors.append(f"{model_name}: {err_str[:90]}")
@@ -806,14 +811,16 @@ def gemini_response(user_msg, history, context=""):
                         "unavailable", "deprecated", "invalid argument"]
                 if any(x in err_str.lower() for x in soft):
                     continue          # try next model
-                return f"⚠️ Gemini error ({model_name}): {e}"   # hard error — stop
+                
+                yield f"⚠️ Gemini error ({model_name}): {e}"
+                return
 
-        return "⚠️ All models exhausted.\n\nAttempted:\n" + "\n".join(errors)
+        yield "⚠️ All models exhausted.\n\nAttempted:\n" + "\n".join(errors)
 
     except ImportError:
-        return "⚠️ google-genai not installed. Run: pip install google-genai"
+        yield "⚠️ google-genai not installed. Run: pip install google-genai"
     except Exception as e:
-        return f"⚠️ Error: {e}"
+        yield f"⚠️ Error: {e}"
 
 # ════════════════════════════════════════════════════════════════════
 # 0DTE TAB HELPERS

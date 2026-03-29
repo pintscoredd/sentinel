@@ -58,7 +58,7 @@ from ui_components import (
     render_scored_options, render_unusual_trade,
     render_insider_cards, poly_url, poly_status, unusual_side,
     render_poly_card, render_crypto_etf_chart,
-    SENTINEL_PROMPT, GEMINI_MODELS, list_gemini_models, gemini_response,
+    SENTINEL_PROMPT, GEMINI_MODELS, list_gemini_models, gemini_response, format_gemini_msg,
     render_0dte_gex_chart, render_0dte_gex_decoder, render_0dte_recommendation, render_0dte_trade_log,
     render_geo_tab, render_stat_arb_cards,
 )
@@ -3402,15 +3402,7 @@ Try: <span style="color:#FF6600">/brief</span> &nbsp;
             if msg["role"]=="user":
                 st.markdown(f'<div class="chat-user">▶ &nbsp;{_esc(msg["content"])}</div>', unsafe_allow_html=True)
             else:
-                # Clean Gemini markdown artifacts, then render with proper line breaks
-                import re as _re
-                raw = msg["content"]
-                raw = _re.sub(r'`([^`\n]+)`', r'\1', raw)          # strip backtick code spans
-                raw = _re.sub(r'\*\*([^*]+)\*\*', r'\1', raw)    # strip bold **
-                raw = _re.sub(r'\*([^*\n]+)\*', r'\1', raw)       # strip italic *
-                raw = raw.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-                content = raw.replace("\n", "<br>")
-                st.markdown(f'<div class="chat-ai">⚡ SENTINEL<br><br>{content}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="chat-ai">⚡ SENTINEL<br><br>{format_gemini_msg(msg["content"])}</div>', unsafe_allow_html=True)
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
@@ -3434,9 +3426,12 @@ Try: <span style="color:#FF6600">/brief</span> &nbsp;
                     # Use enriched context (with geo headlines + macro rates) for /brief and /geo
                     _is_brief_geo = cmd.startswith("/brief") or cmd.startswith("/geo")
                     _ctx = build_brief_context() if _is_brief_geo else market_snapshot_str()
-                    with st.spinner("⚡ SENTINEL processing…"):
-                        resp = gemini_response(cmd,st.session_state.chat_history[:-1],_ctx)
-                    st.session_state.chat_history.append({"role":"assistant","content":resp})
+                    placeholder = st.empty()
+                    resp_text = ""
+                    for chunk in gemini_response(cmd, st.session_state.chat_history[:-1], _ctx):
+                        resp_text += chunk
+                        placeholder.markdown(f'<div class="chat-ai">⚡ SENTINEL<br><br>{format_gemini_msg(resp_text)}</div>', unsafe_allow_html=True)
+                    st.session_state.chat_history.append({"role":"assistant","content":resp_text})
                     st.rerun()
 
         if st.button("🗑 CLEAR CHAT"):
@@ -3448,9 +3443,12 @@ Try: <span style="color:#FF6600">/brief</span> &nbsp;
             _ui_lower = user_input.strip().lower()
             _is_brief_geo = _ui_lower.startswith("/brief") or _ui_lower.startswith("/geo")
             _ctx = build_brief_context() if _is_brief_geo else market_snapshot_str()
-            with st.spinner("⚡ SENTINEL processing…"):
-                resp = gemini_response(user_input,st.session_state.chat_history[:-1],_ctx)
-            st.session_state.chat_history.append({"role":"assistant","content":resp})
+            placeholder = st.empty()
+            resp_text = ""
+            for chunk in gemini_response(user_input, st.session_state.chat_history[:-1], _ctx):
+                resp_text += chunk
+                placeholder.markdown(f'<div class="chat-ai">⚡ SENTINEL<br><br>{format_gemini_msg(resp_text)}</div>', unsafe_allow_html=True)
+            st.session_state.chat_history.append({"role":"assistant","content":resp_text})
             st.rerun()
 
 # ════════════════════════════════════════════════════════════════════
