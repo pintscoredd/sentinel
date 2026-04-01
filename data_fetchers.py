@@ -3990,12 +3990,25 @@ def get_sector_rrg():
             return None
 
         if isinstance(data.columns, pd.MultiIndex):
-            closes = data["Close"]
+            if "Close" in data.columns.get_level_values(0):
+                closes = data["Close"]
+            elif "Close" in data.columns.get_level_values(1):
+                closes = data.xs("Close", level=1, axis=1)
+            else:
+                closes = data
+        elif "Close" in data.columns:
+            closes = data[["Close"]]
         else:
-            return None
+            closes = data
+
+        if hasattr(closes.index, 'tz_localize') and closes.index.tz is not None:
+            closes.index = closes.index.tz_localize(None)
 
         spy_hist = get_spy_history().tail(130)
         spy_close = spy_hist["Close"].dropna()
+        if hasattr(spy_close.index, 'tz_localize') and spy_close.index.tz is not None:
+            spy_close.index = spy_close.index.tz_localize(None)
+
         if spy_close.empty or len(spy_close) < 60:
             return None
 
