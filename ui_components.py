@@ -19,7 +19,7 @@ except ImportError:
 from data_fetchers import (
     _safe_float, _safe_int, _esc, fmt_p, fmt_pct, pct_color,
     fred_series, finnhub_officers, _parse_poly_field,
-    multi_quotes, vix_price, market_snapshot_str,
+    multi_quotes, market_snapshot_str,
     GEO_FINANCIAL_NETWORKS, GEO_WEBCAM_FEEDS,
     GEO_THEATERS, GEO_IMPACT_TICKERS, GEO_SHIPPING_LANES,
     gdelt_news, newsapi_headlines,

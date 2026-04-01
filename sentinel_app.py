@@ -26,7 +26,7 @@ from data_fetchers import (
     fear_greed_crypto, calc_stock_fear_greed,
     crypto_markets, crypto_global,
     gdelt_news, newsapi_headlines, finnhub_news, finnhub_insider, finnhub_officers,
-    yahoo_quote, vix_price, vix_with_percentile, options_chain, options_expiries, sector_etfs, top_movers,
+    options_chain, options_expiries, sector_etfs, top_movers,
     detect_unusual_poly, market_snapshot_str, _parse_poly_field,
     score_options_chain, score_poly_mispricing,
     get_earnings_calendar, is_market_open,

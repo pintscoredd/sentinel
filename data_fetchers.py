@@ -950,7 +950,8 @@ def market_snapshot_str():
         spx_q  = yahoo_quote("^GSPC")
         spy_q  = yahoo_quote("SPY")
         qs     = multi_quotes(["QQQ", "IWM", "DX-Y.NYB", "GLD", "TLT", "BTC-USD", "CL=F"])
-        v      = vix_price()
+        vix_info = get_vix_full()
+        v      = vix_info[0] if vix_info else None
 
         parts = []
         if spx_q: parts.append(f"SPX: {spx_q['price']:,.2f} ({spx_q['pct']:+.2f}%)")
