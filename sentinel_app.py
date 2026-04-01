@@ -966,7 +966,7 @@ with tabs[1]:
                     f'<span style="color:#FFF;font-size:14px;font-weight:700">{row["Index"]}</span>'
                     f'<span style="color:{_c};font-weight:600">{row["Value"]:.3f}</span>'
                     f'<span style="color:{_c}">{row["Change"]:.3f}</span>'
-                    f'<span style="color:{_c};font-weight:700">{_arr} {_pct_val:.3f}%</span>'
+                    f'<span style="color:{_c};font-weight:700">{_arr} {_pct_val:.2f}%</span>'
                     f'<span style="color:#888">{row["10D Vol"]:.3f}</span>'
                     f'<span style="color:#888">{row["30D Vol"]:.3f}</span>'
                     f'</div>',
@@ -1161,6 +1161,106 @@ with tabs[1]:
                 f'<span style="color:#FF4444">{chg_str}</span>'
                 f'<span style="color:#555;font-size:10px">{vol}</span>'
                 f'</div>', unsafe_allow_html=True)
+
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+    # ════════════════════════════════════════════════════════════════════
+    # RISK-NEUTRAL EXPECTED MOVE (PROBABILITY CONE)
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown('<div class="bb-ph">🔮 RISK-NEUTRAL EXPECTED MOVE — SPY PROBABILITY CONE</div>', unsafe_allow_html=True)
+    with st.spinner("Computing risk-neutral bounds…"):
+        spy_q = yahoo_quote("SPY")
+        vix_q = yahoo_quote("^VIX")
+        if spy_q and vix_q:
+            spy_price = spy_q["price"]
+            vix_iv = vix_q["price"] / 100.0
+            
+            # Future days to plot
+            days = [1, 5, 10, 21, 63, 126, 252]
+            labels = ["1D", "1W", "2W", "1M", "3M", "6M", "1Y"]
+            
+            upper_1sd = []
+            lower_1sd = []
+            
+            import numpy as np
+            for d in days:
+                t = d / 365.0
+                em = spy_price * vix_iv * np.sqrt(t)
+                upper_1sd.append(spy_price + em)
+                lower_1sd.append(spy_price - em)
+            
+            fig_em = dark_fig(400)
+            
+            # Add probability area (1 standard deviation)
+            fig_em.add_trace(go.Scatter(
+                x=labels + labels[::-1],
+                y=upper_1sd + lower_1sd[::-1],
+                fill='toself',
+                fillcolor='rgba(0, 204, 68, 0.15)',
+                line=dict(color='rgba(255,255,255,0)'),
+                hoverinfo="skip",
+                name='68% Probability Range (1 SD)'
+            ))
+            
+            # Upper Bound Line
+            fig_em.add_trace(go.Scatter(
+                x=labels, y=upper_1sd,
+                mode='lines+markers+text',
+                line=dict(color='#00CC44', width=2, dash='dot'),
+                marker=dict(size=6, color='#00CC44'),
+                text=[f"${v:.0f}" for v in upper_1sd],
+                textposition='top center',
+                textfont=dict(color='#00CC44', size=10),
+                name='Upper Bound (+1 SD)'
+            ))
+            
+            # Lower Bound Line
+            fig_em.add_trace(go.Scatter(
+                x=labels, y=lower_1sd,
+                mode='lines+markers+text',
+                line=dict(color='#FF4444', width=2, dash='dot'),
+                marker=dict(size=6, color='#FF4444'),
+                text=[f"${v:.0f}" for v in lower_1sd],
+                textposition='bottom center',
+                textfont=dict(color='#FF4444', size=10),
+                name='Lower Bound (-1 SD)'
+            ))
+            
+            # Current Price Line
+            fig_em.add_trace(go.Scatter(
+                x=labels, y=[spy_price]*len(labels),
+                mode='lines',
+                line=dict(color='#FFF', width=1, dash='dash'),
+                name='Current Price',
+                hoverinfo="skip"
+            ))
+            
+            fig_em.update_layout(
+                margin=dict(l=40, r=40, t=40, b=40),
+                height=400,
+                title=dict(
+                    text=f"SPY EXPECTED MOVE (BASED ON VIX: {vix_q['price']:.2f})",
+                    font=dict(size=10, color="#FF6600"),
+                    x=0
+                ),
+                xaxis=dict(title="Time Horizon", color="#555", gridcolor="#111", tickfont=dict(size=9)),
+                yaxis=dict(title="Expected Price", color="#555", gridcolor="#111", tickfont=dict(size=9), tickprefix="$"),
+                legend=dict(
+                    orientation="h", x=0, y=1.05,
+                    font=dict(size=9, color="#888"),
+                    bgcolor="rgba(0,0,0,0)"
+                ),
+                hovermode="x unified"
+            )
+            
+            st.plotly_chart(fig_em, use_container_width=True)
+            
+            st.markdown(
+                '<div style="color:#888;font-size:10px;text-align:center;font-family:monospace;margin-top:-10px">'
+                'Risk-neutral expected boundaries derived from implied volatility (VIX). Area represents ~68% probability cone.'
+                '</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">SPY or VIX data unavailable for expected move.</p>', unsafe_allow_html=True)
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
