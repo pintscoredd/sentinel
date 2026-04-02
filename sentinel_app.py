@@ -712,12 +712,10 @@ with tabs[0]:
                     unsafe_allow_html=True)
             with crow[5]:
                 # ── FIX: Styled delete button using CSS class
-                st.markdown('<div class="wl-delete-col">', unsafe_allow_html=True)
                 if st.button("✕", key=f"rm_{q['ticker']}", help=f"Remove {q['ticker']}"):
                     st.session_state.watchlist = [x for x in st.session_state.watchlist if x!=q["ticker"]]
                     _save_watchlist(st.session_state.watchlist)
                     st.rerun()
-                st.markdown('</div>', unsafe_allow_html=True)
 
             st.markdown('<div style="border-bottom:1px solid #111;margin:0 0 2px 0"></div>', unsafe_allow_html=True)
 
@@ -842,6 +840,7 @@ with tabs[1]:
             with st.spinner("Loading options…"):
                 calls, puts, exp_date = options_chain(tkr, selected_exp)
             if calls is not None:
+                exp_dt = None
                 try:
                     exp_dt = datetime.strptime(str(exp_date), "%Y-%m-%d")
                     exp_fmt = exp_dt.strftime("%B %-d, %Y")
@@ -885,7 +884,7 @@ with tabs[1]:
                     with wc1: bs_s = st.number_input("Spot Price", value=float(q["price"]), format="%.2f", key=f"bs_s_{tkr}")
                     with wc2: bs_k = st.number_input("Strike", value=float(q["price"]), format="%.2f", key=f"bs_k_{tkr}")
                     with wc3:
-                        dt_exp = max((exp_dt.date() - datetime.today().date()).days, 1) if 'exp_dt' in locals() else 14
+                        dt_exp = max((exp_dt.date() - datetime.today().date()).days, 1) if exp_dt else 14
                         bs_t = st.number_input("Days to Expire", value=float(dt_exp), format="%.1f", key=f"bs_t_{tkr}")
                     with wc4:
                         bs_v = st.number_input("Implied Vol (%)", value=float(current_vix) if current_vix else 20.0, format="%.1f", key=f"bs_v_{tkr}")
@@ -908,7 +907,7 @@ with tabs[1]:
                         st.markdown('<div style="color:#FF4444;font-size:9px;font-weight:700;letter-spacing:2px">▼ ALL PUTS</div>', unsafe_allow_html=True)
                         st.markdown(render_options_table(puts, "puts", q["price"]), unsafe_allow_html=True)
             else:
-                options_chain.clear()  # Bust entire cache; clear(args) is fragile on misses
+                st.warning(f"Options data failed to load for {tkr}")
                 st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Options unavailable for this ticker.</p>', unsafe_allow_html=True)
 
             st.markdown('<div class="bb-ph" style="margin-top:12px">🔍 INSIDER TRANSACTIONS</div>', unsafe_allow_html=True)
@@ -1019,7 +1018,7 @@ with tabs[1]:
             text=ss["Pct"].apply(lambda x: f"{x:+.2f}%"),textposition="outside",
             textfont=dict(color="#FF8C00",size=10)))
         fig2.update_layout(**CHART_LAYOUT,height=350,xaxis_title="% Change",margin=dict(l=0,r=70,t=10,b=0))
-        st.plotly_chart(fig2, width="stretch")
+        st.plotly_chart(fig2, use_container_width=True)
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
@@ -1337,7 +1336,7 @@ with tabs[1]:
     # FEAT-03: RV vs IV Spread — Vol Premium Signal
     # ════════════════════════════════════════════════════════════════════
     with st.spinner("Computing RV/IV spread…"):
-        _rv_iv = get_rv_iv_spread(_iv_ticker.upper().strip() if '_iv_ticker' in dir() else "SPY")
+        _rv_iv = get_rv_iv_spread(_iv_ticker.upper().strip() if '_iv_ticker' in locals() else "SPY")
     if _rv_iv:
         _rv_c1, _rv_c2, _rv_c3, _rv_c4 = st.columns(4)
         with _rv_c1:
@@ -1373,7 +1372,7 @@ with tabs[1]:
     # FEAT-02: IV Skew Surface — 25-Delta Put/Call Skew
     # ════════════════════════════════════════════════════════════════════
     with st.spinner("Computing IV skew surface…"):
-        _skew_data = get_iv_skew(_iv_ticker.upper().strip() if '_iv_ticker' in dir() else "SPY")
+        _skew_data = get_iv_skew(_iv_ticker.upper().strip() if '_iv_ticker' in locals() else "SPY")
     if _skew_data:
         st.markdown('<div class="bb-ph">📈 25-DELTA IV SKEW SURFACE</div>', unsafe_allow_html=True)
         _sk_dtes = [d["dte"] for d in _skew_data]
@@ -1420,20 +1419,21 @@ with tabs[1]:
     if hm_data:
         hm_df = pd.DataFrame(hm_data)
         hm_df["pct_capped"] = hm_df["pct"].clip(-5, 5)
-        hm_df["label"] = hm_df.apply(lambda r: f"{r['ticker']}<br>{r['pct']:+.2f}%", axis=1)
+        hm_df["label"] = hm_df.apply(lambda r: f"{r['ticker']}<br>${r['price']:.2f}<br>{r['pct']:+.2f}%", axis=1)
 
         sectors = hm_df["sector"].unique().tolist()
         sec_rows = pd.DataFrame({
             "label": sectors, "sector": [""] * len(sectors),
-            "pct_capped": [0]*len(sectors), "values": [1]*len(sectors),
+            "pct_capped": [0]*len(sectors), "values": [0]*len(sectors),
             "ticker": sectors, "price": [0]*len(sectors),
             "pct": [0]*len(sectors), "change": [0]*len(sectors),
         })
         stock_rows = hm_df.copy()
-        stock_rows["values"] = 1
+        stock_rows["values"] = stock_rows["market_cap"].clip(lower=1e9)
 
         all_labels    = list(sec_rows["label"]) + list(stock_rows["label"])
         all_parents   = list(sec_rows["sector"]) + list(stock_rows["sector"])
+        sec_rows["values"] = stock_rows.groupby("sector")["values"].sum().reindex(sectors).fillna(1e9).values
         all_values    = list(sec_rows["values"]) + list(stock_rows["values"])
         all_colors    = [0.0]*len(sec_rows) + list(stock_rows["pct_capped"])
         all_custom    = [[r, 0, 0, 0, r] for r in sectors] + list(stock_rows[["ticker","price","pct","change","sector"]].values.tolist())
@@ -1445,13 +1445,12 @@ with tabs[1]:
             marker=dict(
                 colors=all_colors,
                 colorscale=[
-                    [0.0,  "#8B0000"],
-                    [0.3,  "#CC2222"],
-                    [0.45, "#441111"],
-                    [0.5,  "#111111"],
-                    [0.55, "#114411"],
-                    [0.7,  "#22AA44"],
-                    [1.0,  "#007A2F"],
+                    [0.0,  "#FF4444"],
+                    [0.46, "#441111"],
+                    [0.49, "#111111"],
+                    [0.51, "#111111"],
+                    [0.54, "#114411"],
+                    [1.0,  "#00CC44"],
                 ],
                 cmid=0, cmin=-5, cmax=5,
                 showscale=True,
@@ -1471,7 +1470,7 @@ with tabs[1]:
             font=dict(color="#FF8C00", family="IBM Plex Mono"),
             height=580, margin=dict(l=0,r=0,t=10,b=0),
         )
-        st.plotly_chart(fig_hm, width="stretch")
+        st.plotly_chart(fig_hm, use_container_width=True)
     else:
         st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Heatmap data loading…</p>', unsafe_allow_html=True)
 
@@ -1768,7 +1767,7 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                                                 spot_spx=_spot_for_chart,
                                                 display_pct=_chart_pct)
                     if _fig:
-                        st.plotly_chart(_fig, width="stretch", config={'displayModeBar': False})
+                        st.plotly_chart(_fig, use_container_width=True, config={'displayModeBar': False})
                     else:
                         st.markdown('<div style="color:#555;font-family:monospace;font-size:11px">GEX data unavailable.</div>', unsafe_allow_html=True)
                 with _info_col:
@@ -1917,7 +1916,7 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
             with st.spinner("Loading yield curve…"):
                 fig_yc = yield_curve_chart(st.session_state.fred_key.get_secret_value(), 260)
             if fig_yc:
-                st.plotly_chart(fig_yc, width="stretch")
+                st.plotly_chart(fig_yc, use_container_width=True)
                 df_2y = fred_series("DGS2", st.session_state.fred_key.get_secret_value(), 3)
                 df_10y = fred_series("DGS10", st.session_state.fred_key.get_secret_value(), 3)
                 if df_2y is not None and df_10y is not None and not df_2y.empty and not df_10y.empty:
@@ -1931,7 +1930,7 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
                 with st.spinner("Loading inflation data…"):
                     fig_cpi = cpi_vs_rates_chart(st.session_state.fred_key.get_secret_value(), 250)
                 if fig_cpi:
-                    st.plotly_chart(fig_cpi, width="stretch")
+                    st.plotly_chart(fig_cpi, use_container_width=True)
             else:
                 st.markdown('<p style="color:#555;font-family:monospace">Yield data loading…</p>', unsafe_allow_html=True)
 
@@ -1954,7 +1953,7 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
         with st.spinner("Loading yield history…"):
             fig_hist = yield_history_chart(st.session_state.fred_key.get_secret_value(), 240)
         if fig_hist:
-            st.plotly_chart(fig_hist, width="stretch")
+            st.plotly_chart(fig_hist, use_container_width=True)
         else:
             st.markdown('<p style="color:#555;font-family:monospace">Yield history data loading…</p>', unsafe_allow_html=True)
 
@@ -2433,7 +2432,7 @@ with tabs[4]:
                 xaxis=dict(showgrid=False, color="#444"),
                 yaxis=dict(autorange="reversed", tickfont=dict(size=10, color="#CCC")),
             )
-            st.plotly_chart(fig_ex, width="stretch")
+            st.plotly_chart(fig_ex, use_container_width=True)
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Exchange data unavailable.</p>', unsafe_allow_html=True)
 
@@ -2462,7 +2461,7 @@ with tabs[4]:
                 xaxis=dict(color="#666"), yaxis=dict(showgrid=False, color="#444"),
                 legend=dict(font=dict(size=9, color="#888"), bgcolor="rgba(0,0,0,0)"),
             )
-            st.plotly_chart(fig_liq, width="stretch")
+            st.plotly_chart(fig_liq, use_container_width=True)
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Liquidation data unavailable.</p>', unsafe_allow_html=True)
 
@@ -2484,7 +2483,7 @@ with tabs[4]:
                 title=dict(text="OPEN INTEREST ($B)", font=dict(size=11, color="#FF6600"), x=0),
                 xaxis=dict(color="#666"), yaxis=dict(showgrid=False, color="#444"),
             )
-            st.plotly_chart(fig_oi, width="stretch")
+            st.plotly_chart(fig_oi, use_container_width=True)
 
     with risk_col:
         with st.spinner("Loading funding rates…"):
@@ -2679,7 +2678,7 @@ with tabs[5]:
                     xaxis=dict(showgrid=False, color="#333", title=None),
                     yaxis=dict(autorange="reversed", tickfont=dict(size=9, color="#CCC"), title=None),
                 )
-                st.plotly_chart(fig_mis, width="stretch")
+                st.plotly_chart(fig_mis, use_container_width=True)
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
@@ -2749,7 +2748,7 @@ with tabs[5]:
                 xaxis=dict(range=[0, 115], showgrid=False, color="#333", showticklabels=False),
                 yaxis=dict(autorange="reversed", tickfont=dict(size=9, color="#AAA")),
             )
-            st.plotly_chart(fig_prob, width="stretch")
+            st.plotly_chart(fig_prob, use_container_width=True)
 
             # ── Clickable event link list under chart
             st.markdown('<div style="font-family:monospace;font-size:9px;color:#444;margin-bottom:4px">CLICK TO OPEN ON POLYMARKET ↗</div>', unsafe_allow_html=True)
@@ -2809,7 +2808,7 @@ with tabs[5]:
                 legend=dict(font=dict(size=9, color="#888"), bgcolor="rgba(0,0,0,0)",
                             orientation="h", x=0, y=1.06),
             )
-            st.plotly_chart(fig_vol, width="stretch")
+            st.plotly_chart(fig_vol, use_container_width=True)
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 

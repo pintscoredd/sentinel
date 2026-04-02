@@ -81,14 +81,18 @@ def get_yf_ticker(ticker):
     
     # Throttle: enforce minimum gap between Yahoo API requests
     with _yf_lock:
+        cached = _yf_ticker_cache.get(ticker)
+        if cached and (_time.time() - cached[1]) < _YF_CACHE_TTL:
+            return cached[0]
+            
         elapsed = _time.time() - _yf_last_request
         if elapsed < _YF_MIN_GAP:
             _time.sleep(_YF_MIN_GAP - elapsed)
         _yf_last_request = _time.time()
     
-    tk = yf.Ticker(ticker)
-    _yf_ticker_cache[ticker] = (tk, _time.time())
-    return tk
+        tk = yf.Ticker(ticker)
+        _yf_ticker_cache[ticker] = (tk, _time.time())
+        return tk
 
 
 
@@ -335,7 +339,7 @@ def get_futures():
 @st.cache_data(ttl=300)
 def get_heatmap_data():
     SECTOR_STOCKS = {
-        "Technology": ["AAPL", "MSFT", "NVDA", "AVGO", "META", "ORCL", "AMD", "INTC", "QCOM", "TXN", "ADBE", "CRM", "INTU", "IBM", "ACN"],
+        "Technology": ["AAPL", "MSFT", "NVDA", "AVGO", "ORCL", "AMD", "INTC", "QCOM", "TXN", "ADBE", "CRM", "INTU", "IBM", "ACN"],
         "Healthcare": ["UNH", "JNJ", "LLY", "ABBV", "MRK", "TMO", "ABT", "PFE", "DHR", "BMY", "ISRG", "GILD", "MDT", "CVS", "CI"],
         "Financials": ["JPM", "BAC", "WFC", "GS", "MS", "BLK", "C", "AXP", "COF", "PGR", "ICE", "CME", "SPGI", "V", "MA"],
         "Consumer Disc": ["AMZN", "TSLA", "HD", "MCD", "NKE", "LOW", "BKNG", "TJX", "SBUX", "MAR", "TGT", "ROST", "ORLY", "DHI"],
@@ -351,11 +355,30 @@ def get_heatmap_data():
     tickers = [tkr for _, tkr in flat_jobs]
     
     try:
-        results = run_async(_fetch_yahoo_quotes_async(tickers))
+        data = yf.download(list(set(tickers)), period="5d", progress=False, threads=True)
+        closes = data["Close"]
+
+        # Batch fetch market cap
+        mcaps = {}
+        for i in range(0, len(tickers), 40):
+            chunk = tickers[i:i+40]
+            url = f"https://query2.finance.yahoo.com/v7/finance/quote?symbols={','.join(chunk)}"
+            r = _fetch_robust_json(url)
+            if r and "quoteResponse" in r and "result" in r["quoteResponse"]:
+                for item in r["quoteResponse"]["result"]:
+                    mcaps[item.get("symbol")] = item.get("marketCap", 1e9)
+
         rows = []
-        for (sector, tkr), q in zip(flat_jobs, results):
-            if isinstance(q, dict) and q:
-                rows.append({"ticker": tkr, "sector": sector, "pct": q["pct"], "price": q["price"], "change": q["change"]})
+        for sector, tkr in flat_jobs:
+            if tkr in closes.columns:
+                hist = closes[tkr].dropna()
+                if len(hist) < 2: continue
+                price = float(hist.iloc[-1])
+                prev = float(hist.iloc[-2])
+                chg = price - prev
+                pct = (chg / prev) * 100 if prev else 0.0
+                mcap = float(mcaps.get(tkr, 1e9))
+                rows.append({"ticker": tkr, "sector": sector, "pct": pct, "price": price, "change": chg, "market_cap": mcap})
         return rows
     except Exception as e:
         logger.error({"error": str(e)}, "Heatmap Fetch Error")
@@ -678,11 +701,16 @@ def get_finra_short_volume(ticker):
         t = get_yf_ticker(ticker)
         if t is None: return []
         i = t.fast_info
-        # Attempt to get short data via ticker info
-        info = t.info
-        s_pct = info.get("shortPercentOfFloat", 0)
-        s_shares = info.get("sharesShort", 0)
-        s_ratio = info.get("shortRatio", 0)
+        # Use fast_info (if available in newer yf) or info as fallback
+        s_pct = getattr(i, "shares_short_prior_month", 0) / getattr(i, "shares_outstanding", 1)
+        if not s_pct:
+            info = t.info
+            s_pct = info.get("shortPercentOfFloat", 0)
+            s_shares = info.get("sharesShort", 0)
+            s_ratio = info.get("shortRatio", 0)
+        else:
+            s_shares = getattr(i, "shares_short", 0)
+            s_ratio = getattr(i, "short_ratio", 0)
         if s_pct or s_shares:
             return {
                 "short_pct_float": round(float(s_pct)*100, 2) if s_pct else 0,
@@ -4117,20 +4145,29 @@ def get_iv_term_structure(ticker="SPY"):
                 exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
                 dte = max((exp_date - today).days, 1)
 
-                # Find ATM strike (closest to current price)
-                if not calls.empty and "strike" in calls.columns:
-                    calls["_dist"] = (calls["strike"] - price).abs()
-                    atm_call = calls.nsmallest(1, "_dist")
-                    call_iv = float(atm_call["impliedVolatility"].iloc[0]) if not atm_call.empty else None
-                else:
-                    call_iv = None
+                import numpy as np
 
-                if not puts.empty and "strike" in puts.columns:
-                    puts["_dist"] = (puts["strike"] - price).abs()
-                    atm_put = puts.nsmallest(1, "_dist")
-                    put_iv = float(atm_put["impliedVolatility"].iloc[0]) if not atm_put.empty else None
-                else:
-                    put_iv = None
+                def interp_atm(df_side, spot):
+                    df_side = df_side.copy()
+                    df_side["_dist"] = (df_side["strike"] - spot).abs()
+                    nearest = df_side.nsmallest(2, "_dist")
+                    if len(nearest) == 0: return None
+                    if len(nearest) == 1: return float(nearest["impliedVolatility"].iloc[0])
+                    k1, k2 = nearest["strike"].values
+                    v1, v2 = nearest["impliedVolatility"].values
+                    if k1 == k2: return float(v1)
+                    d1 = abs(np.log(spot / k1))
+                    d2 = abs(np.log(spot / k2))
+                    if d1+d2 == 0: return float(v1)
+                    w1 = d2 / (d1 + d2)
+                    w2 = d1 / (d1 + d2)
+                    return float(v1 * w1 + v2 * w2)
+
+                call_iv = interp_atm(calls, price) if not calls.empty and "strike" in calls.columns else None
+                put_iv = interp_atm(puts, price) if not puts.empty and "strike" in puts.columns else None
+                
+                atm_call = calls.nsmallest(1, "_dist") if not calls.empty else pd.DataFrame()
+
 
                 # Average call and put ATM IV
                 ivs = [v for v in [call_iv, put_iv] if v is not None and v > 0]
@@ -4192,7 +4229,9 @@ def get_iv_skew(ticker="SPY"):
 
         selected_exps = exps[:min(6, len(exps))]
         today = datetime.today().date()
-        r = 0.045  # risk-free rate assumption
+        r = get_risk_free_rate()
+        import numpy as np
+        from scipy.stats import norm
 
         results = []
         for exp in selected_exps:
@@ -4208,29 +4247,38 @@ def get_iv_skew(ticker="SPY"):
                 dte = max((exp_date - today).days, 1)
                 T = dte / 365.0
 
-                # ATM IV (closest strike to spot)
+                # ATM IV (average call + put)
                 calls["_dist"] = (calls["strike"] - price).abs()
                 atm_call = calls.nsmallest(1, "_dist")
-                atm_iv = float(atm_call["impliedVolatility"].iloc[0]) if not atm_call.empty else None
+                atm_iv_c = float(atm_call["impliedVolatility"].iloc[0]) if not atm_call.empty else None
+                
+                puts["_dist"] = (puts["strike"] - price).abs()
+                atm_put = puts.nsmallest(1, "_dist")
+                atm_iv_p = float(atm_put["impliedVolatility"].iloc[0]) if not atm_put.empty else None
 
-                # Find 25-delta call strike: iterate OTM calls, find closest to |delta| = 0.25
+                ivs = [v for v in (atm_iv_c, atm_iv_p) if v]
+                atm_iv = sum(ivs) / len(ivs) if ivs else None
+
+                # Find 25-delta call strike (Vectorized)
                 otm_calls = calls[calls["strike"] >= price].copy()
                 if not otm_calls.empty and "impliedVolatility" in otm_calls.columns:
-                    otm_calls["_delta"] = otm_calls.apply(
-                        lambda row: abs(bs_greeks_engine(price, row["strike"], T, r, max(row.get("impliedVolatility", 0.2), 0.01), "call")["delta"]),
-                        axis=1)
+                    K = otm_calls["strike"].values
+                    sigma = np.maximum(otm_calls["impliedVolatility"].fillna(0.2).values, 0.01)
+                    d1 = (np.log(price / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+                    otm_calls["_delta"] = np.abs(norm.cdf(d1))
                     otm_calls["_d25_diff"] = (otm_calls["_delta"] - 0.25).abs()
                     c25_row = otm_calls.nsmallest(1, "_d25_diff")
                     iv_25c = float(c25_row["impliedVolatility"].iloc[0]) if not c25_row.empty else None
                 else:
                     iv_25c = None
 
-                # Find 25-delta put strike: iterate OTM puts, find closest to |delta| = 0.25
+                # Find 25-delta put strike (Vectorized)
                 otm_puts = puts[puts["strike"] <= price].copy()
                 if not otm_puts.empty and "impliedVolatility" in otm_puts.columns:
-                    otm_puts["_delta"] = otm_puts.apply(
-                        lambda row: abs(bs_greeks_engine(price, row["strike"], T, r, max(row.get("impliedVolatility", 0.2), 0.01), "put")["delta"]),
-                        axis=1)
+                    K = otm_puts["strike"].values
+                    sigma = np.maximum(otm_puts["impliedVolatility"].fillna(0.2).values, 0.01)
+                    d1 = (np.log(price / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+                    otm_puts["_delta"] = np.abs(norm.cdf(d1) - 1.0)
                     otm_puts["_d25_diff"] = (otm_puts["_delta"] - 0.25).abs()
                     p25_row = otm_puts.nsmallest(1, "_d25_diff")
                     iv_25p = float(p25_row["impliedVolatility"].iloc[0]) if not p25_row.empty else None
@@ -4284,22 +4332,27 @@ def get_rv_iv_spread(ticker="SPY"):
         if h is None or len(h) < 25:
             return None
 
-        # 20-day realized volatility (annualized, close-to-close)
-        returns = h["Close"].pct_change().dropna()
+        # 20-day realized volatility (annualized, close-to-close) using log returns
+        returns = np.log(h["Close"] / h["Close"].shift(1)).dropna()
         rv20 = float(returns.tail(20).std() * np.sqrt(252) * 100)
 
-        # Front-month ATM IV from existing term structure
+        # Front-month ATM IV and target ~30 DTE
         iv_data = get_iv_term_structure(ticker)
         if iv_data and len(iv_data) > 0:
-            front_iv = iv_data[0]["atm_iv"]
-            dte = iv_data[0]["dte"]
+            best_iv = min(iv_data, key=lambda x: abs(x["dte"] - 30))
+            front_iv = best_iv["atm_iv"]
+            dte = best_iv["dte"]
         else:
             return None
 
+        vix_price, _, _ = get_vix_full()
+        vix = float(vix_price) if vix_price else 20.0
+        thresh = 3.0 * (vix / 20.0)
+
         spread = rv20 - front_iv
-        if spread > 3:
+        if spread > thresh:
             signal, signal_color = "SELL VOL", "#FF4444"
-        elif spread < -3:
+        elif spread < -thresh:
             signal, signal_color = "BUY VOL", "#00CC44"
         else:
             signal, signal_color = "NEUTRAL", "#888888"
@@ -4709,9 +4762,21 @@ def get_expected_move(ticker):
         if calls.empty or puts.empty:
             return None
 
-        # Find ATM strike
-        calls["_dist"] = (calls["strike"] - price).abs()
-        puts["_dist"] = (puts["strike"] - price).abs()
+        exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+        dte = max((exp_date - datetime.today().date()).days, 1)
+        T = dte / 365.0
+        r = get_risk_free_rate()
+        
+        try:
+            q = float(tk.info.get("dividendYield", 0.0) or 0.0)
+        except:
+            q = 0.0
+            
+        F = price * math.exp((r - q) * T)
+
+        # Find ATM strike using Forward F
+        calls["_dist"] = (calls["strike"] - F).abs()
+        puts["_dist"] = (puts["strike"] - F).abs()
         atm_call = calls.nsmallest(1, "_dist")
         atm_put = puts.nsmallest(1, "_dist")
 
@@ -4835,3 +4900,70 @@ def get_margin_chart_data(ticker):
         })
 
     return rows if rows else None
+
+
+@st.cache_data(ttl=600)
+def get_risk_neutral_density(ticker="SPY", expiry=None):
+    """Calculate Risk-Neutral Density using Breeden-Litzenberger: RND(K) = e^(rT) * d²C/dK²"""
+    import numpy as np
+    try:
+        tk = get_yf_ticker(ticker)
+        if tk is None: return None
+        
+        fi = tk.fast_info
+        price = getattr(fi, "last_price", None)
+        if price is None or float(price) <= 0:
+            h = tk.history(period="1d")
+            price = float(h["Close"].iloc[-1]) if not h.empty else None
+        if price is None: return None
+
+        exps = list(tk.options)
+        if not exps: return None
+        exp = expiry if expiry and expiry in exps else exps[0]
+        
+        chain = tk.option_chain(exp)
+        if chain is None or chain.calls.empty: return None
+        
+        calls = chain.calls.copy()
+        calls = calls.dropna(subset=['impliedVolatility'])
+        if calls.empty: return None
+        
+        exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+        dte = max((exp_date - datetime.today().date()).days, 1)
+        T = dte / 365.0
+        r = get_risk_free_rate()
+        
+        calls = calls.sort_values("strike")
+        K = calls["strike"].values
+        
+        # Smoothed Prices (use Black-Scholes using given IV instead of noisy market prices directly)
+        C = np.array([bs_price(price, k, T, r, sigma, side="call") for k, sigma in zip(K, calls["impliedVolatility"].values)])
+        
+        if len(K) < 3: return None
+        
+        dK1 = K[1:-1] - K[:-2]
+        dK2 = K[2:] - K[1:-1]
+        
+        dC1 = (C[1:-1] - C[:-2]) / dK1
+        dC2 = (C[2:] - C[1:-1]) / dK2
+        
+        d2C_dK2 = 2 * (dC2 - dC1) / (K[2:] - K[:-2])
+        
+        rnd = np.exp(r * T) * d2C_dK2
+        rnd = np.maximum(rnd, 0)
+        
+        area = np.trapezoid(rnd, K[1:-1])
+        if area > 0:
+            rnd = rnd / area
+            
+        rows = []
+        for i in range(len(rnd)):
+            rows.append({
+                "strike": float(K[i+1]),
+                "density": float(rnd[i])
+            })
+            
+        return rows
+    except Exception as e:
+        logger.error("RND fetch failed", extra={"error": str(e)})
+        return None
