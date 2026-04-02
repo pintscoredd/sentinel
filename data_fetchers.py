@@ -4824,12 +4824,32 @@ def get_expected_move(ticker):
 def get_ai_earnings_summary(ticker, gemini_api_key, finnhub_key=None, newsapi_key=None):
     """Aggregate recent earnings news and summarize with Gemini AI."""
     if not gemini_api_key or genai is None:
-        return None
+        return {"error": "NO_KEY"}
     try:
+        # Check if event has happened
+        try:
+            tk = get_yf_ticker(ticker)
+            if tk is not None:
+                cal = tk.calendar
+                next_date = None
+                if isinstance(cal, dict) and "Earnings Date" in cal:
+                    dates = cal["Earnings Date"]
+                    if isinstance(dates, list) and len(dates) > 0:
+                        next_date = dates[0]
+                if next_date is not None:
+                    if hasattr(next_date, "date"):
+                        nd = next_date.date()
+                    else:
+                        nd = next_date
+                    if nd > datetime.today().date():
+                        return {"error": "FUTURE_EVENT", "date": nd.strftime('%Y-%m-%d')}
+        except Exception:
+            pass
+
         # Gather recent news
         news_items = get_stock_news(ticker, finnhub_key=finnhub_key, newsapi_key=newsapi_key)
         if not news_items:
-            return None
+            return {"error": "NO_NEWS"}
 
         headlines = "\n".join([f"- {n['title']} ({n['source']}, {n['date']})" for n in news_items[:10]])
 

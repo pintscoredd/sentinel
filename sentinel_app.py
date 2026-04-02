@@ -3470,15 +3470,27 @@ with tabs[7]:
                         newsapi_key=st.session_state.get("newsapi_key"),
                     )
                 if _ai_summary:
-                    _summary_text = _ai_summary["summary"].replace("\n", "<br>")
-                    st.markdown(
-                        f'<div style="background:#0A0500;border:1px solid #FF6600;border-left:4px solid #FF6600;'
-                        f'padding:14px 16px;font-family:monospace;font-size:11px;color:#CCC;line-height:1.8">'
-                        f'<div style="color:#FF6600;font-size:10px;letter-spacing:1px;margin-bottom:8px">'
-                        f'⚡ SENTINEL AI ({_ai_summary["news_count"]} news sources analyzed)</div>'
-                        f'{_summary_text}</div>', unsafe_allow_html=True)
+                    if "error" in _ai_summary:
+                        err = _ai_summary["error"]
+                        if err == "NO_KEY":
+                            msg = "AI summary unavailable. Check Gemini key."
+                        elif err == "FUTURE_EVENT":
+                            msg = f"Earnings event for {et} has not happened yet (Expected: {_ai_summary.get('date', 'Future')})."
+                        elif err == "NO_NEWS":
+                            msg = f"No recent news found for {et} to generate an earnings summary."
+                        else:
+                            msg = "AI summary generation failed."
+                        st.markdown(f'<p style="color:#555;font-family:monospace;font-size:11px">{msg}</p>', unsafe_allow_html=True)
+                    else:
+                        _summary_text = _ai_summary["summary"].replace("\n", "<br>")
+                        st.markdown(
+                            f'<div style="background:#0A0500;border:1px solid #FF6600;border-left:4px solid #FF6600;'
+                            f'padding:14px 16px;font-family:monospace;font-size:11px;color:#CCC;line-height:1.8">'
+                            f'<div style="color:#FF6600;font-size:10px;letter-spacing:1px;margin-bottom:8px">'
+                            f'⚡ SENTINEL AI ({_ai_summary["news_count"]} news sources analyzed)</div>'
+                            f'{_summary_text}</div>', unsafe_allow_html=True)
                 else:
-                    st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">AI summary unavailable. Check Gemini key.</p>', unsafe_allow_html=True)
+                    st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">AI summary generation failed.</p>', unsafe_allow_html=True)
 
             # ── Stock-specific news (after margin + AI) ──
             st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
