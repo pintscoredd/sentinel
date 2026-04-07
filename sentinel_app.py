@@ -16,6 +16,8 @@ except ImportError:
     st.error("Missing: plotly"); st.stop()
 
 import requests, pandas as pd, json, pathlib, math, re
+import numpy as np
+from scipy.stats import norm as _norm_dist
 from datetime import datetime, timedelta
 import pytz
 
@@ -42,6 +44,7 @@ from data_fetchers import (
     build_brief_context,
     fetch_btc_etf_flows, fetch_btc_etf_flows_fallback, _ETF_TICKERS,
     stat_arb_screener, get_finra_short_volume, bs_greeks_engine,
+    smart_money_conviction_buys,
     # ─── New Feature Imports ───
     get_global_indices, get_net_liquidity, get_yield_curve_history,
     get_cross_asset_volatility, get_macro_correlation_matrix,
@@ -490,12 +493,14 @@ DEFAULTS = {
     "watchlist": _load_watchlist(),
     "macro_theses":"", "geo_watch":"",
     "wl_add_input":"", "api_panel_open": True,
+    "master_ticker": "",  # State-preserving ticker across all tabs
 }
 for k,v in DEFAULTS.items():
     if k not in st.session_state: st.session_state[k]=v
 
-@st.cache_data(ttl=3600)
 def warm_caches_on_startup(watchlist):
+    """Fire-and-forget background cache warming — NOT cached since it spawns threads.
+    Uses a module-level guard to ensure it only runs once per process."""
     import threading
     def _warm():
         try:
@@ -504,12 +509,14 @@ def warm_caches_on_startup(watchlist):
             get_futures()
             polymarket_events(30)
             multi_quotes(watchlist)
-        except Exception as e:
+        except Exception:
             pass
     threading.Thread(target=_warm, daemon=True).start()
     return True
 
-warm_caches_on_startup(st.session_state.watchlist)
+if "_caches_warmed" not in st.session_state:
+    warm_caches_on_startup(st.session_state.watchlist)
+    st.session_state._caches_warmed = True
 
 # ════════════════════════════════════════════════════════════════════
 # SIDEBAR
@@ -604,7 +611,20 @@ with tabs[0]:
             cols = st.columns(len(qs))
             for col, q in zip(cols, qs):
                 chg_str = f"{q['pct']:+.2f}% ({q['change']:+.2f})"
-                with col: st.metric(KEY_T.get(q["ticker"],q["ticker"]), fmt_p(q["price"]), delta=chg_str)
+                with col:
+                    _help_map = {
+                        "S&P 500": "Broad U.S. large-cap equity index (500 stocks). Key benchmark for overall market health.",
+                        "SPX": "S&P 500 Index — the most-watched U.S. equity benchmark.",
+                        "Dow Jones": "Price-weighted 30-stock industrial average. Less diversified than SPX.",
+                        "Russell 2K": "Small-cap index. Leads in reflation, lags in risk-off. Key cyclical barometer.",
+                        "10Y Yield": "U.S. 10-Year Treasury Note yield. Rising = tighter financial conditions.",
+                        "USD Index": "DXY — trade-weighted dollar vs 6 major currencies. Strength hurts EM and commodities.",
+                        "Gold": "Safe-haven asset. Rising with equities = stress hedge; rising with falling rates = normal.",
+                        "WTI Crude": "West Texas Intermediate oil benchmark. Supply-driven by OPEC+ decisions.",
+                        "Bitcoin": "Leading cryptocurrency by market cap. Proxy for risk appetite in digital assets.",
+                    }
+                    _help = _help_map.get(KEY_T.get(q["ticker"],q["ticker"]), None)
+                    st.metric(KEY_T.get(q["ticker"],q["ticker"]), fmt_p(q["price"]), delta=chg_str, help=_help)
         else:
             st.markdown('<div style="color:#FF4444;font-size:11px;font-family:monospace">Quotes unavailable. Rate limits or network error.</div>', unsafe_allow_html=True)
             
@@ -626,6 +646,7 @@ with tabs[0]:
                 lbl = "LOW FEAR" if v<15 else ("MODERATE" if v<25 else ("HIGH FEAR" if v<35 else "PANIC"))
                 vix_chg = f"{vix_q['pct']:+.2f}%" if vix_q else ""
                 vix_chg_c = pct_color(vix_q['pct']) if vix_q else "#888"
+                # VIX help tooltip added via markdown (can't use st.metric help here due to custom HTML)
                 st.markdown(f'<div class="fg-gauge"><div class="fg-num">{v:.2f}</div><div class="fg-lbl" style="color:#FF8C00">{lbl}</div><div style="color:{vix_chg_c};font-size:13px;font-weight:700;margin-top:4px">{vix_chg}</div><div style="color:#555;font-size:8px;margin-top:2px">VIX</div></div>', unsafe_allow_html=True)
         sfg_val, sfg_lbl = calc_stock_fear_greed()
         with s2:
@@ -784,7 +805,17 @@ with tabs[1]:
 
     fc, _ = st.columns([2,3])
     with fc:
-        flash_ticker = st.text_input("⚡ TICKER LOOKUP", placeholder="NVDA, AAPL, TSLA, SPY, GLD…", key="flash")
+        # Bind to master_ticker for cross-tab state persistence
+        def _on_flash_change():
+            val = st.session_state.get("flash", "").upper().strip()
+            if val:
+                st.session_state.master_ticker = val
+        _default_flash = st.session_state.master_ticker if st.session_state.master_ticker else ""
+        flash_ticker = st.text_input(
+            "⚡ TICKER LOOKUP", value=_default_flash,
+            placeholder="NVDA, AAPL, TSLA, SPY, GLD…", key="flash",
+            on_change=_on_flash_change,
+            help="Type a ticker symbol to see price, chart, options, insider trades, and short data. This ticker persists across tabs.")
 
     if flash_ticker:
         tkr = flash_ticker.upper().strip()
@@ -877,8 +908,6 @@ with tabs[1]:
                     st.markdown(render_unusual_trade(scored["unusual"], ticker=tkr, expiry=exp_fmt), unsafe_allow_html=True)
                 
                 with st.expander("🔧 TRUE BLACK-SCHOLES ENGINE (WHAT-IF)", expanded=False):
-                    from scipy.stats import norm
-                    import math
                     st.markdown('<div style="color:#888;font-size:10px;margin-bottom:8px">Calculate Delta, Gamma, Theta locally bypassing Alpaca endpoint limits.</div>', unsafe_allow_html=True)
                     wc1, wc2, wc3, wc4, wc5 = st.columns(5)
                     with wc1: bs_s = st.number_input("Spot Price", value=float(q["price"]), format="%.2f", key=f"bs_s_{tkr}")
@@ -892,11 +921,11 @@ with tabs[1]:
                     
                     bs_res = bs_greeks_engine(bs_s, bs_k, bs_t / 365.0, 0.045, bs_v / 100.0, bs_side)
                     rc1, rc2, rc3, rc4, rc5 = st.columns(5)
-                    rc1.metric("Delta", f"{bs_res['delta']:.4f}")
-                    rc2.metric("Gamma", f"{bs_res['gamma']:.6f}")
-                    rc3.metric("Theta (Daily)", f"{bs_res['theta']:.4f}")
-                    rc4.metric("Vega (1%)", f"{bs_res.get('vega', 0):.4f}")
-                    rc5.metric("Rho (1%)", f"{bs_res.get('rho', 0):.4f}")
+                    rc1.metric("Delta", f"{bs_res['delta']:.4f}", help="Rate of change of option price per $1 move in underlying. Calls: 0 to 1, Puts: -1 to 0.")
+                    rc2.metric("Gamma", f"{bs_res['gamma']:.6f}", help="Rate of change of Delta per $1 move. High gamma = delta shifts fast (near ATM, short-dated).")
+                    rc3.metric("Theta (Daily)", f"{bs_res['theta']:.4f}", help="Time decay — how much option value erodes per day. Accelerates near expiry.")
+                    rc4.metric("Vega (1%)", f"{bs_res.get('vega', 0):.4f}", help="Sensitivity to a 1% change in implied volatility. Higher for longer-dated options.")
+                    rc5.metric("Rho (1%)", f"{bs_res.get('rho', 0):.4f}", help="Sensitivity to a 1% change in interest rates. Matters more for LEAPS.")
 
                 with st.expander("📊 **FULL OPTIONS CHAIN**", expanded=False):
                     fc, fp = st.columns(2)
@@ -912,10 +941,75 @@ with tabs[1]:
 
             st.markdown('<div class="bb-ph" style="margin-top:12px">🔍 INSIDER TRANSACTIONS</div>', unsafe_allow_html=True)
             if st.session_state.finnhub_key.get_secret_value():
-                with st.spinner("Loading insider data…"):
+                with st.status("Loading insider intelligence…", expanded=False) as _ins_status:
+                    st.write("Fetching insider transactions…")
                     ins = finnhub_insider(tkr, st.session_state.finnhub_key.get_secret_value())
+                    st.write("Resolving officer roles…")
+                    officer_roles = finnhub_officers(tkr, st.session_state.finnhub_key.get_secret_value())
+                    _ins_status.update(label="Insider data loaded", state="complete", expanded=False)
                 if ins:
-                    st.markdown(render_insider_cards(ins[:10], tkr, st.session_state.finnhub_key.get_secret_value()), unsafe_allow_html=True)
+                    st.markdown(render_insider_cards(ins[:10], tkr, role_map=officer_roles), unsafe_allow_html=True)
+
+                    # ── SMART MONEY CONVICTION BUY LIST ────────────────────
+                    conviction = smart_money_conviction_buys(ins, officer_roles=officer_roles)
+                    if conviction:
+                        st.markdown(
+                            '<div class="bb-ph" style="margin-top:12px">💰 SMART MONEY — CONVICTION BUY LIST</div>',
+                            unsafe_allow_html=True)
+                        st.markdown(
+                            '<div style="color:#555;font-family:monospace;font-size:9px;margin-bottom:6px">'
+                            'Open market purchases only (Code: P). Noise filtered: exercises, tax withholding, gifts, awards excluded. '
+                            'Score = dollar value tier + C-suite seniority bonus.</div>',
+                            unsafe_allow_html=True)
+                        # Header
+                        st.markdown(
+                            '<div style="display:grid;grid-template-columns:1fr 90px 80px 100px 55px;gap:6px;'
+                            'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
+                            'font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
+                            '<span>INSIDER</span><span>ROLE</span><span>SHARES</span>'
+                            '<span>$ VALUE</span><span>SCORE</span></div>',
+                            unsafe_allow_html=True)
+                        for cb in conviction[:8]:
+                            _dv = cb["dollar_value"]
+                            _dv_str = f"${_dv / 1e6:.2f}M" if _dv >= 1e6 else (f"${_dv / 1e3:.0f}K" if _dv >= 1e3 else f"${_dv:,.0f}")
+                            _sc = cb["score"]
+                            _sc_c = "#00CC44" if _sc >= 6 else "#FF8C00" if _sc >= 3 else "#888"
+                            _role_c = "#FF6600" if cb["is_csuite"] else "#888"
+                            _role_str = cb["role"][:18] if len(cb["role"]) > 18 else cb["role"]
+                            _cs_badge = ' <span style="color:#00CC44;font-size:7px;font-weight:700">C-SUITE</span>' if cb["is_csuite"] else ""
+                            st.markdown(
+                                f'<div style="display:grid;grid-template-columns:1fr 90px 80px 100px 55px;gap:6px;'
+                                f'padding:5px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px;'
+                                f'border-left:3px solid #00CC44;background:rgba(0,204,68,0.03)">'
+                                f'<div><span style="color:#FFF;font-weight:700">{_esc(cb["name"][:20])}</span>'
+                                f'{_cs_badge}<br><span style="color:#555;font-size:9px">{cb["date"]}</span></div>'
+                                f'<span style="color:{_role_c};font-size:9px">{_esc(_role_str)}</span>'
+                                f'<span style="color:#00CC44;font-weight:600">{cb["shares"]:,}</span>'
+                                f'<span style="color:#00CC44;font-weight:700">{_dv_str}</span>'
+                                f'<span style="color:{_sc_c};font-weight:700;font-size:13px">{_sc}</span></div>',
+                                unsafe_allow_html=True)
+                        # Summary insight
+                        _total_buys = sum(c["dollar_value"] for c in conviction)
+                        _csuite_count = sum(1 for c in conviction if c["is_csuite"])
+                        _total_str = f"${_total_buys / 1e6:.2f}M" if _total_buys >= 1e6 else f"${_total_buys / 1e3:.0f}K"
+                        _signal = "🔥 STRONG" if _csuite_count >= 2 and _total_buys >= 500_000 else ("📊 MODERATE" if _csuite_count >= 1 or _total_buys >= 100_000 else "📋 WEAK")
+                        _sig_c = "#00CC44" if "STRONG" in _signal else "#FF8C00" if "MODERATE" in _signal else "#888"
+                        st.markdown(
+                            f'<div style="background:#001A00;border:1px solid #00CC44;border-left:4px solid #00CC44;'
+                            f'padding:10px 14px;margin:8px 0;font-family:monospace;font-size:11px">'
+                            f'<span style="color:{_sig_c};font-weight:700">{_signal} CONVICTION SIGNAL</span>'
+                            f'<br><span style="color:#888">Total Open Market Buys: '
+                            f'<span style="color:#00CC44;font-weight:700">{_total_str}</span>'
+                            f' &nbsp;|&nbsp; C-Suite Buyers: '
+                            f'<span style="color:#FFF;font-weight:700">{_csuite_count}</span>'
+                            f' &nbsp;|&nbsp; Total Transactions: {len(conviction)}</span></div>',
+                            unsafe_allow_html=True)
+                    else:
+                        st.markdown(
+                            '<div style="color:#555;font-family:monospace;font-size:10px;margin-top:6px">'
+                            '💰 No open market purchases (Code: P) found. All insider activity is exercises, '
+                            'awards, or tax withholding — low signal value.</div>',
+                            unsafe_allow_html=True)
                 else:
                     st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No recent insider transactions found.</p>', unsafe_allow_html=True)
             else:
@@ -925,9 +1019,9 @@ with tabs[1]:
             finra = get_finra_short_volume(tkr)
             if finra:
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Short % of Float", f"{finra['short_pct_float']}%")
-                c2.metric("Short Shares", f"{finra['short_shares']:,}")
-                c3.metric("Days to Cover", f"{finra['days_to_cover']}")
+                c1.metric("Short % of Float", f"{finra['short_pct_float']}%", help="Percentage of freely tradable shares currently sold short. >20% is considered very high.")
+                c2.metric("Short Shares", f"{finra['short_shares']:,}", help="Total number of shares currently held short by market participants.")
+                c3.metric("Days to Cover", f"{finra['days_to_cover']}", help="Short ratio — days to cover all shorts at average daily volume. >5 days = potential squeeze setup.")
             else:
                 st.markdown('<div style="color:#555;font-size:11px">Short volume data unavailable for this ticker.</div>', unsafe_allow_html=True)
         else:
@@ -1027,8 +1121,10 @@ with tabs[1]:
     # ════════════════════════════════════════════════════════════════════
     st.markdown('<div class="bb-ph">🔄 SECTOR RELATIVE ROTATION GRAPH — RRG</div>', unsafe_allow_html=True)
 
-    with st.spinner("Computing sector rotation…"):
+    with st.status("Computing sector rotation…", expanded=False) as _rrg_status:
+        st.write("Calculating RS-Ratio and RS-Momentum…")
         _rrg_data = get_sector_rrg()
+        _rrg_status.update(label="Sector rotation computed", state="complete", expanded=False)
 
     if _rrg_data:
         _rrg_colors = {
@@ -1174,30 +1270,20 @@ with tabs[1]:
             spy_price = spy_q["price"]
             vix_iv = vix_q["price"] / 100.0
             
-            import numpy as np
-            import math
-            
             # Days to Expiry (Y axis) and Strikes (X axis)
             days = np.linspace(1, 90, 30) # 1 to 90 days
             strike_pct = np.linspace(0.85, 1.15, 30) # 85% to 115% moneyness
             strikes = spy_price * strike_pct
             
-            X, Y = np.meshgrid(strikes, days)
-            Z = np.zeros_like(X)
+            # Fully vectorized 3D Risk-Neutral PDF using np.meshgrid
+            # Replaces nested Python for-loop (30x30 = 900 iterations)
+            T = days / 365.0
+            X_mesh, Y_mesh = np.meshgrid(strikes, T)
+            sigma = vix_iv
             
-            # Compute Risk-Neutral Log-Normal PDF
-            for i in range(len(days)):
-                T = days[i] / 365.0
-                sigma = vix_iv
-                for j in range(len(strikes)):
-                    S_T = strikes[j]
-                    if T > 0 and S_T > 0:
-                        d1_num = math.log(S_T / spy_price) + (0.5 * sigma**2)*T
-                        d1_den = sigma * math.sqrt(T)
-                        d1 = d1_num / d1_den
-                        pdf = math.exp(-0.5 * d1**2) / (math.sqrt(2 * math.pi) * S_T * sigma * math.sqrt(T))
-                        Z[i, j] = pdf
-                        
+            d1 = (np.log(X_mesh / spy_price) + (0.5 * sigma**2) * Y_mesh) / (sigma * np.sqrt(Y_mesh))
+            Z = np.exp(-0.5 * d1**2) / (np.sqrt(2 * np.pi) * X_mesh * sigma * np.sqrt(Y_mesh))
+            
             # Normalize Z
             Z_norm = Z / np.max(Z)
             
@@ -1271,7 +1357,8 @@ with tabs[1]:
     _iv_left, _iv_right = st.columns([3, 2])
     with _iv_left:
         st.markdown('<div class="bb-ph">📐 IV TERM STRUCTURE — ATM IMPLIED VOLATILITY</div>', unsafe_allow_html=True)
-        _iv_ticker = st.text_input("IV Ticker", value="SPY", key="iv_ts_tkr", placeholder="SPY, QQQ, AAPL…")
+        _iv_ticker = st.text_input("IV Ticker", value=st.session_state.master_ticker or "SPY", key="iv_ts_tkr", placeholder="SPY, QQQ, AAPL…",
+                                    help="Enter ticker for IV term structure analysis. Shows ATM implied volatility across multiple expiration dates.")
         with st.spinner("Loading IV term structure…"):
             _iv_data = get_iv_term_structure(_iv_ticker.upper().strip())
 
@@ -1414,8 +1501,10 @@ with tabs[1]:
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
     st.markdown('<div class="bb-ph">🗺 S&P 500 MARKET HEATMAP — FINVIZ STYLE</div>', unsafe_allow_html=True)
-    with st.spinner("Building heatmap (scanning ~120 stocks)…"):
+    with st.status("Building heatmap (scanning ~120 stocks)…", expanded=False) as _hm_status:
+        st.write("Downloading sector stock data…")
         hm_data = get_heatmap_data()
+        _hm_status.update(label="Heatmap ready", state="complete", expanded=False)
     if hm_data:
         hm_df = pd.DataFrame(hm_data)
         hm_df["pct_capped"] = hm_df["pct"].clip(-5, 5)
@@ -1542,8 +1631,8 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
             if _spx:
                 _spot, _vwap, _em = _spx["spot"], _spx["vwap"], round(_spx["high"] - _spx["low"], 1)
                 _m1, _m2, _m3, _m4 = st.columns(4)
-                with _m1: st.metric("SPX SPOT", f"${_spot:,.2f}")
-                with _m2: st.metric("EXPECTED MOVE", f"±{_em:.1f}")
+                with _m1: st.metric("SPX SPOT", f"${_spot:,.2f}", help="Current SPX spot price from Alpaca real-time feed.")
+                with _m2: st.metric("EXPECTED MOVE", f"±{_em:.1f}", help="Options-implied expected daily range in SPX points. Derived from high-low spread.")
                 with _m3:
                     _vd = _spot - _vwap
                     st.metric("VWAP", f"${_vwap:,.2f}", delta=f"{_vd:+.1f} vs Spot",
@@ -1559,7 +1648,7 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                 _vix_val = _vix_data.get("vix")
                 if _vix_val:
                     _vl = "LOW" if _vix_val < 15 else ("MOD" if _vix_val < 25 else "HIGH")
-                    st.metric("VIX", f"{_vix_val:.2f}", delta=_vl)
+                    st.metric("VIX", f"{_vix_val:.2f}", delta=_vl, help="Expected 30-day annualized volatility of SPX. <15=calm, 15-25=normal, >30=high fear, >40=panic.")
                 else: st.metric("VIX", "—")
             with _v2:
                 _v9d = _vix_data.get("vix9d")
@@ -1568,7 +1657,8 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                 _ctg = _vix_data.get("contango")
                 if _ctg is not None:
                     st.metric("TERM STRUCTURE", "✅ Contango" if _ctg else "⚠️ Backwardation",
-                            delta_color="normal" if _ctg else "inverse")
+                            delta_color="normal" if _ctg else "inverse",
+                            help="Contango = front VIX < back VIX (normal, markets calm). Backwardation = inverted — signals acute fear/hedging demand.")
                 else: st.metric("TERM STRUCTURE", "—")
             with _v4:
                 _pcr = compute_pcr(_0dte_chain) if _0dte_chain else None
@@ -1945,7 +2035,16 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
                     val = round(df["value"].iloc[-1], 2)
                     prev = round(df["value"].iloc[-2], 2) if len(df)>1 else val
                     chg = round(val-prev, 2)
-                    st.metric(name, f"{val:.2f}", delta=f"{chg:+.2f}")
+                    st.metric(name, f"{val:.2f}", delta=f"{chg:+.2f}",
+                              help={
+                                  "CPI": "Consumer Price Index — headline inflation measure. YoY change drives Fed policy.",
+                                  "Core PCE": "Personal Consumption Expenditures excluding food & energy. The Fed's preferred inflation gauge.",
+                                  "Fed Funds": "Federal Funds effective rate. The primary tool for monetary policy. Floor for all short-term rates.",
+                                  "Unemployment": "U3 unemployment rate. Below 4% is considered full employment (tightens labor market).",
+                                  "U6 Rate": "Broad unemployment including discouraged workers and underemployed. More comprehensive than U3.",
+                                  "M2 Supply": "M2 money supply in trillions. Rapid growth is inflationary; contraction signals tightening.",
+                                  "HY Spread": "High-yield (junk) bond spread over Treasuries. Widening = rising credit risk / fear.",
+                              }.get(name))
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
@@ -2926,7 +3025,8 @@ with tabs[7]:
 
     with ec2:
         st.markdown('<div class="bb-ph">📈 QUICK EARNINGS CHART + MATRIX</div>', unsafe_allow_html=True)
-        earn_tkr = st.text_input("Ticker for chart & matrix", placeholder="NVDA, AAPL…", key="ec")
+        earn_tkr = st.text_input("Ticker for chart & matrix", value=st.session_state.master_ticker or "", placeholder="NVDA, AAPL…", key="ec",
+                                  help="Enter a ticker to view earnings history, revenue matrix, expected move, and AI guidance.")
 
         # ── OPTIONS-IMPLIED EXPECTED MOVE (Feature 10) ──
         if earn_tkr:

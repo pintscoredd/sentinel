@@ -139,6 +139,12 @@
       color: #FFDD00;
     }
 
+    .fbtn.wx-on {
+      background: rgba(0, 200, 255, .08);
+      border-color: #00C8FF;
+      color: #00C8FF;
+    }
+
     .fbtn-sep {
       height: 1px;
       background: #1a1a1a;
@@ -863,6 +869,69 @@
       border-color: #FFDD00;
       color: #FFDD00;
     }
+
+    .ls-badge.wx-active {
+      border-color: #00C8FF;
+      color: #00C8FF;
+    }
+
+    /* Weather events panel */
+    #wxpanel {
+      position: absolute;
+      right: 0;
+      width: 215px;
+      background: rgba(0, 0, 0, .96);
+      border: 1px solid #222;
+      border-right: none;
+      z-index: 20;
+      display: none;
+    }
+
+    .wxph {
+      padding: 8px 11px;
+      font-size: 11px;
+      letter-spacing: 2px;
+      color: #00C8FF;
+      border-bottom: 1px solid #222;
+      font-weight: 700;
+    }
+
+    .wxpi {
+      padding: 7px 11px;
+      border-bottom: 1px solid #111;
+      cursor: pointer;
+      transition: all .15s;
+      border-left: 3px solid transparent;
+    }
+
+    .wxpi:hover {
+      background: rgba(0, 200, 255, .07);
+      border-left-color: #00C8FF;
+    }
+
+    .wxpn {
+      font-size: 11px;
+      color: #bbb;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .wxps {
+      font-size: 9px;
+      color: #00C8FF;
+      margin-top: 1px;
+      letter-spacing: 1px;
+    }
+
+    #tt.wx {
+      border-color: #00C8FF;
+      color: #00C8FF;
+    }
+
+    #ic.weather {
+      border-left-color: #00C8FF;
+    }
   </style>
 </head>
 
@@ -886,6 +955,8 @@
           style="background:#00FFFF;animation:pb 3s infinite"></span>SAT</span>
       <span id="flt-status" style="display:none"><span class="hd"
           style="background:#FFDD00;animation:pb 2s infinite"></span>MIL-AIR</span>
+      <span id="wx-status" style="display:none"><span class="hd"
+          style="background:#00C8FF;animation:pb 2.5s infinite"></span>EONET</span>
       <span id="clk" style="color:#333"></span>
     </div>
   </div>
@@ -904,10 +975,12 @@
     <button class="fbtn" onclick="setFilter('shipping',this)">◈ SHIPPING</button>
     <button class="fbtn" onclick="setFilter('minerals',this)">⬟ MINERALS</button>
     <button class="fbtn" onclick="setFilter('trade',this)">◇ TRADE/TECH</button>
+    <button class="fbtn" onclick="setFilter('weather',this)">🌪 WEATHER</button>
     <button class="fbtn" onclick="setFilter('custom',this)">+ MY EVENTS</button>
     <div class="fbtn-sep"></div>
     <button class="fbtn" id="sat-btn" onclick="toggleSatLayer(this)">◉ SATELLITES</button>
     <button class="fbtn" id="flt-btn" onclick="toggleFlightLayer(this)">✈ MIL AIR</button>
+    <button class="fbtn" id="wx-btn" onclick="toggleWeatherLayer(this)">🌪 NASA EONET</button>
   </div>
 
   <div id="tp">
@@ -920,6 +993,12 @@
   <div id="satpanel">
     <div class="satph">◉ TRACKED OBJECTS <span id="sat-count" style="color:#333;font-size:8px"></span></div>
     <div id="sat-items" style="max-height:calc(100vh - 200px);overflow-y:auto;"></div>
+  </div>
+
+  <!-- Weather events quicklist panel -->
+  <div id="wxpanel">
+    <div class="wxph">🌪 NASA EONET <span id="wx-count" style="color:#333;font-size:8px"></span></div>
+    <div id="wx-items" style="max-height:calc(100vh - 200px);overflow-y:auto;"></div>
   </div>
 
   <div id="ic">
@@ -945,6 +1024,7 @@
   <div class="layer-status">
     <div class="ls-badge" id="badge-sats">◉ SATS: OFF</div>
     <div class="ls-badge" id="badge-flt">✈ MIL-AIR: OFF</div>
+    <div class="ls-badge" id="badge-wx">🌪 EONET: OFF</div>
   </div>
 
   <div id="tt"></div>
@@ -975,7 +1055,7 @@
     <div><span class="hd hr" style="display:inline-block;margin-right:4px"></span>3 CRITICAL &nbsp;<span class="hd ha"
         style="display:inline-block;margin-right:4px;margin-left:8px"></span>4 ELEVATED</div>
     <div>DRAG TO ROTATE · SCROLL TO ZOOM · CLICK MARKERS FOR INTEL</div>
-    <div>THREE.JS · CELESTRAK · ADSBX · GDELT</div>
+    <div>THREE.JS · CELESTRAK · ADSBX · GDELT · NASA EONET</div>
   </div>
 
   <!-- satellite.js — loaded dynamically with fallback CDNs -->
@@ -1154,18 +1234,64 @@
       const vesselGeo = new THREE.SphereGeometry(0.012, 6, 6);
       const vesselRingGeo = new THREE.RingGeometry(0.016, 0.022, 12);
 
+      // Weather event geometries (SHARED) — diamond shapes to distinguish from other markers
+      const wxGeo = new THREE.OctahedronGeometry(0.014, 0);
+      const wxRingGeo = new THREE.RingGeometry(0.019, 0.027, 20);
+      const wxGlowGeo = new THREE.OctahedronGeometry(0.028, 0);
+
       let rayTargets = [];
       let satMeshes = [];
       let flightMeshes = [];
       let vesselMeshes = [];
       let infraLines = [];
+      let weatherMeshes = [];
+      let weatherTrackLines = [];
+      let weatherData = [];
+      let showWeather = false;
+      let wxLoaded = false;
+      let wxUpdateInterval = null;
+
+      // EONET category → color mapping
+      const WX_COLORS = {
+        wildfires: '#FF4422',
+        severeStorms: '#00C8FF',
+        volcanoes: '#CC44FF',
+        seaLakeIce: '#AAEEFF',
+        earthquakes: '#FFCC00',
+        floods: '#4488FF',
+        landslides: '#AA8844',
+        drought: '#CC8800',
+        dustHaze: '#998866',
+        snow: '#DDDDFF',
+        tempExtremes: '#FF8800',
+        waterColor: '#22AACC',
+        manmade: '#FF6600',
+      };
+
+      // EONET category → icon
+      const WX_ICONS = {
+        wildfires: '🔥',
+        severeStorms: '🌀',
+        volcanoes: '🌋',
+        seaLakeIce: '🧊',
+        earthquakes: '⚡',
+        floods: '🌊',
+        landslides: '⛰️',
+        drought: '☀️',
+        dustHaze: '🌫️',
+        snow: '❄️',
+        tempExtremes: '🌡️',
+        waterColor: '💧',
+        manmade: '🏭',
+      };
 
       function rebuildRayTargets() {
         rayTargets = [
           ...markers.flatMap(m => [m.mesh, m.glow]),
           ...satMeshes.map(m => m.mesh),
           ...flightMeshes.map(m => m.mesh),
-          ...vesselMeshes.map(m => m.mesh)
+          ...vesselMeshes.map(m => m.mesh),
+          ...weatherMeshes.map(m => m.mesh)
         ];
       }
 
@@ -1838,6 +1964,12 @@
           } else if (ud.type === 'vessel') {
             tt.className = ''; tt.style.borderColor = '#4488FF';
             tt.textContent = '🚢 ' + (ud.vessel.name || 'VESSEL') + ' — ' + ud.vessel.speed.toFixed(0) + 'KTS';
+          } else if (ud.type === 'weather') {
+            const wxIcon = WX_ICONS[ud.weather.category] || '🌪';
+            tt.className = 'wx';
+            let wxTip = wxIcon + ' ' + ud.weather.title;
+            if (ud.weather.magnitude != null) wxTip += ' — ' + ud.weather.magnitude + ' ' + ud.weather.magnitudeUnit;
+            tt.textContent = wxTip;
           }
           canvas.style.cursor = 'pointer';
         } else { tt.style.display = 'none'; canvas.style.cursor = 'default'; }
@@ -1856,6 +1988,7 @@
           else if (ud.type === 'satellite') showSatCard(ud.sat, p.x, p.y);
           else if (ud.type === 'flight') showFlightCard(ud.flight, p.x, p.y);
           else if (ud.type === 'vessel') showVesselCard(ud.vessel, p.x, p.y);
+          else if (ud.type === 'weather') showWeatherCard(ud.weather, p.x, p.y);
         } else { closeCard(); }
       });
 
@@ -2142,13 +2275,15 @@
           btn.classList.add('sat-on');
           document.getElementById('satpanel').style.display = 'block';
           document.getElementById('tp').style.display = 'none';
+          document.getElementById('wxpanel').style.display = 'none';
           fetchSatTLEs(); // renderSatMarkers() is called inside fetchSatTLEs on completion
           if (satUpdateInterval) clearInterval(satUpdateInterval);
           satUpdateInterval = setInterval(updateSatPositions, 30000);
         } else {
           btn.classList.remove('sat-on');
           document.getElementById('satpanel').style.display = 'none';
-          document.getElementById('tp').style.display = 'block';
+          if (!showWeather) document.getElementById('tp').style.display = 'block';
+          else document.getElementById('wxpanel').style.display = 'block';
           document.getElementById('badge-sats').textContent = '◉ SATS: OFF';
           document.getElementById('badge-sats').classList.remove('active');
           if (satUpdateInterval) { clearInterval(satUpdateInterval); satUpdateInterval = null; }
@@ -2172,6 +2307,240 @@
         }
       };
 
+      // ============================================================
+      //  NASA EONET WEATHER EVENTS MODULE
+      // ============================================================
+
+      async function fetchEONETEvents() {
+        const URLS = [
+          'https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=50',
+          'https://eonet.gsfc.nasa.gov/api/v3/events?days=30&limit=50',
+        ];
+        for (const url of URLS) {
+          try {
+            const ctrl = new AbortController();
+            setTimeout(() => ctrl.abort(), 12000);
+            const r = await fetch(url, { signal: ctrl.signal });
+            if (!r.ok) continue;
+            const data = await r.json();
+            if (!data.events || data.events.length === 0) continue;
+            weatherData = data.events.map(evt => {
+              const cat = (evt.categories && evt.categories[0]) ? evt.categories[0].id : 'unknown';
+              const catTitle = (evt.categories && evt.categories[0]) ? evt.categories[0].title : 'Natural Event';
+              // Use latest geometry point for position
+              const geom = evt.geometry || [];
+              const latest = geom[geom.length - 1] || {};
+              const coords = latest.coordinates || [0, 0];
+              return {
+                id: evt.id,
+                title: evt.title || 'Unknown Event',
+                description: evt.description || '',
+                category: cat,
+                categoryTitle: catTitle,
+                lat: coords[1],
+                lon: coords[0],
+                date: latest.date || '',
+                magnitude: latest.magnitudeValue,
+                magnitudeUnit: latest.magnitudeUnit || '',
+                link: evt.link || '',
+                sourceUrl: (evt.sources && evt.sources[0]) ? evt.sources[0].url : '',
+                sourceId: (evt.sources && evt.sources[0]) ? evt.sources[0].id : '',
+                closed: evt.closed,
+                geometry: geom, // full track for storms
+              };
+            }).filter(e => isFinite(e.lat) && isFinite(e.lon) && Math.abs(e.lat) <= 90 && Math.abs(e.lon) <= 180);
+            wxLoaded = true;
+            document.getElementById('wx-status').style.display = '';
+            renderWeatherMarkers();
+            renderWeatherTrackLines();
+            updateWeatherListPanel();
+            return;
+          } catch (e) { continue; }
+        }
+        // Offline fallback
+        wxLoaded = true;
+        const badge = document.getElementById('badge-wx');
+        badge.textContent = '🌪 EONET: OFFLINE';
+        badge.style.color = '#FF4444';
+        badge.classList.add('wx-active');
+      }
+
+      function renderWeatherMarkers() {
+        weatherMeshes.forEach(({ mesh, ring, glow }) => {
+          scene.remove(mesh); mesh.material.dispose();
+          if (ring) { scene.remove(ring); ring.material.dispose(); }
+          if (glow) { scene.remove(glow); glow.material.dispose(); }
+        });
+        weatherMeshes.length = 0;
+        if (!showWeather || weatherData.length === 0) {
+          rebuildRayTargets();
+          return;
+        }
+        weatherData.forEach(evt => {
+          const colHex = WX_COLORS[evt.category] || '#00C8FF';
+          const col = new THREE.Color(colHex);
+          const pos = latLonToVec3(evt.lat, evt.lon, 1.014);
+          if (!isFinite(pos.x)) return;
+
+          const mesh = new THREE.Mesh(wxGeo, new THREE.MeshBasicMaterial({ color: col }));
+          mesh.position.copy(pos);
+          mesh.userData = { type: 'weather', weather: evt, basePos: pos.clone() };
+
+          const ring = new THREE.Mesh(wxRingGeo, new THREE.MeshBasicMaterial({
+            color: col, transparent: true, opacity: 0.45, side: THREE.DoubleSide
+          }));
+          ring.position.copy(pos);
+          ring.userData = { phase: Math.random() * Math.PI * 2, basePos: pos.clone() };
+
+          const glow = new THREE.Mesh(wxGlowGeo, new THREE.MeshBasicMaterial({
+            color: col, transparent: true, opacity: 0.08, side: THREE.FrontSide
+          }));
+          glow.position.copy(pos);
+          glow.userData = { basePos: pos.clone() };
+
+          scene.add(mesh); scene.add(ring); scene.add(glow);
+          weatherMeshes.push({ mesh, ring, glow, weather: evt, basePos: pos.clone() });
+        });
+
+        document.getElementById('badge-wx').textContent = `🌪 EONET: ${weatherMeshes.length}`;
+        document.getElementById('badge-wx').classList.add('wx-active');
+        rebuildRayTargets();
+      }
+
+      function renderWeatherTrackLines() {
+        // Clear previous
+        weatherTrackLines.forEach(l => { scene.remove(l); l.geometry.dispose(); l.material.dispose(); });
+        weatherTrackLines.length = 0;
+        if (!showWeather) return;
+        // Only draw track lines for storms with multiple geometry points
+        weatherData.filter(e => e.geometry && e.geometry.length > 1 &&
+          (e.category === 'severeStorms' || e.category === 'volcanoes')
+        ).forEach(evt => {
+          const colHex = WX_COLORS[evt.category] || '#00C8FF';
+          const pts = [];
+          evt.geometry.forEach(g => {
+            if (!g.coordinates || g.coordinates.length < 2) return;
+            const lon = g.coordinates[0], lat = g.coordinates[1];
+            if (!isFinite(lat) || !isFinite(lon)) return;
+            const v = latLonToVec3(lat, lon, 1.012);
+            pts.push(v.x, v.y, v.z);
+          });
+          if (pts.length < 6) return;
+          const geo = new THREE.BufferGeometry();
+          geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+          const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+            color: new THREE.Color(colHex), transparent: true, opacity: 0.6, linewidth: 2
+          }));
+          scene.add(line);
+          weatherTrackLines.push(line);
+        });
+      }
+
+      function showWeatherCard(evt, px, py) {
+        currentCardObj = null;
+        const ic = document.getElementById('ic');
+        const icon = WX_ICONS[evt.category] || '🌪';
+        const colHex = WX_COLORS[evt.category] || '#00C8FF';
+        document.getElementById('ic-sev').textContent = `${icon} ${evt.categoryTitle.toUpperCase()} — NASA EONET`;
+        document.getElementById('ic-ttl').textContent = evt.title;
+
+        let bodyParts = [];
+        if (evt.description) bodyParts.push(evt.description);
+        bodyParts.push(`LOCATION: ${evt.lat.toFixed(2)}°, ${evt.lon.toFixed(2)}°`);
+        if (evt.magnitude != null) {
+          bodyParts.push(`MAGNITUDE: ${evt.magnitude} ${evt.magnitudeUnit}`);
+        }
+        if (evt.date) {
+          bodyParts.push(`LAST UPDATED: ${new Date(evt.date).toLocaleString()}`);
+        }
+        if (evt.geometry && evt.geometry.length > 1) {
+          bodyParts.push(`TRACK: ${evt.geometry.length} positions recorded`);
+        }
+        bodyParts.push(`STATUS: ${evt.closed ? 'CLOSED' : 'ACTIVE'}`);
+        if (evt.sourceId) {
+          bodyParts.push(`SOURCE: ${evt.sourceId}`);
+        }
+        document.getElementById('ic-body').textContent = bodyParts.join('\n');
+
+        const mkt = document.getElementById('ic-mkt');
+        // Market impact estimation based on category
+        const mktImpact = {
+          wildfires: '🔥 UTILITIES, INSURANCE, AG FUTURES',
+          severeStorms: '🌀 RE-INSURERS, SHIPPING, AG FUTURES',
+          volcanoes: '🌋 AIRLINES, AG FUTURES, RARE EARTH',
+          earthquakes: '⚡ CONSTRUCTION, INSURANCE, INFRASTRUCTURE',
+          floods: '🌊 INSURANCE, AG FUTURES, REAL ESTATE',
+          drought: '☀️ AG FUTURES, WATER UTILITIES',
+          seaLakeIce: '🧊 SHIPPING, ENERGY',
+        };
+        mkt.textContent = mktImpact[evt.category] ? `📊 MARKET: ${mktImpact[evt.category]}` : '';
+
+        const tags = [evt.categoryTitle.toUpperCase(), 'NASA', 'EONET'];
+        if (evt.magnitude != null) tags.push(`${evt.magnitude} ${evt.magnitudeUnit}`);
+        document.getElementById('ic-tags').innerHTML = tags.map(t => `<span class="ictag">${t}</span>`).join('');
+
+        let dateStr = evt.date ? new Date(evt.date).toLocaleString() : 'N/A';
+        document.getElementById('ic-date').textContent = `UPDATED: ${dateStr}`;
+        document.getElementById('ic-track-btn').style.display = 'none';
+
+        ic.className = 'show weather';
+        ic.style.borderLeftColor = colHex;
+        positionCard(px, py);
+      }
+
+      function updateWeatherListPanel() {
+        const items = document.getElementById('wx-items');
+        const count = document.getElementById('wx-count');
+        count.textContent = `(${weatherData.length})`;
+        items.innerHTML = weatherData.slice(0, 40).map((e, i) => {
+          const icon = WX_ICONS[e.category] || '🌪';
+          const colHex = WX_COLORS[e.category] || '#00C8FF';
+          let magStr = '';
+          if (e.magnitude != null) magStr = ` · ${e.magnitude} ${e.magnitudeUnit}`;
+          return `
+          <div class="wxpi" onclick="focusWeatherEvent(${i})" style="border-left-color:${colHex}">
+            <div class="wxpn">${icon} ${e.title}</div>
+            <div class="wxps" style="color:${colHex}">${e.categoryTitle.toUpperCase()}${magStr}</div>
+          </div>`;
+        }).join('');
+      }
+
+      window.focusWeatherEvent = function (idx) {
+        const evt = weatherData[idx];
+        if (!evt) return;
+        flyTo(evt.lat, evt.lon);
+        const W = canvas.clientWidth || CW, H = canvas.clientHeight || CH;
+        setTimeout(() => showWeatherCard(evt, W * 0.3, H * 0.3), 600);
+      };
+
+      window.toggleWeatherLayer = function (btn) {
+        showWeather = !showWeather;
+        if (showWeather) {
+          btn.classList.add('wx-on');
+          document.getElementById('wxpanel').style.display = 'block';
+          document.getElementById('tp').style.display = 'none';
+          document.getElementById('satpanel').style.display = 'none';
+          if (!wxLoaded) {
+            fetchEONETEvents();
+          } else {
+            renderWeatherMarkers();
+            renderWeatherTrackLines();
+          }
+          if (wxUpdateInterval) clearInterval(wxUpdateInterval);
+          wxUpdateInterval = setInterval(fetchEONETEvents, 600000); // refresh every 10 min
+        } else {
+          btn.classList.remove('wx-on');
+          document.getElementById('wxpanel').style.display = 'none';
+          if (!showSats) document.getElementById('tp').style.display = 'block';
+          document.getElementById('badge-wx').textContent = '🌪 EONET: OFF';
+          document.getElementById('badge-wx').classList.remove('wx-active');
+          if (wxUpdateInterval) { clearInterval(wxUpdateInterval); wxUpdateInterval = null; }
+          renderWeatherMarkers();
+          weatherTrackLines.forEach(l => { scene.remove(l); l.geometry.dispose(); l.material.dispose(); });
+          weatherTrackLines.length = 0;
+        }
+      };
+
       // ── FLY TO
       function flyTo(lat, lon) {
         targetRotY = -(90 + lon) * Math.PI / 180;
@@ -2188,7 +2557,7 @@
 
       function setFilter(f, btn) {
         activeFilter = f;
-        document.querySelectorAll('.fbtn:not(#sat-btn):not(#flt-btn)').forEach(b => b.classList.remove('on'));
+        document.querySelectorAll('.fbtn:not(#sat-btn):not(#flt-btn):not(#wx-btn)').forEach(b => b.classList.remove('on'));
         if (btn) btn.classList.add('on');
         renderMarkers();
       }
@@ -2301,8 +2670,38 @@
             if (ring) ring.visible = vis;
           });
 
+          // Weather markers
+          weatherMeshes.forEach(({ mesh, ring, glow, basePos }) => {
+            _rp.copy(basePos).applyQuaternion(_quat);
+            mesh.position.copy(_rp);
+            if (ring) {
+              ring.position.copy(_rp);
+              ring.quaternion.copy(camera.quaternion);
+              ring.userData.phase = (ring.userData.phase || 0) + dt * 2.5;
+              const sinP = Math.sin(ring.userData.phase);
+              ring.material.opacity = 0.20 + 0.35 * Math.abs(sinP);
+              const s = 1 + 0.18 * Math.abs(sinP);
+              ring.scale.set(s, s, 1);
+            }
+            if (glow) {
+              glow.position.copy(_rp);
+              glow.material.opacity = 0.04 + 0.08 * Math.abs(Math.sin((ring?.userData.phase || 0) * 0.7));
+            }
+            _camDir.copy(camera.position).sub(_rp).normalize();
+            _norm.copy(_rp).normalize();
+            const vis = _camDir.dot(_norm) > 0.04;
+            mesh.visible = vis;
+            if (ring) ring.visible = vis;
+            if (glow) glow.visible = vis;
+          });
+
           // Infrastructure lines rotation
           infraLines.forEach(line => {
+            line.quaternion.copy(_quat);
+          });
+
+          // Weather track lines rotation
+          weatherTrackLines.forEach(line => {
             line.quaternion.copy(_quat);
           });
 

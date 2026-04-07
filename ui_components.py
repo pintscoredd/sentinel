@@ -18,7 +18,7 @@ except ImportError:
 
 from data_fetchers import (
     _safe_float, _safe_int, _esc, fmt_p, fmt_pct, pct_color,
-    fred_series, finnhub_officers, _parse_poly_field,
+    fred_series, _parse_poly_field,
     multi_quotes, market_snapshot_str,
     GEO_FINANCIAL_NETWORKS, GEO_WEBCAM_FEEDS,
     GEO_THEATERS, GEO_IMPACT_TICKERS, GEO_SHIPPING_LANES,
@@ -192,9 +192,9 @@ def render_options_table(df, side="calls", current_price=None):
     if "strike" in df.columns:
         df["strike"] = pd.to_numeric(df["strike"], errors="coerce").fillna(0)
 
-    if current_price and "strike" in df.columns and len(df) > 13:
+    if current_price and "strike" in df.columns and len(df) > 20:
         df["_dist"] = (df["strike"] - current_price).abs()
-        df = df.nsmallest(len(df) - 13, "_dist").drop(columns=["_dist"])
+        df = df.nsmallest(20, "_dist").drop(columns=["_dist"])
 
     strike_color = "#00CC44" if side == "calls" else "#FF4444"
     atm_strike = None
@@ -346,10 +346,19 @@ def classify_role(raw_role):
     # Preserve the full spelled-out position
     return raw_role.strip()[:60]
 
-def render_insider_cards(data, ticker="", finnhub_key=""):
+def render_insider_cards(data, ticker="", role_map=None):
+    """Render insider transaction cards.
+    
+    Args:
+        data: Insider transaction records from finnhub_insider()
+        ticker: Ticker symbol for display
+        role_map: Pre-fetched officer role mapping dict from finnhub_officers().
+                  Passing this avoids making API calls inside the UI renderer.
+    """
     if not data:
         return '<p style="color:#555;font-family:monospace;font-size:11px">No insider data. Add Finnhub key.</p>'
-    role_map = finnhub_officers(ticker, finnhub_key) if ticker and finnhub_key else {}
+    if role_map is None:
+        role_map = {}
     CODE = {
         "P": ("PURCHASE", "buy"), "S": ("SALE", "sell"),
         "A": ("AWARD", "buy"), "D": ("DISPOSAL", "sell"),
