@@ -1063,136 +1063,6 @@ with tabs[1]:
                     st.markdown('<div style="color:#555;font-size:11px">Financials temporarily unavailable.</div>', unsafe_allow_html=True)
             # --- END: Financials ---
 
-            # --- START: Options Payoff ---
-            st.markdown('<div style="margin-top:12px;margin-bottom:8px;font-size:16px;font-weight:700;display:flex;align-items:center;gap:6px">'
-                        '<div style="background:#222;padding:2px 8px;border-radius:4px;font-size:12px;color:#EEE">Long Call ℹ️</div>'
-                        '</div>', unsafe_allow_html=True)
-            
-            c1, c2 = st.columns([1.2, 4])
-            pay_tkr = c1.text_input("Ticker", value=tkr, key="payoff_ticker_input", label_visibility="collapsed").upper().strip()
-            
-            if pay_tkr:
-                _pq = yahoo_quote(pay_tkr)
-                if _pq:
-                    _spot = float(_pq["price"])
-                    _chg_pct = float(_pq.get("pct", 0.0))
-                    _chg_str = f"+{_chg_pct:.2f}%" if _chg_pct >= 0 else f"{_chg_pct:.2f}%"
-                    _chg_col = "#00CC44" if _chg_pct >= 0 else "#FF4444"
-                    
-                    c2.markdown(f'<div style="font-size:20px;font-weight:700;margin-top:-6px;line-height:36px">'
-                                f'${_spot:.2f} &nbsp;<span style="font-size:14px;font-weight:500;color:{_chg_col}">{_chg_str} Delayed</span>'
-                                f'</div>', unsafe_allow_html=True)
-                    
-                    with st.spinner("Loading options..."):
-                        exps = options_expiries(pay_tkr)
-                    
-                    if exps:
-                        st.markdown('<div style="color:#888;font-size:10px;font-weight:700;margin-bottom:0px;letter-spacing:0.5px">EXPIRATION</div>', unsafe_allow_html=True)
-                        target_dt = datetime.today().date() + timedelta(days=30)
-                        closest_exp = min(exps, key=lambda x: abs((datetime.strptime(x, "%Y-%m-%d").date() - target_dt).days))
-                        sel_exp = st.radio("Expiration", exps, index=exps.index(closest_exp), key="payoff_exp", horizontal=True, label_visibility="collapsed")
-                        
-                        c_df, p_df, _ = options_chain(pay_tkr, sel_exp)
-                        
-                        if c_df is not None and not c_df.empty:
-                            c_df = c_df.dropna(subset=['lastPrice', 'strike']).sort_values('strike')
-                            strikes = c_df['strike'].tolist()
-                            
-                            atm_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i]-_spot))
-                            st.markdown('<div style="color:#888;font-size:10px;font-weight:700;margin-top:12px;margin-bottom:-10px;letter-spacing:0.5px">STRIKE</div>', unsafe_allow_html=True)
-                            sel_strike = st.select_slider("Strike", options=strikes, value=strikes[atm_idx], key="payoff_strike", label_visibility="collapsed")
-                            
-                            call_row = c_df[c_df['strike'] == sel_strike].iloc[0]
-                            _prem = float(call_row['lastPrice'])
-                            if _prem <= 0.0:
-                                _prem = float((call_row['bid'] + call_row['ask']) / 2)
-                                
-                            _qty = 1 
-                            _net_debit = _prem * 100 * _qty
-                            _max_loss = _net_debit
-                            _breakeven = sel_strike + _prem
-                            
-                            from scipy.stats import norm
-                            _T = max((datetime.strptime(sel_exp, "%Y-%m-%d").date() - datetime.today().date()).days / 365.0, 1/365.0)
-                            _iv = call_row.get('impliedVolatility', 0.20)
-                            
-                            if _iv > 0:
-                                d1 = (np.log(_spot / _breakeven) + 0.5 * _iv**2 * _T) / (_iv * np.sqrt(_T))
-                                _pop = float(norm.cdf(d1)) * 100
-                            else:
-                                _pop = 0.0
-                                
-                            st.markdown(
-                                f'<div style="display:flex;justify-content:space-between;padding:12px 0 8px 0;border-bottom:1px solid #111;margin-bottom:8px">'
-                                f'<div style="text-align:left"><span style="color:#888;font-size:10px;font-weight:600">NET DEBIT</span><br><span style="color:#fff;font-weight:700;font-size:18px">${_net_debit:,.0f}</span></div>'
-                                f'<div style="text-align:left"><span style="color:#888;font-size:10px;font-weight:600">MAX LOSS</span><br><span style="color:#fff;font-weight:700;font-size:18px">${_max_loss:,.0f}</span></div>'
-                                f'<div style="text-align:left"><span style="color:#888;font-size:10px;font-weight:600">MAX PROFIT</span><br><span style="color:#fff;font-weight:700;font-size:18px">Infinite</span></div>'
-                                f'<div style="text-align:left"><span style="color:#888;font-size:10px;font-weight:600">CHANCE OF PROFIT</span><br><span style="color:#fff;font-weight:700;font-size:18px">{_pop:.0f}%</span></div>'
-                                f'<div style="text-align:left"><span style="color:#888;font-size:10px;font-weight:600">BREAKEVEN</span><br><span style="color:#fff;font-weight:700;font-size:18px">Above ${_breakeven:.2f}</span></div>'
-                                f'</div>',
-                                unsafe_allow_html=True
-                            )
-                            
-                            _S_range = np.linspace(_spot * 0.85, _spot * 1.15, 500)
-                            _intrinsic = np.maximum(_S_range - sel_strike, 0)
-                            _pnl = (_intrinsic - _prem) * 100 * _qty
-                            
-                            fig_rh = go.Figure()
-                            
-                            _S_loss = _S_range[_S_range <= _breakeven]
-                            _pnl_loss = _pnl[_S_range <= _breakeven]
-                            _S_prof = _S_range[_S_range >= _breakeven]
-                            _pnl_prof = _pnl[_S_range >= _breakeven]
-                            
-                            if len(_S_loss) > 0 and len(_S_prof) > 0:
-                                _S_loss = np.append(_S_loss, _breakeven)
-                                _pnl_loss = np.append(_pnl_loss, 0)
-                                _S_prof = np.insert(_S_prof, 0, _breakeven)
-                                _pnl_prof = np.insert(_pnl_prof, 0, 0)
-                            
-                                fig_rh.add_trace(go.Scatter(
-                                    x=_S_loss, y=_pnl_loss,
-                                    mode='lines', line=dict(color='#FF2B43', width=3),
-                                    fill='tozeroy', fillcolor='rgba(255, 43, 67, 0.2)',
-                                    showlegend=False, hoverinfo='x+y'))
-                                    
-                                fig_rh.add_trace(go.Scatter(
-                                    x=_S_prof, y=_pnl_prof,
-                                    mode='lines', line=dict(color='#00FF55', width=3),
-                                    fill='tozeroy', fillcolor='rgba(0, 255, 85, 0.2)',
-                                    showlegend=False, hoverinfo='x+y'))
-                            else:
-                                color_val = '#00FF55' if len(_S_prof) > 0 else '#FF2B43'
-                                fill_val = 'rgba(0, 255, 85, 0.2)' if len(_S_prof) > 0 else 'rgba(255, 43, 67, 0.2)'
-                                fig_rh.add_trace(go.Scatter(x=_S_range, y=_pnl, mode='lines', line=dict(color=color_val, width=3), fill='tozeroy', fillcolor=fill_val, showlegend=False))
-                                
-                            fig_rh.add_hline(y=0, line_color='#444', line_dash='solid', line_width=1)
-                            
-                            fig_rh.add_vline(x=_breakeven, line_color='#00AAFF', line_dash='solid', line_width=1.5)
-                            fig_rh.add_annotation(
-                                x=_breakeven, y=max(_pnl)*0.8,
-                                text=f"${_breakeven:.2f}",
-                                showarrow=False, font=dict(color='#00AAFF', size=11, family='monospace'),
-                                xanchor='left', xshift=5
-                            )
-                            
-                            fig_rh.add_vline(x=_spot, line_color='#888', line_dash='dot', line_width=1)
-                            
-                            fig_rh.update_layout(
-                                margin=dict(l=0, r=0, t=10, b=10),
-                                height=280,
-                                paper_bgcolor='rgba(0,0,0,0)',
-                                plot_bgcolor='rgba(0,0,0,0)',
-                                xaxis=dict(showgrid=False, zeroline=False, color='#AAA', tickprefix='$', tickfont=dict(size=10)),
-                                yaxis=dict(showgrid=True, gridcolor='#222', zeroline=False, color='#AAA', tickprefix='$', tickfont=dict(size=10)),
-                                hovermode='x unified'
-                            )
-                            st.plotly_chart(fig_rh, width='stretch')
-                        else:
-                            st.markdown('<span style="color:#555;font-size:11px">Call option data missing for expiry.</span>', unsafe_allow_html=True)
-                    else:
-                        st.markdown('<span style="color:#555;font-size:11px">Options data unavailable.</span>', unsafe_allow_html=True)
-            # --- END: Options Payoff ---
             if st.session_state.finnhub_key.get_secret_value():
                 with st.status("Loading insider intelligence…", expanded=False) as _ins_status:
                     st.write("Fetching insider transactions…")
@@ -1831,327 +1701,6 @@ with tabs[1]:
 # TAB 2 — OPTIONS (Payoff Builder + Options Chain + 0DTE GEX)
 # ════════════════════════════════════════════════════════════════════
 with tabs[2]:
-    # ────────────────────────────────────────────────────────────────
-    # 📐 OPTIONS PAYOFF DIAGRAM & STRATEGY ENGINE
-    # ────────────────────────────────────────────────────────────────
-    with st.expander("📐 OPTIONS PAYOFF DIAGRAM & STRATEGY ENGINE", expanded=False):
-        # ── Strategy taxonomy ──
-        _STRAT_TAXONOMY = {
-            "Novice": {
-                "Long Call": [("call", 1, 1)],
-                "Long Put": [("put", 1, 1)],
-                "Covered Call": [("stock", 1, 1), ("call", -1, 1)],
-                "Cash-Secured Put": [("put", -1, 1)],
-                "Protective Put": [("stock", 1, 1), ("put", 1, 1)],
-            },
-            "Intermediate — Credit Spreads": {
-                "Bull Put Spread": [("put", -1, 1), ("put", 1, 2)],
-                "Bear Call Spread": [("call", -1, 1), ("call", 1, 2)],
-            },
-            "Intermediate — Neutral": {
-                "Iron Butterfly": [("put", 1, 1), ("put", -1, 2), ("call", -1, 2), ("call", 1, 3)],
-                "Iron Condor": [("put", 1, 1), ("put", -1, 2), ("call", -1, 3), ("call", 1, 4)],
-                "Long Put Butterfly": [("put", 1, 1), ("put", -2, 2), ("put", 1, 3)],
-                "Long Call Butterfly": [("call", 1, 1), ("call", -2, 2), ("call", 1, 3)],
-            },
-            "Intermediate — Calendar/Diagonal": {
-                "Calendar Call Spread": [("call", -1, 1), ("call", 1, 1)],
-                "Calendar Put Spread": [("put", -1, 1), ("put", 1, 1)],
-                "Diagonal Call Spread": [("call", -1, 1), ("call", 1, 2)],
-                "Diagonal Put Spread": [("put", -1, 1), ("put", 1, 2)],
-            },
-            "Intermediate — Debit Spreads": {
-                "Bull Call Spread": [("call", 1, 1), ("call", -1, 2)],
-                "Bear Put Spread": [("put", 1, 2), ("put", -1, 1)],
-            },
-            "Intermediate — Directional/Other": {
-                "Inverse Iron Butterfly": [("put", -1, 1), ("put", 1, 2), ("call", 1, 2), ("call", -1, 3)],
-                "Inverse Iron Condor": [("put", -1, 1), ("put", 1, 2), ("call", 1, 3), ("call", -1, 4)],
-                "Short Put Butterfly": [("put", -1, 1), ("put", 2, 2), ("put", -1, 3)],
-                "Short Call Butterfly": [("call", -1, 1), ("call", 2, 2), ("call", -1, 3)],
-                "Straddle": [("call", 1, 1), ("put", 1, 1)],
-                "Strangle": [("call", 1, 2), ("put", 1, 1)],
-                "Collar": [("stock", 1, 1), ("put", 1, 1), ("call", -1, 2)],
-            },
-            "Advanced — Naked Income": {
-                "Short Put": [("put", -1, 1)],
-                "Short Call": [("call", -1, 1)],
-                "Covered Short Straddle": [("stock", 1, 1), ("call", -1, 1), ("put", -1, 1)],
-                "Covered Short Strangle": [("stock", 1, 1), ("call", -1, 2), ("put", -1, 1)],
-            },
-            "Advanced — Neutral/Directional": {
-                "Short Straddle": [("call", -1, 1), ("put", -1, 1)],
-                "Short Strangle": [("call", -1, 2), ("put", -1, 1)],
-                "Short Call Condor": [("call", -1, 1), ("call", 1, 2), ("call", 1, 3), ("call", -1, 4)],
-                "Short Put Condor": [("put", -1, 1), ("put", 1, 2), ("put", 1, 3), ("put", -1, 4)],
-                "Long Call Condor": [("call", 1, 1), ("call", -1, 2), ("call", -1, 3), ("call", 1, 4)],
-                "Long Put Condor": [("put", 1, 1), ("put", -1, 2), ("put", -1, 3), ("put", 1, 4)],
-            },
-            "Advanced — Ladders/Ratios": {
-                "Bull Call Ladder": [("call", 1, 1), ("call", -1, 2), ("call", -1, 3)],
-                "Bear Call Ladder": [("call", -1, 1), ("call", 1, 2), ("call", 1, 3)],
-                "Bull Put Ladder": [("put", -1, 1), ("put", 1, 2), ("put", 1, 3)],
-                "Bear Put Ladder": [("put", 1, 1), ("put", -1, 2), ("put", -1, 3)],
-                "Call Ratio Backspread": [("call", -1, 1), ("call", 2, 2)],
-                "Put Ratio Backspread": [("put", -1, 2), ("put", 2, 1)],
-                "Broken Wing Put": [("put", 1, 1), ("put", -2, 2), ("put", 1, 3)],
-                "Broken Wing Call": [("call", 1, 1), ("call", -2, 2), ("call", 1, 3)],
-                "Jade Lizard": [("put", -1, 1), ("call", -1, 2), ("call", 1, 3)],
-                "Reverse Jade Lizard": [("call", -1, 1), ("put", -1, 2), ("put", 1, 1)],
-            },
-            "Expert — Ratio/Synthetic": {
-                "Call Ratio Spread": [("call", 1, 1), ("call", -2, 2)],
-                "Put Ratio Spread": [("put", 1, 2), ("put", -2, 1)],
-                "Long Synthetic Future": [("call", 1, 1), ("put", -1, 1)],
-                "Short Synthetic Future": [("call", -1, 1), ("put", 1, 1)],
-                "Synthetic Put": [("stock", -1, 1), ("call", 1, 1)],
-            },
-            "Expert — Arbitrage/Other": {
-                "Long Combo": [("call", 1, 2), ("put", -1, 1)],
-                "Short Combo": [("call", -1, 2), ("put", 1, 1)],
-                "Strip": [("call", 1, 1), ("put", 2, 1)],
-                "Strap": [("call", 2, 1), ("put", 1, 1)],
-                "Guts": [("call", 1, 1), ("put", 1, 2)],
-                "Short Guts": [("call", -1, 1), ("put", -1, 2)],
-                "Double Diagonal": [("call", -1, 2), ("call", 1, 3), ("put", -1, 2), ("put", 1, 1)],
-            },
-        }
-
-        _cat_names = list(_STRAT_TAXONOMY.keys())
-        _sel_cat = st.selectbox("Strategy Category", _cat_names, index=0, key="payoff_cat")
-        _strat_names = list(_STRAT_TAXONOMY[_sel_cat].keys())
-        _sel_strat = st.selectbox("Specific Strategy", _strat_names, index=0, key="payoff_strat")
-        _legs = _STRAT_TAXONOMY[_sel_cat][_sel_strat]
-
-        # Determine how many distinct strikes this strategy needs
-        _strike_indices = sorted(set(leg[2] for leg in _legs if leg[0] != "stock"))
-        _n_strikes = len(_strike_indices) if _strike_indices else 1
-
-        # Default spot from master ticker
-        _payoff_default_spot = 100.0
-        _payoff_default_iv = 20.0
-        try:
-            _payoff_tkr = st.session_state.master_ticker
-            if _payoff_tkr:
-                _pq = yahoo_quote(_payoff_tkr)
-                if _pq:
-                    _payoff_default_spot = float(_pq["price"])
-            _vix_info = get_vix_full()
-            if _vix_info and _vix_info[0]:
-                _payoff_default_iv = float(_vix_info[0])
-        except Exception:
-            pass
-
-        # Input fields
-        _inp_cols = st.columns(4)
-        with _inp_cols[0]:
-            _po_spot = st.number_input("Spot Price ($)", value=_payoff_default_spot, min_value=0.01, format="%.2f", key="po_spot")
-        with _inp_cols[1]:
-            _po_qty = st.number_input("Quantity (contracts)", value=1, min_value=1, max_value=1000, step=1, key="po_qty")
-        with _inp_cols[2]:
-            _po_dte = st.number_input("Days to Expiry", value=30, min_value=1, max_value=730, step=1, key="po_dte")
-        with _inp_cols[3]:
-            _po_iv = st.number_input("Implied Volatility (%)", value=_payoff_default_iv, min_value=1.0, max_value=300.0, format="%.1f", key="po_iv")
-
-        # Strike inputs — dynamic based on strategy
-        _strike_labels = ["Strike 1 ($)", "Strike 2 ($)", "Strike 3 ($)", "Strike 4 ($)"]
-        _strike_defaults = [_po_spot, _po_spot * 1.02, _po_spot * 1.05, _po_spot * 1.08]
-        _strike_vals = {}
-        if _n_strikes > 0:
-            _sk_cols = st.columns(min(_n_strikes, 4))
-            for i, si in enumerate(_strike_indices):
-                with _sk_cols[i % len(_sk_cols)]:
-                    _strike_vals[si] = st.number_input(
-                        _strike_labels[i] if i < 4 else f"Strike {i+1} ($)",
-                        value=_strike_defaults[min(i, 3)],
-                        min_value=0.01, format="%.2f", key=f"po_k{si}")
-
-        # Premium input
-        _po_premium = st.number_input("Net Premium (+ credit / − debit per share)", value=0.0, format="%.2f", key="po_prem",
-                                       help="Net premium received (positive) or paid (negative) per share. For spreads: net credit/debit of all legs.")
-
-        # ── Computation ──
-        _S_range = np.linspace(_po_spot * 0.80, _po_spot * 1.20, 500)
-        _total_pnl = np.zeros_like(_S_range)
-
-        _net_delta = 0.0
-        _net_gamma = 0.0
-        _net_theta = 0.0
-        _net_vega = 0.0
-        _T = max(_po_dte / 365.0, 1/365.0)
-        _sigma = _po_iv / 100.0
-
-        for leg in _legs:
-            _ltype, _lqty, _lstrike_idx = leg
-            _abs_qty = abs(_lqty) * _po_qty
-            _sign = 1 if _lqty > 0 else -1
-
-            if _ltype == "stock":
-                # Stock leg: P&L = sign * qty * 100 * (S - spot)
-                _total_pnl += _sign * _abs_qty * 100 * (_S_range - _po_spot)
-                _net_delta += _sign * _abs_qty * 100
-            else:
-                _K = _strike_vals.get(_lstrike_idx, _po_spot)
-                if _ltype == "call":
-                    _intrinsic = np.maximum(_S_range - _K, 0)
-                else:  # put
-                    _intrinsic = np.maximum(_K - _S_range, 0)
-                _total_pnl += _sign * _abs_qty * 100 * _intrinsic
-
-                # Greeks
-                _g = bs_greeks_engine(_po_spot, _K, _T, 0.045, _sigma, _ltype)
-                _net_delta += _sign * _abs_qty * 100 * _g["delta"]
-                _net_gamma += _sign * _abs_qty * 100 * _g["gamma"]
-                _net_theta += _sign * _abs_qty * 100 * _g["theta"]
-                _net_vega += _sign * _abs_qty * 100 * _g["vega"]
-
-        # Add net premium
-        _total_prem_adj = _po_premium * _po_qty * 100
-        _total_pnl += _total_prem_adj
-
-        # Breakevens
-        _sign_changes = np.where(np.diff(np.sign(_total_pnl)))[0]
-        _breakevens = []
-        for idx in _sign_changes:
-            _be = np.interp(0, [_total_pnl[idx], _total_pnl[idx+1]], [_S_range[idx], _S_range[idx+1]])
-            _breakevens.append(round(float(_be), 2))
-
-        _max_profit = float(np.max(_total_pnl))
-        _max_loss = float(np.min(_total_pnl))
-
-        # POP approximation
-        _pop = None
-        if _breakevens and _sigma > 0 and _po_dte > 0:
-            try:
-                # If strategy profits above breakeven, POP = P(S > BE)
-                # If strategy profits below breakeven, POP = P(S < BE)
-                _above_profit = _total_pnl[-1] > 0
-                if len(_breakevens) == 1:
-                    d = (np.log(_po_spot / _breakevens[0]) + 0.5 * _sigma**2 * _T) / (_sigma * np.sqrt(_T))
-                    if _above_profit:
-                        _pop = float(_norm_dist.cdf(d)) * 100
-                    else:
-                        _pop = float(_norm_dist.cdf(-d)) * 100
-                elif len(_breakevens) == 2:
-                    d1 = (np.log(_po_spot / _breakevens[0]) + 0.5 * _sigma**2 * _T) / (_sigma * np.sqrt(_T))
-                    d2 = (np.log(_po_spot / _breakevens[1]) + 0.5 * _sigma**2 * _T) / (_sigma * np.sqrt(_T))
-                    # Profit is between breakevens if mid-range P&L > 0
-                    _mid_idx = len(_S_range) // 2
-                    if _total_pnl[_mid_idx] > 0:
-                        _pop = float(_norm_dist.cdf(d1) - _norm_dist.cdf(d2)) * 100
-                    else:
-                        _pop = float(1 - (_norm_dist.cdf(d1) - _norm_dist.cdf(d2))) * 100
-                    _pop = abs(_pop)
-            except Exception:
-                _pop = None
-
-        # ── Visualization ──
-        _fig_pay = dark_fig(400)
-
-        # Green/Red shaded regions
-        _profit_mask = _total_pnl >= 0
-        _loss_mask = _total_pnl < 0
-
-        _fig_pay.add_trace(go.Scatter(
-            x=_S_range, y=np.where(_profit_mask, _total_pnl, 0),
-            fill='tozeroy', fillcolor='rgba(0,204,68,0.1)',
-            line=dict(width=0), showlegend=False, hoverinfo='skip'))
-        _fig_pay.add_trace(go.Scatter(
-            x=_S_range, y=np.where(_loss_mask, _total_pnl, 0),
-            fill='tozeroy', fillcolor='rgba(255,68,68,0.1)',
-            line=dict(width=0), showlegend=False, hoverinfo='skip'))
-
-        # P&L curve
-        _fig_pay.add_trace(go.Scatter(
-            x=_S_range, y=_total_pnl,
-            mode='lines', name='P&L',
-            line=dict(color='#FF6600', width=3),
-            hovertemplate='Price: $%{x:.2f}<br>P&L: $%{y:,.2f}<extra></extra>'))
-
-        # Zero line
-        _fig_pay.add_hline(y=0, line_dash='dash', line_color='#444', line_width=1)
-
-        # Spot price vertical
-        _fig_pay.add_vline(x=_po_spot, line_dash='dot', line_color='#888', line_width=1,
-                           annotation_text=f"Spot ${_po_spot:.2f}", annotation_position="top right",
-                           annotation_font=dict(size=9, color="#888"))
-
-        # Breakeven lines
-        for _be in _breakevens:
-            _fig_pay.add_vline(x=_be, line_dash='dot', line_color='#00AAFF', line_width=1.5)
-            _fig_pay.add_annotation(x=_be, y=0, text=f"BE ${_be:.2f}",
-                                    showarrow=True, arrowhead=2, arrowcolor='#00AAFF',
-                                    font=dict(size=9, color='#00AAFF', family='IBM Plex Mono'),
-                                    ay=-30)
-
-        # Max profit / loss annotations
-        _mp_idx = int(np.argmax(_total_pnl))
-        _ml_idx = int(np.argmin(_total_pnl))
-        if _max_profit > 0:
-            _fig_pay.add_annotation(x=float(_S_range[_mp_idx]), y=_max_profit,
-                                    text=f"MAX PROFIT ${_max_profit:,.0f}",
-                                    showarrow=True, arrowhead=2, arrowcolor='#00CC44',
-                                    font=dict(size=9, color='#00CC44', family='IBM Plex Mono'),
-                                    ay=-25)
-        if _max_loss < 0:
-            _fig_pay.add_annotation(x=float(_S_range[_ml_idx]), y=_max_loss,
-                                    text=f"MAX LOSS ${_max_loss:,.0f}",
-                                    showarrow=True, arrowhead=2, arrowcolor='#FF4444',
-                                    font=dict(size=9, color='#FF4444', family='IBM Plex Mono'),
-                                    ay=25)
-
-        _fig_pay.update_layout(
-            showlegend=False,
-            title=dict(text=f"{_sel_strat.upper()} — PAYOFF AT EXPIRATION", font=dict(size=11, color="#FF6600"), x=0),
-            xaxis=dict(title="Underlying Price ($)", color="#555", gridcolor="#111", tickprefix="$", tickfont=dict(size=9)),
-            yaxis=dict(title="Profit / Loss ($)", color="#555", gridcolor="#111", tickprefix="$", tickfont=dict(size=9)),
-            margin=dict(l=60, r=20, t=36, b=40),
-        )
-        st.plotly_chart(_fig_pay, use_container_width=True)
-
-        # ── Output Grid ──
-        _out_cols = st.columns(4)
-        with _out_cols[0]:
-            st.markdown(
-                f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:3px solid #FF6600;'
-                f'padding:10px;font-family:monospace;text-align:center">'
-                f'<div style="color:#555;font-size:8px;letter-spacing:1px">NET DELTA</div>'
-                f'<div style="color:#BB88FF;font-size:16px;font-weight:700">{_net_delta:+.2f}</div>'
-                f'<div style="color:#555;font-size:8px;margin-top:4px">GAMMA: {_net_gamma:+.4f}</div></div>',
-                unsafe_allow_html=True)
-        with _out_cols[1]:
-            st.markdown(
-                f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:3px solid #FF6600;'
-                f'padding:10px;font-family:monospace;text-align:center">'
-                f'<div style="color:#555;font-size:8px;letter-spacing:1px">NET THETA</div>'
-                f'<div style="color:#FF8C00;font-size:16px;font-weight:700">{_net_theta:+.4f}</div>'
-                f'<div style="color:#555;font-size:8px;margin-top:4px">VEGA: {_net_vega:+.4f}</div></div>',
-                unsafe_allow_html=True)
-        with _out_cols[2]:
-            _mp_c = "#00CC44" if _max_profit > 0 else "#888"
-            _ml_c = "#FF4444" if _max_loss < 0 else "#888"
-            _mp_str = f"${_max_profit:,.0f}" if _max_profit < 1e7 else "UNLIMITED"
-            _ml_str = f"${_max_loss:,.0f}" if _max_loss > -1e7 else "UNLIMITED"
-            st.markdown(
-                f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:3px solid #00CC44;'
-                f'padding:10px;font-family:monospace;text-align:center">'
-                f'<div style="color:#555;font-size:8px;letter-spacing:1px">MAX PROFIT</div>'
-                f'<div style="color:{_mp_c};font-size:16px;font-weight:700">{_mp_str}</div>'
-                f'<div style="color:#555;font-size:8px;margin-top:4px">'
-                f'MAX LOSS: <span style="color:{_ml_c};font-weight:700">{_ml_str}</span></div></div>',
-                unsafe_allow_html=True)
-        with _out_cols[3]:
-            _be_str = " / ".join(f"${b:,.2f}" for b in _breakevens) if _breakevens else "—"
-            _pop_str = f"{_pop:.0f}%" if _pop is not None else "—"
-            _pop_c = "#00CC44" if _pop and _pop > 50 else "#FF4444" if _pop and _pop < 40 else "#FF8C00"
-            st.markdown(
-                f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:3px solid #00AAFF;'
-                f'padding:10px;font-family:monospace;text-align:center">'
-                f'<div style="color:#555;font-size:8px;letter-spacing:1px">BREAKEVEN(S)</div>'
-                f'<div style="color:#00AAFF;font-size:14px;font-weight:700">{_be_str}</div>'
-                f'<div style="color:#555;font-size:8px;margin-top:4px">'
-                f'POP: <span style="color:{_pop_c};font-weight:700">{_pop_str}</span></div></div>',
-                unsafe_allow_html=True)
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
@@ -2197,6 +1746,8 @@ with tabs[2]:
             with st.spinner("Loading options…"):
                 _oc, _op, _oe = options_chain(_ot, _opt_sel_exp)
 
+
+
             if _oc is not None:
                 _oexp_dt = None
                 try:
@@ -2210,6 +1761,222 @@ with tabs[2]:
                     _o_vix = _ov_info[0] if _ov_info else 20.0
                 except:
                     _o_vix = 20.0
+
+
+
+
+                # ════════════════════════════════════════════════════════════
+                # INTEGRATED PAYOFF DIAGRAM — LIVE OPTIONS DATA
+                # ════════════════════════════════════════════════════════════
+                st.markdown('<div class="bb-ph" style="margin-top:14px">📐 OPTIONS PAYOFF — STRATEGY ENGINE</div>', unsafe_allow_html=True)
+
+                _LIVE_STRATS = {
+                    "Long Call":             [("call",  1, 1)],
+                    "Long Put":              [("put",   1, 1)],
+                    "Short Call":            [("call", -1, 1)],
+                    "Short Put":             [("put",  -1, 1)],
+                    "Covered Call":          [("stock", 1, 1), ("call", -1, 1)],
+                    "Protective Put":        [("stock", 1, 1), ("put",   1, 1)],
+                    "Bull Call Spread":      [("call",  1, 1), ("call", -1, 2)],
+                    "Bear Put Spread":       [("put",   1, 2), ("put",  -1, 1)],
+                    "Bull Put Spread":       [("put",  -1, 1), ("put",   1, 2)],
+                    "Bear Call Spread":      [("call", -1, 1), ("call",  1, 2)],
+                    "Iron Condor":           [("put",   1, 1), ("put",  -1, 2), ("call", -1, 3), ("call", 1, 4)],
+                    "Iron Butterfly":        [("put",   1, 1), ("put",  -1, 2), ("call", -1, 2), ("call", 1, 3)],
+                    "Straddle":              [("call",  1, 1), ("put",   1, 1)],
+                    "Strangle":              [("call",  1, 2), ("put",   1, 1)],
+                    "Collar":                [("stock", 1, 1), ("put",   1, 1), ("call", -1, 2)],
+                    "Call Ratio Backspread": [("call", -1, 1), ("call",  2, 2)],
+                    "Put Ratio Backspread":  [("put",  -1, 2), ("put",   2, 1)],
+                }
+
+                _lv_c1, _lv_c2, _lv_c3 = st.columns([2, 1, 1])
+                with _lv_c1:
+                    _lv_strat = st.selectbox("Strategy", list(_LIVE_STRATS.keys()), key=f"lv_strat_{_ot}")
+                with _lv_c2:
+                    _lv_qty = st.number_input("Qty (contracts)", value=1, min_value=1, max_value=500, key=f"lv_qty_{_ot}")
+                with _lv_c3:
+                    _lv_iv_override = st.number_input("IV Override (%)", value=float(_o_vix) if _o_vix else 20.0, min_value=1.0, max_value=300.0, format="%.1f", key=f"lv_iv_{_ot}")
+
+                _lv_legs          = _LIVE_STRATS[_lv_strat]
+                _lv_strike_indices = sorted(set(leg[2] for leg in _lv_legs if leg[0] != "stock"))
+                _lv_spot          = float(_oq["price"])
+                _lv_dte_days      = max((_oexp_dt.date() - datetime.today().date()).days, 1) if _oexp_dt else 30
+
+                # ── Strike selectors using real chain strikes ──
+                _lv_strike_vals = {}
+                _strikes_from_chain = []
+                if _oc is not None and not _oc.empty and "strike" in _oc.columns:
+                    _strikes_from_chain = sorted(_oc["strike"].dropna().unique().tolist())
+                elif _op is not None and not _op.empty and "strike" in _op.columns:
+                    _strikes_from_chain = sorted(_op["strike"].dropna().unique().tolist())
+
+                if _strikes_from_chain and _lv_strike_indices:
+                    _lv_atm_idx  = min(range(len(_strikes_from_chain)), key=lambda i: abs(_strikes_from_chain[i] - _lv_spot))
+                    _lv_sk_cols  = st.columns(min(len(_lv_strike_indices), 4))
+                    _lv_sk_labels = ["Strike 1 (K1)", "Strike 2 (K2)", "Strike 3 (K3)", "Strike 4 (K4)"]
+                    _lv_sk_offsets = [0, 2, 4, 6]
+                    for i, si in enumerate(_lv_strike_indices):
+                        _def_i = min(_lv_atm_idx + _lv_sk_offsets[min(i, 3)], len(_strikes_from_chain) - 1)
+                        with _lv_sk_cols[i % len(_lv_sk_cols)]:
+                            _lv_strike_vals[si] = st.select_slider(
+                                _lv_sk_labels[i] if i < 4 else f"Strike {i+1}",
+                                options=_strikes_from_chain,
+                                value=_strikes_from_chain[_def_i],
+                                key=f"lv_k_{si}_{_ot}")
+                elif _lv_strike_indices:
+                    _lv_sk_cols2 = st.columns(min(len(_lv_strike_indices), 4))
+                    for i, si in enumerate(_lv_strike_indices):
+                        with _lv_sk_cols2[i % len(_lv_sk_cols2)]:
+                            _lv_strike_vals[si] = st.number_input(f"Strike {i+1} ($)", value=round(_lv_spot*(1+i*0.02),2), format="%.2f", key=f"lv_kn_{si}_{_ot}")
+
+                # ── Premium lookup from real chain ──
+                def _lv_get_prem(chain_df, strike):
+                    if chain_df is None or chain_df.empty: return 0.0
+                    col = "lastPrice" if "lastPrice" in chain_df.columns else ("last" if "last" in chain_df.columns else None)
+                    if col is None: return 0.0
+                    row = chain_df[chain_df["strike"] == strike]
+                    if row.empty:
+                        row = chain_df.iloc[(chain_df["strike"] - strike).abs().argsort()[:1]]
+                    if row.empty: return 0.0
+                    v = float(row[col].iloc[0])
+                    if v <= 0 and "bid" in row.columns and "ask" in row.columns:
+                        v = (float(row["bid"].iloc[0]) + float(row["ask"].iloc[0])) / 2
+                    return max(v, 0.0)
+
+                # ── Build P&L ──
+                _lv_S     = np.linspace(_lv_spot * 0.85, _lv_spot * 1.15, 600)
+                _lv_total = np.zeros(len(_lv_S))
+                _lv_net_credit = 0.0
+                _lv_T     = max(_lv_dte_days / 365.0, 1/365.0)
+                _lv_sigma = _lv_iv_override / 100.0
+                _lv_net_delta = _lv_net_gamma = _lv_net_theta = _lv_net_vega = 0.0
+
+                for _ll_type, _ll_dir, _ll_si in _lv_legs:
+                    _ll_K    = _lv_strike_vals.get(_ll_si, _lv_spot)
+                    _ll_abs  = abs(_ll_dir) * _lv_qty
+                    _ll_sign = 1 if _ll_dir > 0 else -1
+                    if _ll_type == "stock":
+                        _lv_total += _ll_sign * _ll_abs * 100 * (_lv_S - _lv_spot)
+                        _lv_net_delta += _ll_sign * _ll_abs * 100
+                    else:
+                        _prem_lv = _lv_get_prem(_oc if _ll_type == "call" else _op, _ll_K)
+                        if _prem_lv == 0:
+                            _bs_lv = bs_greeks_engine(_lv_spot, _ll_K, _lv_T, 0.045, _lv_sigma, _ll_type)
+                            _prem_lv = _bs_lv.get("price", 0.0)
+                        _intr = np.maximum(_lv_S - _ll_K, 0) if _ll_type == "call" else np.maximum(_ll_K - _lv_S, 0)
+                        _lv_total       += _ll_sign * _ll_abs * 100 * (_intr - _prem_lv)
+                        _lv_net_credit  += _ll_sign * _prem_lv * _ll_abs * 100
+                        _g_lv = bs_greeks_engine(_lv_spot, _ll_K, _lv_T, 0.045, _lv_sigma, _ll_type)
+                        _lv_net_delta += _ll_sign * _ll_abs * 100 * _g_lv["delta"]
+                        _lv_net_gamma += _ll_sign * _ll_abs * 100 * _g_lv["gamma"]
+                        _lv_net_theta += _ll_sign * _ll_abs * 100 * _g_lv["theta"]
+                        _lv_net_vega  += _ll_sign * _ll_abs * 100 * _g_lv.get("vega", 0)
+
+                _lv_net_debit  = -_lv_net_credit
+                _lv_max_profit = float(np.max(_lv_total))
+                _lv_max_loss   = float(np.min(_lv_total))
+
+                _lv_be_list = []
+                for _bi in range(len(_lv_total) - 1):
+                    if (_lv_total[_bi] <= 0 < _lv_total[_bi+1]) or (_lv_total[_bi] >= 0 > _lv_total[_bi+1]):
+                        _lv_be_list.append(round(float(np.interp(0, [_lv_total[_bi], _lv_total[_bi+1]], [_lv_S[_bi], _lv_S[_bi+1]])), 2))
+
+                _lv_pop = None
+                if _lv_be_list and _lv_sigma > 0:
+                    try:
+                        _d1_lv = (np.log(_lv_spot / _lv_be_list[0]) + 0.5*_lv_sigma**2*_lv_T) / (_lv_sigma*np.sqrt(_lv_T))
+                        _lv_pop = float(_norm_dist.cdf(_d1_lv) if _lv_total[-1] > 0 else _norm_dist.cdf(-_d1_lv)) * 100
+                    except: pass
+
+                # ── Metrics row ──
+                _lv_nd_label  = "NET DEBIT" if _lv_net_debit >= 0 else "NET CREDIT"
+                _lv_nd_val    = f"${abs(_lv_net_debit):,.0f}"
+                _lv_ml_str    = f"${abs(_lv_net_debit):,.0f}" if abs(_lv_net_debit) < 1e7 else "Unlimited"
+                _lv_mp_str    = f"${_lv_max_profit:,.0f}" if _lv_max_profit < 1e7 else "Infinite"
+                _lv_pop_str   = f"{_lv_pop:.0f}%" if _lv_pop else "--%"
+                _lv_be_disp   = ("Above $"+f"{_lv_be_list[0]:,.2f} (+{(_lv_be_list[0]-_lv_spot)/_lv_spot*100:.1f}%)"
+                                 if len(_lv_be_list) == 1
+                                 else " / ".join(f"${b:,.2f}" for b in _lv_be_list) if _lv_be_list else "—")
+
+                st.markdown(f'''
+<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;background:#050505;
+border:1px solid #1A1A1A;border-top:2px solid #FF6600;padding:14px 20px;margin:10px 0 8px 0;font-family:monospace">
+<div style="text-align:center;min-width:80px">
+  <div style="color:#888;font-size:9px;letter-spacing:1px;margin-bottom:4px">{_lv_nd_label}</div>
+  <div style="color:#FFCC00;font-size:20px;font-weight:700">{_lv_nd_val}</div>
+</div>
+<div style="text-align:center;min-width:80px">
+  <div style="color:#888;font-size:9px;letter-spacing:1px;margin-bottom:4px">MAX LOSS</div>
+  <div style="color:#FF4444;font-size:20px;font-weight:700">{_lv_ml_str}</div>
+</div>
+<div style="text-align:center;min-width:80px">
+  <div style="color:#888;font-size:9px;letter-spacing:1px;margin-bottom:4px">MAX PROFIT</div>
+  <div style="color:#00CC44;font-size:20px;font-weight:700">{_lv_mp_str}</div>
+</div>
+<div style="text-align:center;min-width:80px">
+  <div style="color:#888;font-size:9px;letter-spacing:1px;margin-bottom:4px">CHANCE OF PROFIT</div>
+  <div style="color:#FFF;font-size:20px;font-weight:700">{_lv_pop_str}</div>
+</div>
+<div style="text-align:center;min-width:120px">
+  <div style="color:#888;font-size:9px;letter-spacing:1px;margin-bottom:4px">BREAKEVEN</div>
+  <div style="color:#00AAFF;font-size:14px;font-weight:700;line-height:1.4">{_lv_be_disp}</div>
+</div>
+</div>''', unsafe_allow_html=True)
+
+                # ── Payoff chart ──
+                _lv_fig = go.Figure()
+                _lv_be_main = _lv_be_list[0] if _lv_be_list else None
+                if _lv_be_main:
+                    _m_loss = _lv_S <= _lv_be_main
+                    _m_prof = _lv_S >= _lv_be_main
+                    _S_l = np.append(_lv_S[_m_loss], _lv_be_main)
+                    _P_l = np.append(_lv_total[_m_loss], float(np.interp(_lv_be_main, _lv_S, _lv_total)))
+                    _S_p = np.insert(_lv_S[_m_prof], 0, _lv_be_main)
+                    _P_p = np.insert(_lv_total[_m_prof], 0, float(np.interp(_lv_be_main, _lv_S, _lv_total)))
+                    _lv_fig.add_trace(go.Scatter(x=_S_l, y=_P_l, mode="lines",
+                        line=dict(color="#FF2B43", width=3), fill="tozeroy",
+                        fillcolor="rgba(255,43,67,0.22)", showlegend=False,
+                        hovertemplate="$%{x:,.2f}<br>P&L: $%{y:,.0f}<extra></extra>"))
+                    _lv_fig.add_trace(go.Scatter(x=_S_p, y=_P_p, mode="lines",
+                        line=dict(color="#00CC44", width=3), fill="tozeroy",
+                        fillcolor="rgba(0,204,68,0.18)", showlegend=False,
+                        hovertemplate="$%{x:,.2f}<br>P&L: $%{y:,.0f}<extra></extra>"))
+                else:
+                    _lv_fig.add_trace(go.Scatter(x=_lv_S, y=_lv_total, mode="lines",
+                        line=dict(color="#FF6600", width=3), fill="tozeroy",
+                        fillcolor="rgba(255,102,0,0.18)", showlegend=False))
+                _lv_fig.add_hline(y=0, line_color="#2A2A2A", line_width=1)
+                _lv_fig.add_vline(x=_lv_spot, line_color="#555", line_dash="dot", line_width=1,
+                    annotation_text=f"Spot ${_lv_spot:,.2f}",
+                    annotation_font=dict(size=9, color="#888", family="IBM Plex Mono"),
+                    annotation_position="top right")
+                for _lv_be_v in _lv_be_list:
+                    _lv_fig.add_vline(x=_lv_be_v, line_color="#00AAFF", line_width=1.5)
+                    _lv_fig.add_annotation(x=_lv_be_v,
+                        y=max(_lv_total)*0.7 if max(_lv_total) > 0 else 0,
+                        text=f"${_lv_be_v:,.2f}",
+                        showarrow=False, font=dict(color="#00AAFF", size=11, family="IBM Plex Mono"),
+                        xanchor="left", xshift=6)
+                _lv_fig.update_layout(
+                    height=340, margin=dict(l=65, r=20, t=16, b=42),
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(showgrid=True, gridcolor="#0D0D0D", zeroline=False,
+                        color="#888", tickprefix="$", tickfont=dict(size=9, family="IBM Plex Mono")),
+                    yaxis=dict(showgrid=True, gridcolor="#0D0D0D", zeroline=False,
+                        color="#888", tickprefix="$", tickfont=dict(size=9, family="IBM Plex Mono")),
+                    hovermode="x unified")
+                st.plotly_chart(_lv_fig, use_container_width=True, config={"displayModeBar": False})
+
+                # ── Greeks footer ──
+                _lv_gc1, _lv_gc2, _lv_gc3, _lv_gc4 = st.columns(4)
+                _lv_gc1.markdown(f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #AA44FF;padding:8px;font-family:monospace;text-align:center"><div style="color:#555;font-size:8px;letter-spacing:1px">NET DELTA</div><div style="color:#BB88FF;font-size:15px;font-weight:700">{_lv_net_delta:+.2f}</div></div>', unsafe_allow_html=True)
+                _lv_gc2.markdown(f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #FF8C00;padding:8px;font-family:monospace;text-align:center"><div style="color:#555;font-size:8px;letter-spacing:1px">NET THETA</div><div style="color:#FF8C00;font-size:15px;font-weight:700">{_lv_net_theta:+.4f}</div></div>', unsafe_allow_html=True)
+                _lv_gc3.markdown(f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #00CC44;padding:8px;font-family:monospace;text-align:center"><div style="color:#555;font-size:8px;letter-spacing:1px">NET GAMMA</div><div style="color:#00CC44;font-size:15px;font-weight:700">{_lv_net_gamma:+.5f}</div></div>', unsafe_allow_html=True)
+                _lv_gc4.markdown(f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #00AAFF;padding:8px;font-family:monospace;text-align:center"><div style="color:#555;font-size:8px;letter-spacing:1px">NET VEGA</div><div style="color:#00AAFF;font-size:15px;font-weight:700">{_lv_net_vega:+.4f}</div></div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="color:#555;font-size:9px;font-family:monospace;margin-top:4px;margin-bottom:8px">DATE: {_oexp_fmt} ({_lv_dte_days}d) &nbsp;|&nbsp; IV: {_lv_iv_override:.1f}% &nbsp;|&nbsp; SPOT: ${_lv_spot:,.2f} &nbsp;|&nbsp; STRATEGY: {_lv_strat}</div>', unsafe_allow_html=True)
+                st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+                # ── END PAYOFF BUILDER ──
 
                 _oscored = score_options_chain(_oc, _op, _oq["price"], vix=_o_vix, expiry_date=_opt_sel_exp)
 
