@@ -1425,13 +1425,8 @@ def render_geo_tab():
         "sats":    _geo_sats,
         "vessels": _geo_vessels,
         "infra":   _geo_infra,
-    }, default=str)
-    # Replace dangerous sequences: </script> → <\/script>,  <!-- → <\!--
-    _sentinel_data_safe = (
-        _sentinel_data
-        .replace("</", r"<\/")      # prevents </script> injection
-        .replace("<!--", r"<\!--")  # prevents HTML comment injection
-    )
+    }, default=str, ensure_ascii=True).replace("<", "\\u003c").replace(">", "\\u003e")
+    _sentinel_data_safe = _sentinel_data
     _inject_script = (
         f'<script>window.__SENTINEL_DATA__ = {_sentinel_data_safe};</script>\n'
     )

@@ -466,22 +466,11 @@ def _get_secret(name, default=""):
         pass
     return SecretStr(default) if default else SecretStr("")
 
-WATCHLIST_FILE = pathlib.Path(".streamlit/watchlist.json")
-
 def _load_watchlist():
-    try:
-        if WATCHLIST_FILE.exists():
-            return json.loads(WATCHLIST_FILE.read_text())
-    except Exception:
-        pass
     return ["SPY","QQQ","NVDA","AAPL","GLD","TLT","BTC-USD"]
 
 def _save_watchlist(wl):
-    try:
-        WATCHLIST_FILE.parent.mkdir(exist_ok=True)
-        WATCHLIST_FILE.write_text(json.dumps(wl))
-    except Exception:
-        pass
+    pass
 
 DEFAULTS = {
     "gemini_key": _get_secret("GEMINI_API_KEY"),
@@ -509,6 +498,7 @@ def warm_caches_on_startup(watchlist):
             get_futures()
             polymarket_events(30)
             multi_quotes(watchlist)
+            stat_arb_screener()
         except Exception:
             pass
     threading.Thread(target=_warm, daemon=True).start()
@@ -665,6 +655,9 @@ with st.sidebar:
                 if url:
                     try:
                         import requests
+                        import logging
+                        if url.startswith("http://"):
+                            logging.getLogger("sentinel.app").warning("Webhook URL is non-HTTPS. Transmitting payload in clear text.")
                         requests.post(url, json={"text": msg, "source": "Sentinel Terminal"}, timeout=5)
                     except Exception:
                         pass
@@ -869,7 +862,7 @@ with tabs[0]:
             with crow[0]:
                 st.markdown(
                     f'<div style="color:#FF6600;font-weight:700;font-family:monospace;'
-                    f'font-size:13px;padding:5px 0">{q["ticker"]}</div>',
+                    f'font-size:13px;padding:5px 0">{_esc(q["ticker"])}</div>',
                     unsafe_allow_html=True)
             with crow[1]:
                 st.markdown(
@@ -1025,32 +1018,47 @@ with tabs[1]:
             with st.spinner("Loading financials..."):
                 try:
                     yf_tk = get_yf_ticker(tkr)
-                    if yf_tk:
-                        info = yf_tk.info
-                        _mc = info.get('marketCap')
-                        _mc_str = f"${_mc/1e9:.2f}B" if _mc else "N/A"
-                        _pe = info.get('trailingPE', 'N/A')
-                        _pe_str = f"{_pe:.2f}" if isinstance(_pe, (int, float)) else str(_pe)
-                        _div = info.get('dividendYield', 'N/A')
-                        _div_str = f"{_div*100:.2f}%" if isinstance(_div, (int, float)) else str(_div)
-                        _beta = info.get('beta', 'N/A')
-                        _beta_str = f"{_beta:.2f}" if isinstance(_beta, (int, float)) else str(_beta)
-                        _margin = info.get('profitMargins', 'N/A')
-                        _margin_str = f"{_margin*100:.2f}%" if isinstance(_margin, (int, float)) else str(_margin)
-                        _sector = info.get('sector', 'N/A')
-                        _industry = info.get('industry', 'N/A')
-                        _desc = info.get('longBusinessSummary')
-                        
-                        f1, f2, f3, f4, f5 = st.columns(5)
-                        f1.metric("Market Cap", _mc_str)
-                        f2.metric("P/E Ratio", _pe_str)
-                        f3.metric("Div Yield", _div_str)
-                        f4.metric("Beta", _beta_str)
-                        f5.metric("Profit Margin", _margin_str)
-                        
+                    _q = yahoo_quote(tkr) or {}
+                    
+                    # Try to fetch extended info, but default to empty dict if Yahoo 401 blocks it
+                    info = {}
+                    try:
+                        if yf_tk:
+                            info = yf_tk.info
+                            if not isinstance(info, dict): info = {}
+                    except Exception:
+                        pass
+                    
+                    _mc = info.get('marketCap') or _q.get('cap')
+                    _mc_str = f"${_mc/1e9:.2f}B" if _mc and _mc > 0 else "N/A"
+                    
+                    _pe = info.get('trailingPE') or _q.get('pe') or 'N/A'
+                    _pe_str = f"{_pe:.2f}" if isinstance(_pe, (int, float)) and _pe > 0 else str(_pe)
+                    
+                    _div = info.get('dividendYield') or _q.get('div') or 'N/A'
+                    _div_str = f"{_div*100:.2f}%" if isinstance(_div, (int, float)) and _div > 0 else "N/A" if _div == 'N/A' else str(_div)
+                    
+                    _beta = info.get('beta', 'N/A')
+                    _beta_str = f"{_beta:.2f}" if isinstance(_beta, (int, float)) else str(_beta)
+                    
+                    _margin = info.get('profitMargins', 'N/A')
+                    _margin_str = f"{_margin*100:.2f}%" if isinstance(_margin, (int, float)) else str(_margin)
+                    
+                    _sector = info.get('sector', 'N/A')
+                    _industry = info.get('industry', 'N/A')
+                    _desc = info.get('longBusinessSummary')
+                    
+                    f1, f2, f3, f4, f5 = st.columns(5)
+                    f1.metric("Market Cap", _mc_str)
+                    f2.metric("P/E Ratio", _pe_str)
+                    f3.metric("Div Yield", _div_str)
+                    f4.metric("Beta", _beta_str)
+                    f5.metric("Profit Margin", _margin_str)
+                    
+                    if _sector != 'N/A' or _industry != 'N/A':
                         st.markdown(f'<div style="color:#888;font-size:11px;font-family:monospace;margin-top:8px"><b>Sector:</b> {_sector} | <b>Industry:</b> {_industry}</div>', unsafe_allow_html=True)
-                        if _desc:
-                            st.markdown(f'<div style="color:#AAA;font-size:11px;margin-top:4px;line-height:1.4">{_esc(_desc[:300])}...</div>', unsafe_allow_html=True)
+                    if _desc:
+                        st.markdown(f'<div style="color:#AAA;font-size:11px;margin-top:4px;line-height:1.4">{_esc(_desc[:300])}...</div>', unsafe_allow_html=True)
                 except Exception as e:
                     st.markdown('<div style="color:#555;font-size:11px">Financials temporarily unavailable.</div>', unsafe_allow_html=True)
             # --- END: Financials ---

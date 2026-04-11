@@ -14,9 +14,7 @@ import logging
 from datetime import datetime, timedelta, time as dtime
 import pytz
 from collections import defaultdict
-import skyfield.api as sf
-from skyfield.api import Topos, EarthSatellite
-from skyfield.sgp4lib import EarthSatellite
+from skyfield.api import Topos
 
 # ── Newly Integrated Libraries ──
 import pandas_market_calendars as mcal
@@ -88,11 +86,6 @@ def get_yf_ticker(ticker):
     
     now = _time.time()
     
-    # Check cache first (no lock needed for read)
-    cached = _yf_ticker_cache.get(ticker)
-    if cached and (now - cached[1]) < _YF_CACHE_TTL:
-        return cached[0]
-    
     # Throttle: enforce minimum gap between Yahoo API requests
     with _yf_lock:
         cached = _yf_ticker_cache.get(ticker)
@@ -151,8 +144,6 @@ def _is_english(text):
     if not text: return False
     return sum(1 for c in text if ord(c) < 128) / max(len(text), 1) > 0.72
 
-
-from tenacity import retry_if_exception
 
 def _should_retry_http_error(exc):
     if isinstance(exc, requests.exceptions.HTTPError):
@@ -297,7 +288,7 @@ def is_market_open():
         else:
             return "CLOSED", "#FF4444", "Markets Closed"
     except Exception as e:
-        logger.error({"error": str(e)}, "is_market_open fallback")
+        logger.error("is_market_open fallback: %s", e)
         return "UNKNOWN", "#555555", "Status Unknown"
 
 def is_0dte_market_open():
@@ -419,15 +410,24 @@ def get_heatmap_data():
         data = yf.download(list(set(tickers)), period="5d", progress=False, threads=True)
         closes = data["Close"]
 
-        # Batch fetch market cap
+        # Batch fetch market cap using yfinance directly (fast_info avoids 401)
         mcaps = {}
-        for i in range(0, len(tickers), 40):
-            chunk = tickers[i:i+40]
-            url = f"https://query2.finance.yahoo.com/v7/finance/quote?symbols={','.join(chunk)}"
-            r = _fetch_robust_json(url)
-            if r and "quoteResponse" in r and "result" in r["quoteResponse"]:
-                for item in r["quoteResponse"]["result"]:
-                    mcaps[item.get("symbol")] = item.get("marketCap", 1e9)
+        import concurrent.futures
+        def _get_mcap(tk_sym):
+            try:
+                tk = get_yf_ticker(tk_sym)
+                if tk:
+                    return tk_sym, getattr(tk.fast_info, "market_cap", 1e9)
+            except Exception:
+                pass
+            return tk_sym, 1e9
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(_get_mcap, t) for t in tickers]
+            for fut in concurrent.futures.as_completed(futures):
+                t_sym, cap = fut.result()
+                if cap is not None and cap > 0:
+                    mcaps[t_sym] = cap
 
         rows = []
         for sector, tkr in flat_jobs:
@@ -447,6 +447,7 @@ def get_heatmap_data():
 
 @st.cache_data(ttl=300)
 def multi_quotes(tickers):
+    tickers = tuple(sorted(set(tickers)))
     return [q for t in tickers if (q := yahoo_quote(t))]
 
 @st.cache_data(ttl=300)
@@ -557,6 +558,11 @@ def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=
     elif vix_val < 15:
         w1 += 0.15; w2 -= 0.075; w3 -= 0.075
 
+    w1 = max(w1, 0)
+    w2 = max(w2, 0)
+    w3 = max(w3, 0)
+    assert abs(w1 + w2 + w3 - 1.0) < 1e-9
+
     def _score_side(df, side):
         if df is None or df.empty:
             return []
@@ -624,7 +630,7 @@ def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=
         df["_score"] = (df["_norm_voi"] * w1 + df["_iv_pct"] * w2 - (df["_delta_proxy"] - 0.5).abs() * w3)
 
         rows = []
-        for _, r in df.iterrows():
+        for r in df.to_dict("records"):
             rows.append({
                 "strike": float(r.get("strike", 0)),
                 "lastPrice": float(r.get("lastPrice", 0)),
@@ -5005,9 +5011,6 @@ def get_expected_move(ticker):
 
         expected_move_dollars = call_mid + put_mid
         expected_move_pct = round(expected_move_dollars / price * 100, 2)
-
-        exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
-        dte = max((exp_date - datetime.today().date()).days, 1)
 
         return {
             "ticker": ticker,
