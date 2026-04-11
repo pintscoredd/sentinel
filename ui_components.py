@@ -1022,8 +1022,8 @@ def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
             annotation_position="top left"
         )
 
+    fig.update_layout(**CHART_LAYOUT)
     fig.update_layout(
-        **CHART_LAYOUT,
         xaxis_rangeslider_visible=False,
         height=500,
         margin=dict(l=10, r=60, t=30, b=10),

@@ -27,7 +27,7 @@ from data_fetchers import (
     fred_series, polymarket_events, polymarket_markets,
     fear_greed_crypto, calc_stock_fear_greed,
     crypto_markets, crypto_global,
-    gdelt_news, newsapi_headlines, finnhub_news, finnhub_insider, finnhub_officers,
+    gdelt_news, newsapi_headlines, finnhub_news, finnhub_insider, finnhub_officers, get_yf_ticker,
     options_chain, options_expiries, sector_etfs, top_movers,
     detect_unusual_poly, market_snapshot_str, _parse_poly_field,
     score_options_chain, score_poly_mispricing,
@@ -1020,7 +1020,158 @@ with tabs[1]:
             components.html(tv_chart(tv_sym, 480), height=485, scrolling=False)
 
 
-            st.markdown('<div class="bb-ph" style="margin-top:12px">🔍 INSIDER TRANSACTIONS</div>', unsafe_allow_html=True)
+            # --- START: Financials & Market Data ---
+            st.markdown('<div class="bb-ph" style="margin-top:12px">🏦 FINANCIALS & COMPANY OVERVIEW</div>', unsafe_allow_html=True)
+            with st.spinner("Loading financials..."):
+                try:
+                    yf_tk = get_yf_ticker(tkr)
+                    if yf_tk:
+                        info = yf_tk.info
+                        _mc = info.get('marketCap')
+                        _mc_str = f"${_mc/1e9:.2f}B" if _mc else "N/A"
+                        _pe = info.get('trailingPE', 'N/A')
+                        _pe_str = f"{_pe:.2f}" if isinstance(_pe, (int, float)) else str(_pe)
+                        _div = info.get('dividendYield', 'N/A')
+                        _div_str = f"{_div*100:.2f}%" if isinstance(_div, (int, float)) else str(_div)
+                        _beta = info.get('beta', 'N/A')
+                        _beta_str = f"{_beta:.2f}" if isinstance(_beta, (int, float)) else str(_beta)
+                        _margin = info.get('profitMargins', 'N/A')
+                        _margin_str = f"{_margin*100:.2f}%" if isinstance(_margin, (int, float)) else str(_margin)
+                        _sector = info.get('sector', 'N/A')
+                        _industry = info.get('industry', 'N/A')
+                        _desc = info.get('longBusinessSummary')
+                        
+                        f1, f2, f3, f4, f5 = st.columns(5)
+                        f1.metric("Market Cap", _mc_str)
+                        f2.metric("P/E Ratio", _pe_str)
+                        f3.metric("Div Yield", _div_str)
+                        f4.metric("Beta", _beta_str)
+                        f5.metric("Profit Margin", _margin_str)
+                        
+                        st.markdown(f'<div style="color:#888;font-size:11px;font-family:monospace;margin-top:8px"><b>Sector:</b> {_sector} | <b>Industry:</b> {_industry}</div>', unsafe_allow_html=True)
+                        if _desc:
+                            st.markdown(f'<div style="color:#AAA;font-size:11px;margin-top:4px;line-height:1.4">{_esc(_desc[:300])}...</div>', unsafe_allow_html=True)
+                except Exception as e:
+                    st.markdown('<div style="color:#555;font-size:11px">Financials temporarily unavailable.</div>', unsafe_allow_html=True)
+            # --- END: Financials ---
+
+            # --- START: Options Payoff ---
+            st.markdown('<div class="bb-ph" style="margin-top:12px">📈 OPTIONS PAYOFF (LONG CALL)</div>', unsafe_allow_html=True)
+            
+            pay_tkr = st.text_input("Options Analysis Ticker", value=tkr, key="payoff_ticker_input", help="Change ticker to view payout for a different asset").upper().strip()
+            if pay_tkr:
+                _pq = yahoo_quote(pay_tkr)
+                if _pq:
+                    _spot = float(_pq["price"])
+                    
+                    with st.spinner("Loading options..."):
+                        exps = options_expiries(pay_tkr)
+                    
+                    if exps:
+                        target_dt = datetime.today().date() + timedelta(days=30)
+                        closest_exp = min(exps, key=lambda x: abs((datetime.strptime(x, "%Y-%m-%d").date() - target_dt).days))
+                        sel_exp = st.selectbox("Expiration", exps, index=exps.index(closest_exp), key="payoff_exp")
+                        c_df, p_df, _ = options_chain(pay_tkr, sel_exp)
+                        
+                        if c_df is not None and not c_df.empty:
+                            c_df = c_df.dropna(subset=['lastPrice', 'strike']).sort_values('strike')
+                            strikes = c_df['strike'].tolist()
+                            
+                            atm_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i]-_spot))
+                            sel_strike = st.select_slider("Strike", options=strikes, value=strikes[atm_idx], key="payoff_strike")
+                            
+                            call_row = c_df[c_df['strike'] == sel_strike].iloc[0]
+                            _prem = float(call_row['lastPrice'])
+                            if _prem <= 0.0:
+                                _prem = float((call_row['bid'] + call_row['ask']) / 2)
+                                
+                            _qty = st.number_input("Contracts", min_value=1, value=1, key="payoff_qty")
+                            
+                            _net_debit = _prem * 100 * _qty
+                            _max_loss = _net_debit
+                            _breakeven = sel_strike + _prem
+                            
+                            from scipy.stats import norm
+                            _T = max((datetime.strptime(sel_exp, "%Y-%m-%d").date() - datetime.today().date()).days / 365.0, 1/365.0)
+                            _iv = call_row.get('impliedVolatility', 0.20)
+                            
+                            if _iv > 0:
+                                d1 = (np.log(_spot / _breakeven) + 0.5 * _iv**2 * _T) / (_iv * np.sqrt(_T))
+                                _pop = float(norm.cdf(d1)) * 100
+                            else:
+                                _pop = 0.0
+                                
+                            st.markdown(
+                                f'<div style="display:flex;justify-content:space-between;background:#080808;padding:12px;border:1px solid #222;border-radius:4px;margin-bottom:12px">'
+                                f'<div style="text-align:center"><span style="color:#888;font-size:10px;font-family:monospace">NET DEBIT</span><br><span style="color:#fff;font-weight:700;font-size:16px">${_net_debit:,.0f}</span></div>'
+                                f'<div style="text-align:center"><span style="color:#888;font-size:10px;font-family:monospace">MAX LOSS</span><br><span style="color:#FF4444;font-weight:700;font-size:16px">${_max_loss:,.0f}</span></div>'
+                                f'<div style="text-align:center"><span style="color:#888;font-size:10px;font-family:monospace">MAX PROFIT</span><br><span style="color:#00CC44;font-weight:700;font-size:16px">Infinite</span></div>'
+                                f'<div style="text-align:center"><span style="color:#888;font-size:10px;font-family:monospace">CHANCE OF PROFIT</span><br><span style="color:#00AAFF;font-weight:700;font-size:16px">{_pop:.0f}% 🔒</span></div>'
+                                f'<div style="text-align:center"><span style="color:#888;font-size:10px;font-family:monospace">BREAKEVEN</span><br><span style="color:#FFF;font-weight:700;font-size:14px">Above ${_breakeven:.2f}</span></div>'
+                                f'</div>',
+                                unsafe_allow_html=True
+                            )
+                            
+                            _S_range = np.linspace(_spot * 0.85, _spot * 1.15, 500)
+                            _intrinsic = np.maximum(_S_range - sel_strike, 0)
+                            _pnl = (_intrinsic - _prem) * 100 * _qty
+                            
+                            fig_rh = go.Figure()
+                            
+                            _S_loss = _S_range[_S_range <= _breakeven]
+                            _pnl_loss = _pnl[_S_range <= _breakeven]
+                            _S_prof = _S_range[_S_range >= _breakeven]
+                            _pnl_prof = _pnl[_S_range >= _breakeven]
+                            
+                            if len(_S_loss) > 0 and len(_S_prof) > 0:
+                                _S_loss = np.append(_S_loss, _breakeven)
+                                _pnl_loss = np.append(_pnl_loss, 0)
+                                _S_prof = np.insert(_S_prof, 0, _breakeven)
+                                _pnl_prof = np.insert(_pnl_prof, 0, 0)
+                            
+                                fig_rh.add_trace(go.Scatter(
+                                    x=_S_loss, y=_pnl_loss,
+                                    mode='lines', line=dict(color='#FF2B43', width=3),
+                                    fill='tozeroy', fillcolor='rgba(255, 43, 67, 0.2)',
+                                    showlegend=False, hoverinfo='x+y'))
+                                    
+                                fig_rh.add_trace(go.Scatter(
+                                    x=_S_prof, y=_pnl_prof,
+                                    mode='lines', line=dict(color='#00FF55', width=3),
+                                    fill='tozeroy', fillcolor='rgba(0, 255, 85, 0.2)',
+                                    showlegend=False, hoverinfo='x+y'))
+                            else:
+                                color_val = '#00FF55' if len(_S_prof) > 0 else '#FF2B43'
+                                fill_val = 'rgba(0, 255, 85, 0.2)' if len(_S_prof) > 0 else 'rgba(255, 43, 67, 0.2)'
+                                fig_rh.add_trace(go.Scatter(x=_S_range, y=_pnl, mode='lines', line=dict(color=color_val, width=3), fill='tozeroy', fillcolor=fill_val, showlegend=False))
+                                
+                            fig_rh.add_hline(y=0, line_color='#444', line_dash='solid', line_width=1)
+                            
+                            fig_rh.add_vline(x=_breakeven, line_color='#00AAFF', line_dash='solid', line_width=1.5)
+                            fig_rh.add_annotation(
+                                x=_breakeven, y=max(_pnl)*0.8,
+                                text=f"${_breakeven:.2f}",
+                                showarrow=False, font=dict(color='#00AAFF', size=11, family='monospace'),
+                                xanchor='left', xshift=5
+                            )
+                            
+                            fig_rh.add_vline(x=_spot, line_color='#888', line_dash='dot', line_width=1)
+                            
+                            fig_rh.update_layout(
+                                margin=dict(l=0, r=0, t=10, b=10),
+                                height=280,
+                                paper_bgcolor='rgba(0,0,0,0)',
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                xaxis=dict(showgrid=False, zeroline=False, color='#AAA', tickprefix='$', tickfont=dict(size=10)),
+                                yaxis=dict(showgrid=True, gridcolor='#222', zeroline=False, color='#AAA', tickprefix='$', tickfont=dict(size=10)),
+                                hovermode='x unified'
+                            )
+                            st.plotly_chart(fig_rh, use_container_width=True)
+                        else:
+                            st.markdown('<span style="color:#555;font-size:11px">Call option data missing for expiry.</span>', unsafe_allow_html=True)
+                    else:
+                        st.markdown('<span style="color:#555;font-size:11px">Options data unavailable.</span>', unsafe_allow_html=True)
+            # --- END: Options Payoff ---
             if st.session_state.finnhub_key.get_secret_value():
                 with st.status("Loading insider intelligence…", expanded=False) as _ins_status:
                     st.write("Fetching insider transactions…")
