@@ -1056,21 +1056,34 @@ with tabs[1]:
             # --- END: Financials ---
 
             # --- START: Options Payoff ---
-            st.markdown('<div class="bb-ph" style="margin-top:12px">📈 OPTIONS PAYOFF (LONG CALL)</div>', unsafe_allow_html=True)
+            st.markdown('<div style="margin-top:12px;margin-bottom:8px;font-size:16px;font-weight:700;display:flex;align-items:center;gap:6px">'
+                        '<div style="background:#222;padding:2px 8px;border-radius:4px;font-size:12px;color:#EEE">Long Call ℹ️</div>'
+                        '</div>', unsafe_allow_html=True)
             
-            pay_tkr = st.text_input("Options Analysis Ticker", value=tkr, key="payoff_ticker_input", help="Change ticker to view payout for a different asset").upper().strip()
+            c1, c2 = st.columns([1.2, 4])
+            pay_tkr = c1.text_input("Ticker", value=tkr, key="payoff_ticker_input", label_visibility="collapsed").upper().strip()
+            
             if pay_tkr:
                 _pq = yahoo_quote(pay_tkr)
                 if _pq:
                     _spot = float(_pq["price"])
+                    _chg_pct = float(_pq.get("pct", 0.0))
+                    _chg_str = f"+{_chg_pct:.2f}%" if _chg_pct >= 0 else f"{_chg_pct:.2f}%"
+                    _chg_col = "#00CC44" if _chg_pct >= 0 else "#FF4444"
+                    
+                    c2.markdown(f'<div style="font-size:20px;font-weight:700;margin-top:-6px;line-height:36px">'
+                                f'${_spot:.2f} &nbsp;<span style="font-size:14px;font-weight:500;color:{_chg_col}">{_chg_str} Delayed</span>'
+                                f'</div>', unsafe_allow_html=True)
                     
                     with st.spinner("Loading options..."):
                         exps = options_expiries(pay_tkr)
                     
                     if exps:
+                        st.markdown('<div style="color:#888;font-size:10px;font-weight:700;margin-bottom:0px;letter-spacing:0.5px">EXPIRATION</div>', unsafe_allow_html=True)
                         target_dt = datetime.today().date() + timedelta(days=30)
                         closest_exp = min(exps, key=lambda x: abs((datetime.strptime(x, "%Y-%m-%d").date() - target_dt).days))
-                        sel_exp = st.selectbox("Expiration", exps, index=exps.index(closest_exp), key="payoff_exp")
+                        sel_exp = st.radio("Expiration", exps, index=exps.index(closest_exp), key="payoff_exp", horizontal=True, label_visibility="collapsed")
+                        
                         c_df, p_df, _ = options_chain(pay_tkr, sel_exp)
                         
                         if c_df is not None and not c_df.empty:
@@ -1078,15 +1091,15 @@ with tabs[1]:
                             strikes = c_df['strike'].tolist()
                             
                             atm_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i]-_spot))
-                            sel_strike = st.select_slider("Strike", options=strikes, value=strikes[atm_idx], key="payoff_strike")
+                            st.markdown('<div style="color:#888;font-size:10px;font-weight:700;margin-top:12px;margin-bottom:-10px;letter-spacing:0.5px">STRIKE</div>', unsafe_allow_html=True)
+                            sel_strike = st.select_slider("Strike", options=strikes, value=strikes[atm_idx], key="payoff_strike", label_visibility="collapsed")
                             
                             call_row = c_df[c_df['strike'] == sel_strike].iloc[0]
                             _prem = float(call_row['lastPrice'])
                             if _prem <= 0.0:
                                 _prem = float((call_row['bid'] + call_row['ask']) / 2)
                                 
-                            _qty = st.number_input("Contracts", min_value=1, value=1, key="payoff_qty")
-                            
+                            _qty = 1 
                             _net_debit = _prem * 100 * _qty
                             _max_loss = _net_debit
                             _breakeven = sel_strike + _prem
@@ -1102,12 +1115,12 @@ with tabs[1]:
                                 _pop = 0.0
                                 
                             st.markdown(
-                                f'<div style="display:flex;justify-content:space-between;background:#080808;padding:12px;border:1px solid #222;border-radius:4px;margin-bottom:12px">'
-                                f'<div style="text-align:center"><span style="color:#888;font-size:10px;font-family:monospace">NET DEBIT</span><br><span style="color:#fff;font-weight:700;font-size:16px">${_net_debit:,.0f}</span></div>'
-                                f'<div style="text-align:center"><span style="color:#888;font-size:10px;font-family:monospace">MAX LOSS</span><br><span style="color:#FF4444;font-weight:700;font-size:16px">${_max_loss:,.0f}</span></div>'
-                                f'<div style="text-align:center"><span style="color:#888;font-size:10px;font-family:monospace">MAX PROFIT</span><br><span style="color:#00CC44;font-weight:700;font-size:16px">Infinite</span></div>'
-                                f'<div style="text-align:center"><span style="color:#888;font-size:10px;font-family:monospace">CHANCE OF PROFIT</span><br><span style="color:#00AAFF;font-weight:700;font-size:16px">{_pop:.0f}% 🔒</span></div>'
-                                f'<div style="text-align:center"><span style="color:#888;font-size:10px;font-family:monospace">BREAKEVEN</span><br><span style="color:#FFF;font-weight:700;font-size:14px">Above ${_breakeven:.2f}</span></div>'
+                                f'<div style="display:flex;justify-content:space-between;padding:12px 0 8px 0;border-bottom:1px solid #111;margin-bottom:8px">'
+                                f'<div style="text-align:left"><span style="color:#888;font-size:10px;font-weight:600">NET DEBIT</span><br><span style="color:#fff;font-weight:700;font-size:18px">${_net_debit:,.0f}</span></div>'
+                                f'<div style="text-align:left"><span style="color:#888;font-size:10px;font-weight:600">MAX LOSS</span><br><span style="color:#fff;font-weight:700;font-size:18px">${_max_loss:,.0f}</span></div>'
+                                f'<div style="text-align:left"><span style="color:#888;font-size:10px;font-weight:600">MAX PROFIT</span><br><span style="color:#fff;font-weight:700;font-size:18px">Infinite</span></div>'
+                                f'<div style="text-align:left"><span style="color:#888;font-size:10px;font-weight:600">CHANCE OF PROFIT</span><br><span style="color:#fff;font-weight:700;font-size:18px">{_pop:.0f}%</span></div>'
+                                f'<div style="text-align:left"><span style="color:#888;font-size:10px;font-weight:600">BREAKEVEN</span><br><span style="color:#fff;font-weight:700;font-size:18px">Above ${_breakeven:.2f}</span></div>'
                                 f'</div>',
                                 unsafe_allow_html=True
                             )
@@ -1166,7 +1179,7 @@ with tabs[1]:
                                 yaxis=dict(showgrid=True, gridcolor='#222', zeroline=False, color='#AAA', tickprefix='$', tickfont=dict(size=10)),
                                 hovermode='x unified'
                             )
-                            st.plotly_chart(fig_rh, use_container_width=True)
+                            st.plotly_chart(fig_rh, width='stretch')
                         else:
                             st.markdown('<span style="color:#555;font-size:11px">Call option data missing for expiry.</span>', unsafe_allow_html=True)
                     else:

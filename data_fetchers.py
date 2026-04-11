@@ -3766,6 +3766,7 @@ def _fetch_yahoo_v8_chart(ticker, range_str="5d", interval="1d"):
     try:
         ua = random.choice(_YAHOO_UAS)
         data = _fetch_robust_json(url, headers={"User-Agent": ua}, timeout=10)
+        if not data: return []
         result = data.get("chart", {}).get("result", [])
         if not result: return []
         meta = result[0]
