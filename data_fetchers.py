@@ -4180,24 +4180,26 @@ def get_macro_correlation_matrix(lookback_days=60):
 
         spy_hist = get_spy_history().tail(lookback_days + 10)
         tlt_hist = get_tlt_history().tail(lookback_days + 10)
-        if not spy_hist.empty:
-            closes["SPY"] = spy_hist["Close"]
-        if not tlt_hist.empty:
-            closes["TLT"] = tlt_hist["Close"]
+        if spy_hist is not None and not spy_hist.empty and "Close" in spy_hist.columns:
+            closes["SPY"] = spy_hist["Close"].values[:len(closes)] if len(spy_hist) >= len(closes) else spy_hist["Close"].reindex(closes.index)
+        if tlt_hist is not None and not tlt_hist.empty and "Close" in tlt_hist.columns:
+            closes["TLT"] = tlt_hist["Close"].values[:len(closes)] if len(tlt_hist) >= len(closes) else tlt_hist["Close"].reindex(closes.index)
 
+        # Drop columns that are all NaN
+        closes = closes.dropna(axis=1, how="all")
         returns = closes.pct_change().dropna().tail(lookback_days)
 
-        if returns.empty or len(returns) < 20:
+        if returns.empty or len(returns) < 10:
             return None
 
+        # Rebuild assets label map with whatever columns survived
+        _all_assets = {**{"SPY": "S&P 500", "TLT": "Bonds (20Y)"}, **assets_bulk}
         pearson = returns.corr(method="pearson")
         spearman = returns.corr(method="spearman")
-        labels = [assets.get(t, t) for t in pearson.columns]
+        labels = [_all_assets.get(t, t) for t in pearson.columns]
         
-        pearson.columns = labels
-        pearson.index = labels
-        spearman.columns = labels
-        spearman.index = labels
+        pearson.columns = labels; pearson.index = labels
+        spearman.columns = labels; spearman.index = labels
 
         return {
             "pearson": pearson,
@@ -4595,6 +4597,7 @@ def get_rv_iv_spread(ticker="SPY"):
 # ════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=86400)
+@st.cache_data(ttl=3600)
 def get_cot_positioning():
     """Fetch CFTC Commitment of Traders data for key futures contracts.
     
@@ -4607,6 +4610,7 @@ def get_cot_positioning():
     # Contract code map: CFTC commodity code → display name
     CONTRACT_MAP = {
         "13874+": ("S&P 500 (ES)", "ES"),
+        "13874A": ("S&P 500 (ES)", "ES"),  # alternate CFTC code
         "209742": ("Nasdaq 100 (NQ)", "NQ"),
         "088691": ("Gold (GC)", "GC"),
         "067651": ("WTI Crude (CL)", "CL"),
@@ -4641,8 +4645,11 @@ def get_cot_positioning():
                                 continue
                             name, symbol = CONTRACT_MAP[cftc_code]
                             try:
-                                noncomm_long = int(float(row.get("NonComm_Positions_Long_All", 0)))
-                                noncomm_short = int(float(row.get("NonComm_Positions_Short_All", 0)))
+                                # Handle both old and new CFTC CSV column naming conventions
+                                _nc_long_keys = ["NonComm_Positions_Long_All", "Noncommercial Positions-Long (All)", "NonComm_Positions_Long_All_Num"]
+                                _nc_short_keys = ["NonComm_Positions_Short_All", "Noncommercial Positions-Short (All)", "NonComm_Positions_Short_All_Num"]
+                                noncomm_long = int(float(next((row.get(k) for k in _nc_long_keys if row.get(k)), 0) or 0))
+                                noncomm_short = int(float(next((row.get(k) for k in _nc_short_keys if row.get(k)), 0) or 0))
                                 net = noncomm_long - noncomm_short
                                 report_date = row.get("Report_Date_as_YYYY-MM-DD", "")
                                 if cftc_code not in contract_data:
@@ -4705,6 +4712,8 @@ def get_economic_surprise_index(fred_key=None):
     
     Zero new API calls — processes data from get_macro_calendar().
     """
+    if not fred_key:
+        return {"items": [], "avg_surprise_pct": 0.0, "label": "NO KEY", "label_color": "#555", "_no_key": True}
     try:
         cal = get_macro_calendar(fred_key, days_back=60)
         if not cal:

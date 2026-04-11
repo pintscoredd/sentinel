@@ -758,27 +758,42 @@ with tabs[0]:
                 f' <span style="color:#555;font-size:10px">{mkt_detail}</span></div>',
                 unsafe_allow_html=True)
 
-        KEY_T = {"SPY":"S&P 500","^SPX":"SPX","DIA":"Dow Jones","IWM":"Russell 2K",
-                "^TNX":"10Y Yield","DX-Y.NYB":"USD Index","GLD":"Gold","CL=F":"WTI Crude","BTC-USD":"Bitcoin"}
-        qs = multi_quotes(list(KEY_T.keys()))
+        # Order: SPX, SPY, DOW, RUSSELL, USD INDEX, GOLD, 10Y YIELD, WTI CRUDE, BTC
+        KEY_T_ORDERED = [
+            ("^SPX",     "SPX"),
+            ("SPY",      "S&P 500"),
+            ("DIA",      "DOW JONES"),
+            ("IWM",      "RUSSELL 2K"),
+            ("DX-Y.NYB", "USD INDEX"),
+            ("GLD",      "GOLD"),
+            ("^TNX",     "10Y YIELD"),
+            ("CL=F",     "WTI CRUDE"),
+            ("BTC-USD",  "BITCOIN"),
+        ]
+        _strip_tickers = [t for t, _ in KEY_T_ORDERED]
+        qs = multi_quotes(_strip_tickers)
+        _strip_map = {q["ticker"]: q for q in qs} if qs else {}
         if qs:
-            cols = st.columns(len(qs))
-            for col, q in zip(cols, qs):
-                chg_str = f"{q['pct']:+.2f}% ({q['change']:+.2f})"
+            cols = st.columns(len(KEY_T_ORDERED))
+            for col, (tkr_s, lbl_s) in zip(cols, KEY_T_ORDERED):
+                q = _strip_map.get(tkr_s)
+                if not q:
+                    continue
+                _pct = q["pct"]
+                _chg = q["change"]
+                _up = _pct >= 0
+                _c = "#00CC44" if _up else "#FF4444"
+                _arr = "↑" if _up else "↓"
+                _sign = "+" if _up else ""
                 with col:
-                    _help_map = {
-                        "S&P 500": "Broad U.S. large-cap equity index (500 stocks). Key benchmark for overall market health.",
-                        "SPX": "S&P 500 Index — the most-watched U.S. equity benchmark.",
-                        "Dow Jones": "Price-weighted 30-stock industrial average. Less diversified than SPX.",
-                        "Russell 2K": "Small-cap index. Leads in reflation, lags in risk-off. Key cyclical barometer.",
-                        "10Y Yield": "U.S. 10-Year Treasury Note yield. Rising = tighter financial conditions.",
-                        "USD Index": "DXY — trade-weighted dollar vs 6 major currencies. Strength hurts EM and commodities.",
-                        "Gold": "Safe-haven asset. Rising with equities = stress hedge; rising with falling rates = normal.",
-                        "WTI Crude": "West Texas Intermediate oil benchmark. Supply-driven by OPEC+ decisions.",
-                        "Bitcoin": "Leading cryptocurrency by market cap. Proxy for risk appetite in digital assets.",
-                    }
-                    _help = _help_map.get(KEY_T.get(q["ticker"],q["ticker"]), None)
-                    st.metric(KEY_T.get(q["ticker"],q["ticker"]), fmt_p(q["price"]), delta=chg_str, help=_help)
+                    st.markdown(
+                        f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #FF6600;'
+                        f'padding:10px 10px 8px 10px;font-family:monospace;min-height:85px">'
+                        f'<div style="color:#888;font-size:9px;letter-spacing:1px;margin-bottom:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{lbl_s}</div>'
+                        f'<div style="color:#FFF;font-size:16px;font-weight:700;white-space:nowrap">{fmt_p(q["price"])}</div>'
+                        f'<div style="color:{_c};font-size:10px;font-weight:600;margin-top:4px">'
+                        f'{_arr} {_sign}{_pct:.2f}% ({_sign}{_chg:.2f})</div></div>',
+                        unsafe_allow_html=True)
         else:
             st.markdown('<div style="color:#FF4444;font-size:11px;font-family:monospace">Quotes unavailable. Rate limits or network error.</div>', unsafe_allow_html=True)
             
@@ -1030,7 +1045,7 @@ with tabs[1]:
                         pass
                     
                     _mc = info.get('marketCap') or _q.get('cap')
-                    _mc_str = f"${_mc/1e9:.2f}B" if _mc and _mc > 0 else "N/A"
+                    _mc_str = (f"${_mc/1e12:.2f}T" if _mc and _mc >= 1e12 else f"${_mc/1e9:.2f}B" if _mc and _mc > 0 else "N/A")
                     
                     _pe = info.get('trailingPE') or _q.get('pe') or 'N/A'
                     _pe_str = f"{_pe:.2f}" if isinstance(_pe, (int, float)) and _pe > 0 else str(_pe)
@@ -1044,21 +1059,50 @@ with tabs[1]:
                     _margin = info.get('profitMargins', 'N/A')
                     _margin_str = f"{_margin*100:.2f}%" if isinstance(_margin, (int, float)) else str(_margin)
                     
-                    _sector = info.get('sector', 'N/A')
+                    _sector   = info.get('sector', 'N/A')
                     _industry = info.get('industry', 'N/A')
-                    _desc = info.get('longBusinessSummary')
-                    
+                    _desc     = info.get('longBusinessSummary', '')
+                    _52wh     = info.get('fiftyTwoWeekHigh')
+                    _52wl     = info.get('fiftyTwoWeekLow')
+                    _avg_vol  = info.get('averageVolume')
+                    _fwd_pe   = info.get('forwardPE')
+                    _ps       = info.get('priceToSalesTrailing12Months')
+                    _ev_ebitda= info.get('enterpriseToEbitda')
+                    _rev      = info.get('totalRevenue')
+                    _eps      = info.get('trailingEps')
+
+                    # Row 1: core metrics
                     f1, f2, f3, f4, f5 = st.columns(5)
                     f1.metric("Market Cap", _mc_str)
-                    f2.metric("P/E Ratio", _pe_str)
-                    f3.metric("Div Yield", _div_str)
-                    f4.metric("Beta", _beta_str)
-                    f5.metric("Profit Margin", _margin_str)
-                    
+                    f2.metric("P/E (Trail)", _pe_str)
+                    f3.metric("P/E (Fwd)", f"{_fwd_pe:.2f}" if isinstance(_fwd_pe,(int,float)) and _fwd_pe>0 else "N/A")
+                    f4.metric("EPS", f"${_eps:.2f}" if isinstance(_eps,(int,float)) else "N/A")
+                    f5.metric("Beta", _beta_str)
+
+                    # Row 2: extended
+                    f6, f7, f8, f9, f10 = st.columns(5)
+                    f6.metric("Div Yield", _div_str)
+                    f7.metric("Profit Margin", _margin_str)
+                    f8.metric("EV/EBITDA", f"{_ev_ebitda:.1f}x" if isinstance(_ev_ebitda,(int,float)) and _ev_ebitda>0 else "N/A")
+                    f9.metric("P/S Ratio", f"{_ps:.2f}" if isinstance(_ps,(int,float)) and _ps>0 else "N/A")
+                    _rev_str = (f"${_rev/1e12:.2f}T" if _rev and _rev>=1e12 else f"${_rev/1e9:.1f}B" if _rev and _rev>=1e9 else f"${_rev/1e6:.0f}M" if _rev else "N/A")
+                    f10.metric("Revenue (TTM)", _rev_str)
+
+                    # Row 3: 52w range + volume
+                    f11, f12, f13 = st.columns(3)
+                    f11.metric("52W High", f"${_52wh:,.2f}" if isinstance(_52wh,(int,float)) else "N/A")
+                    f12.metric("52W Low",  f"${_52wl:,.2f}" if isinstance(_52wl,(int,float)) else "N/A")
+                    _avg_vol_str = (f"{_avg_vol/1e6:.1f}M" if _avg_vol and _avg_vol>=1e6 else f"{_avg_vol/1e3:.0f}K" if _avg_vol else "N/A")
+                    f13.metric("Avg Volume", _avg_vol_str)
+
                     if _sector != 'N/A' or _industry != 'N/A':
-                        st.markdown(f'<div style="color:#888;font-size:11px;font-family:monospace;margin-top:8px"><b>Sector:</b> {_sector} | <b>Industry:</b> {_industry}</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div style="color:#888;font-size:10px;font-family:monospace;margin-top:6px">Sector: <span style="color:#FF8C00">{_sector}</span> &nbsp;|&nbsp; Industry: <span style="color:#CCC">{_industry}</span></div>', unsafe_allow_html=True)
                     if _desc:
-                        st.markdown(f'<div style="color:#AAA;font-size:11px;margin-top:4px;line-height:1.4">{_esc(_desc[:300])}...</div>', unsafe_allow_html=True)
+                        # Limit to 3-4 sentences
+                        import re as _re
+                        _sents = _re.split(r'(?<=[.!?])\s+', _desc.strip())
+                        _short_desc = ' '.join(_sents[:4])
+                        st.markdown(f'<div style="color:#AAA;font-size:11px;margin-top:6px;line-height:1.55;font-family:monospace">{_esc(_short_desc)}</div>', unsafe_allow_html=True)
                 except Exception as e:
                     st.markdown('<div style="color:#555;font-size:11px">Financials temporarily unavailable.</div>', unsafe_allow_html=True)
             # --- END: Financials ---
@@ -1746,8 +1790,6 @@ with tabs[2]:
             with st.spinner("Loading options…"):
                 _oc, _op, _oe = options_chain(_ot, _opt_sel_exp)
 
-
-
             if _oc is not None:
                 _oexp_dt = None
                 try:
@@ -1763,13 +1805,10 @@ with tabs[2]:
                     _o_vix = 20.0
 
 
-
-
                 # ════════════════════════════════════════════════════════════
-                # INTEGRATED PAYOFF DIAGRAM — LIVE OPTIONS DATA
+                # INTEGRATED PAYOFF BUILDER — live options data
                 # ════════════════════════════════════════════════════════════
-                st.markdown('<div class="bb-ph" style="margin-top:14px">📐 OPTIONS PAYOFF — STRATEGY ENGINE</div>', unsafe_allow_html=True)
-
+                st.markdown('<div class="bb-ph" style="margin-top:12px">📐 OPTIONS PAYOFF — STRATEGY ENGINE</div>', unsafe_allow_html=True)
                 _LIVE_STRATS = {
                     "Long Call":             [("call",  1, 1)],
                     "Long Put":              [("put",   1, 1)],
@@ -1789,195 +1828,116 @@ with tabs[2]:
                     "Call Ratio Backspread": [("call", -1, 1), ("call",  2, 2)],
                     "Put Ratio Backspread":  [("put",  -1, 2), ("put",   2, 1)],
                 }
-
-                _lv_c1, _lv_c2, _lv_c3 = st.columns([2, 1, 1])
+                _lv_dte_default = max((_oexp_dt.date()-datetime.today().date()).days,1) if _oexp_dt else 30
+                _lv_spot = float(_oq["price"])
+                _lv_c1, _lv_c2, _lv_c3, _lv_c4 = st.columns([2, 1, 1, 1])
                 with _lv_c1:
                     _lv_strat = st.selectbox("Strategy", list(_LIVE_STRATS.keys()), key=f"lv_strat_{_ot}")
                 with _lv_c2:
-                    _lv_qty = st.number_input("Qty (contracts)", value=1, min_value=1, max_value=500, key=f"lv_qty_{_ot}")
+                    _lv_qty = st.number_input("Qty", value=1, min_value=1, max_value=500, key=f"lv_qty_{_ot}")
                 with _lv_c3:
-                    _lv_iv_override = st.number_input("IV Override (%)", value=float(_o_vix) if _o_vix else 20.0, min_value=1.0, max_value=300.0, format="%.1f", key=f"lv_iv_{_ot}")
-
+                    _lv_iv_override = st.slider("IV %", min_value=5.0, max_value=200.0, value=float(_o_vix) if _o_vix else 20.0, step=0.5, key=f"lv_iv_{_ot}")
+                with _lv_c4:
+                    _lv_dte_override = st.slider("DTE", min_value=1, max_value=365, value=int(_lv_dte_default), step=1, key=f"lv_dte_{_ot}")
                 _lv_legs          = _LIVE_STRATS[_lv_strat]
                 _lv_strike_indices = sorted(set(leg[2] for leg in _lv_legs if leg[0] != "stock"))
-                _lv_spot          = float(_oq["price"])
-                _lv_dte_days      = max((_oexp_dt.date() - datetime.today().date()).days, 1) if _oexp_dt else 30
-
-                # ── Strike selectors using real chain strikes ──
+                # Strike selectors
                 _lv_strike_vals = {}
-                _strikes_from_chain = []
+                _strikes_fc = []
                 if _oc is not None and not _oc.empty and "strike" in _oc.columns:
-                    _strikes_from_chain = sorted(_oc["strike"].dropna().unique().tolist())
+                    _strikes_fc = sorted(_oc["strike"].dropna().unique().tolist())
                 elif _op is not None and not _op.empty and "strike" in _op.columns:
-                    _strikes_from_chain = sorted(_op["strike"].dropna().unique().tolist())
-
-                if _strikes_from_chain and _lv_strike_indices:
-                    _lv_atm_idx  = min(range(len(_strikes_from_chain)), key=lambda i: abs(_strikes_from_chain[i] - _lv_spot))
-                    _lv_sk_cols  = st.columns(min(len(_lv_strike_indices), 4))
-                    _lv_sk_labels = ["Strike 1 (K1)", "Strike 2 (K2)", "Strike 3 (K3)", "Strike 4 (K4)"]
-                    _lv_sk_offsets = [0, 2, 4, 6]
+                    _strikes_fc = sorted(_op["strike"].dropna().unique().tolist())
+                if _strikes_fc and _lv_strike_indices:
+                    _lv_atm = min(range(len(_strikes_fc)), key=lambda i: abs(_strikes_fc[i]-_lv_spot))
+                    _lv_sk_cols = st.columns(min(len(_lv_strike_indices), 4))
                     for i, si in enumerate(_lv_strike_indices):
-                        _def_i = min(_lv_atm_idx + _lv_sk_offsets[min(i, 3)], len(_strikes_from_chain) - 1)
+                        _di = min(_lv_atm+i*2, len(_strikes_fc)-1)
                         with _lv_sk_cols[i % len(_lv_sk_cols)]:
-                            _lv_strike_vals[si] = st.select_slider(
-                                _lv_sk_labels[i] if i < 4 else f"Strike {i+1}",
-                                options=_strikes_from_chain,
-                                value=_strikes_from_chain[_def_i],
-                                key=f"lv_k_{si}_{_ot}")
+                            _lv_strike_vals[si] = st.select_slider(f"K{i+1}", options=_strikes_fc, value=_strikes_fc[_di], key=f"lv_k_{si}_{_ot}")
                 elif _lv_strike_indices:
                     _lv_sk_cols2 = st.columns(min(len(_lv_strike_indices), 4))
                     for i, si in enumerate(_lv_strike_indices):
-                        with _lv_sk_cols2[i % len(_lv_sk_cols2)]:
+                        with _lv_sk_cols2[i%len(_lv_sk_cols2)]:
                             _lv_strike_vals[si] = st.number_input(f"Strike {i+1} ($)", value=round(_lv_spot*(1+i*0.02),2), format="%.2f", key=f"lv_kn_{si}_{_ot}")
-
-                # ── Premium lookup from real chain ──
-                def _lv_get_prem(chain_df, strike):
-                    if chain_df is None or chain_df.empty: return 0.0
-                    col = "lastPrice" if "lastPrice" in chain_df.columns else ("last" if "last" in chain_df.columns else None)
+                def _lv_get_prem(cdf, strike):
+                    if cdf is None or cdf.empty: return 0.0
+                    col = "lastPrice" if "lastPrice" in cdf.columns else ("last" if "last" in cdf.columns else None)
                     if col is None: return 0.0
-                    row = chain_df[chain_df["strike"] == strike]
-                    if row.empty:
-                        row = chain_df.iloc[(chain_df["strike"] - strike).abs().argsort()[:1]]
+                    row = cdf[cdf["strike"]==strike]
+                    if row.empty: row = cdf.iloc[(cdf["strike"]-strike).abs().argsort()[:1]]
                     if row.empty: return 0.0
                     v = float(row[col].iloc[0])
-                    if v <= 0 and "bid" in row.columns and "ask" in row.columns:
-                        v = (float(row["bid"].iloc[0]) + float(row["ask"].iloc[0])) / 2
-                    return max(v, 0.0)
-
-                # ── Build P&L ──
-                _lv_S     = np.linspace(_lv_spot * 0.85, _lv_spot * 1.15, 600)
+                    if v<=0 and "bid" in row.columns and "ask" in row.columns: v=(float(row["bid"].iloc[0])+float(row["ask"].iloc[0]))/2
+                    return max(v,0.0)
+                _lv_S = np.linspace(_lv_spot*0.85, _lv_spot*1.15, 600)
                 _lv_total = np.zeros(len(_lv_S))
-                _lv_net_credit = 0.0
-                _lv_T     = max(_lv_dte_days / 365.0, 1/365.0)
-                _lv_sigma = _lv_iv_override / 100.0
-                _lv_net_delta = _lv_net_gamma = _lv_net_theta = _lv_net_vega = 0.0
-
-                for _ll_type, _ll_dir, _ll_si in _lv_legs:
-                    _ll_K    = _lv_strike_vals.get(_ll_si, _lv_spot)
-                    _ll_abs  = abs(_ll_dir) * _lv_qty
-                    _ll_sign = 1 if _ll_dir > 0 else -1
-                    if _ll_type == "stock":
-                        _lv_total += _ll_sign * _ll_abs * 100 * (_lv_S - _lv_spot)
-                        _lv_net_delta += _ll_sign * _ll_abs * 100
+                _lv_nc=_lv_nd=_lv_ng=_lv_nt=_lv_nv=0.0
+                _lv_T = max(_lv_dte_override/365.0, 1/365.0)
+                _lv_sigma = _lv_iv_override/100.0
+                for _ll_type,_ll_dir,_ll_si in _lv_legs:
+                    _ll_K=_lv_strike_vals.get(_ll_si,_lv_spot); _ll_abs=abs(_ll_dir)*_lv_qty; _ll_sgn=1 if _ll_dir>0 else -1
+                    if _ll_type=="stock":
+                        _lv_total+=_ll_sgn*_ll_abs*100*(_lv_S-_lv_spot); _lv_nd+=_ll_sgn*_ll_abs*100
                     else:
-                        _prem_lv = _lv_get_prem(_oc if _ll_type == "call" else _op, _ll_K)
-                        if _prem_lv == 0:
-                            _bs_lv = bs_greeks_engine(_lv_spot, _ll_K, _lv_T, 0.045, _lv_sigma, _ll_type)
-                            _prem_lv = _bs_lv.get("price", 0.0)
-                        _intr = np.maximum(_lv_S - _ll_K, 0) if _ll_type == "call" else np.maximum(_ll_K - _lv_S, 0)
-                        _lv_total       += _ll_sign * _ll_abs * 100 * (_intr - _prem_lv)
-                        _lv_net_credit  += _ll_sign * _prem_lv * _ll_abs * 100
-                        _g_lv = bs_greeks_engine(_lv_spot, _ll_K, _lv_T, 0.045, _lv_sigma, _ll_type)
-                        _lv_net_delta += _ll_sign * _ll_abs * 100 * _g_lv["delta"]
-                        _lv_net_gamma += _ll_sign * _ll_abs * 100 * _g_lv["gamma"]
-                        _lv_net_theta += _ll_sign * _ll_abs * 100 * _g_lv["theta"]
-                        _lv_net_vega  += _ll_sign * _ll_abs * 100 * _g_lv.get("vega", 0)
-
-                _lv_net_debit  = -_lv_net_credit
-                _lv_max_profit = float(np.max(_lv_total))
-                _lv_max_loss   = float(np.min(_lv_total))
-
-                _lv_be_list = []
-                for _bi in range(len(_lv_total) - 1):
-                    if (_lv_total[_bi] <= 0 < _lv_total[_bi+1]) or (_lv_total[_bi] >= 0 > _lv_total[_bi+1]):
-                        _lv_be_list.append(round(float(np.interp(0, [_lv_total[_bi], _lv_total[_bi+1]], [_lv_S[_bi], _lv_S[_bi+1]])), 2))
-
-                _lv_pop = None
-                if _lv_be_list and _lv_sigma > 0:
+                        _pm=_lv_get_prem(_oc if _ll_type=="call" else _op,_ll_K)
+                        if _pm==0:
+                            _bsv=bs_greeks_engine(_lv_spot,_ll_K,_lv_T,0.045,_lv_sigma,_ll_type); _pm=_bsv.get("price",0.0)
+                        _intr=np.maximum(_lv_S-_ll_K,0) if _ll_type=="call" else np.maximum(_ll_K-_lv_S,0)
+                        _lv_total+=_ll_sgn*_ll_abs*100*(_intr-_pm); _lv_nc+=_ll_sgn*_pm*_ll_abs*100
+                        _g=bs_greeks_engine(_lv_spot,_ll_K,_lv_T,0.045,_lv_sigma,_ll_type)
+                        _lv_nd+=_ll_sgn*_ll_abs*100*_g["delta"]; _lv_ng+=_ll_sgn*_ll_abs*100*_g["gamma"]
+                        _lv_nt+=_ll_sgn*_ll_abs*100*_g["theta"]; _lv_nv+=_ll_sgn*_ll_abs*100*_g.get("vega",0)
+                _lv_net_debit=-_lv_nc; _lv_mp=float(np.max(_lv_total)); _lv_ml=float(np.min(_lv_total))
+                _lv_be=[]
+                for _bi in range(len(_lv_total)-1):
+                    if (_lv_total[_bi]<=0<_lv_total[_bi+1]) or (_lv_total[_bi]>=0>_lv_total[_bi+1]):
+                        _lv_be.append(round(float(np.interp(0,[_lv_total[_bi],_lv_total[_bi+1]],[_lv_S[_bi],_lv_S[_bi+1]])),2))
+                _lv_pop=None
+                if _lv_be and _lv_sigma>0:
                     try:
-                        _d1_lv = (np.log(_lv_spot / _lv_be_list[0]) + 0.5*_lv_sigma**2*_lv_T) / (_lv_sigma*np.sqrt(_lv_T))
-                        _lv_pop = float(_norm_dist.cdf(_d1_lv) if _lv_total[-1] > 0 else _norm_dist.cdf(-_d1_lv)) * 100
+                        _d1=(np.log(_lv_spot/_lv_be[0])+0.5*_lv_sigma**2*_lv_T)/(_lv_sigma*np.sqrt(_lv_T))
+                        _lv_pop=float(_norm_dist.cdf(_d1) if _lv_total[-1]>0 else _norm_dist.cdf(-_d1))*100
                     except: pass
-
-                # ── Metrics row ──
-                _lv_nd_label  = "NET DEBIT" if _lv_net_debit >= 0 else "NET CREDIT"
-                _lv_nd_val    = f"${abs(_lv_net_debit):,.0f}"
-                _lv_ml_str    = f"${abs(_lv_net_debit):,.0f}" if abs(_lv_net_debit) < 1e7 else "Unlimited"
-                _lv_mp_str    = f"${_lv_max_profit:,.0f}" if _lv_max_profit < 1e7 else "Infinite"
-                _lv_pop_str   = f"{_lv_pop:.0f}%" if _lv_pop else "--%"
-                _lv_be_disp   = ("Above $"+f"{_lv_be_list[0]:,.2f} (+{(_lv_be_list[0]-_lv_spot)/_lv_spot*100:.1f}%)"
-                                 if len(_lv_be_list) == 1
-                                 else " / ".join(f"${b:,.2f}" for b in _lv_be_list) if _lv_be_list else "—")
-
-                st.markdown(f'''
-<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;background:#050505;
-border:1px solid #1A1A1A;border-top:2px solid #FF6600;padding:14px 20px;margin:10px 0 8px 0;font-family:monospace">
-<div style="text-align:center;min-width:80px">
-  <div style="color:#888;font-size:9px;letter-spacing:1px;margin-bottom:4px">{_lv_nd_label}</div>
-  <div style="color:#FFCC00;font-size:20px;font-weight:700">{_lv_nd_val}</div>
-</div>
-<div style="text-align:center;min-width:80px">
-  <div style="color:#888;font-size:9px;letter-spacing:1px;margin-bottom:4px">MAX LOSS</div>
-  <div style="color:#FF4444;font-size:20px;font-weight:700">{_lv_ml_str}</div>
-</div>
-<div style="text-align:center;min-width:80px">
-  <div style="color:#888;font-size:9px;letter-spacing:1px;margin-bottom:4px">MAX PROFIT</div>
-  <div style="color:#00CC44;font-size:20px;font-weight:700">{_lv_mp_str}</div>
-</div>
-<div style="text-align:center;min-width:80px">
-  <div style="color:#888;font-size:9px;letter-spacing:1px;margin-bottom:4px">CHANCE OF PROFIT</div>
-  <div style="color:#FFF;font-size:20px;font-weight:700">{_lv_pop_str}</div>
-</div>
-<div style="text-align:center;min-width:120px">
-  <div style="color:#888;font-size:9px;letter-spacing:1px;margin-bottom:4px">BREAKEVEN</div>
-  <div style="color:#00AAFF;font-size:14px;font-weight:700;line-height:1.4">{_lv_be_disp}</div>
-</div>
-</div>''', unsafe_allow_html=True)
-
-                # ── Payoff chart ──
-                _lv_fig = go.Figure()
-                _lv_be_main = _lv_be_list[0] if _lv_be_list else None
-                if _lv_be_main:
-                    _m_loss = _lv_S <= _lv_be_main
-                    _m_prof = _lv_S >= _lv_be_main
-                    _S_l = np.append(_lv_S[_m_loss], _lv_be_main)
-                    _P_l = np.append(_lv_total[_m_loss], float(np.interp(_lv_be_main, _lv_S, _lv_total)))
-                    _S_p = np.insert(_lv_S[_m_prof], 0, _lv_be_main)
-                    _P_p = np.insert(_lv_total[_m_prof], 0, float(np.interp(_lv_be_main, _lv_S, _lv_total)))
-                    _lv_fig.add_trace(go.Scatter(x=_S_l, y=_P_l, mode="lines",
-                        line=dict(color="#FF2B43", width=3), fill="tozeroy",
-                        fillcolor="rgba(255,43,67,0.22)", showlegend=False,
-                        hovertemplate="$%{x:,.2f}<br>P&L: $%{y:,.0f}<extra></extra>"))
-                    _lv_fig.add_trace(go.Scatter(x=_S_p, y=_P_p, mode="lines",
-                        line=dict(color="#00CC44", width=3), fill="tozeroy",
-                        fillcolor="rgba(0,204,68,0.18)", showlegend=False,
-                        hovertemplate="$%{x:,.2f}<br>P&L: $%{y:,.0f}<extra></extra>"))
+                _lv_nd_lbl="NET DEBIT" if _lv_net_debit>=0 else "NET CREDIT"
+                _lv_ml_s=f"${abs(_lv_net_debit):,.0f}" if abs(_lv_net_debit)<1e7 else "Unlimited"
+                _lv_mp_s=f"${_lv_mp:,.0f}" if _lv_mp<1e7 else "Infinite"
+                _lv_be_d=("Above $"+f"{_lv_be[0]:,.2f} (+{(_lv_be[0]-_lv_spot)/_lv_spot*100:.1f}%)" if len(_lv_be)==1 else " / ".join(f"${b:,.2f}" for b in _lv_be) if _lv_be else "—")
+                _lv_pop_s=f"{_lv_pop:.0f}%" if _lv_pop else "--%"
+                st.markdown(f'''<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;background:#050505;border:1px solid #1A1A1A;border-top:2px solid #FF6600;padding:14px 20px;margin:10px 0 8px;font-family:monospace">
+<div style="text-align:center;min-width:80px"><div style="color:#888;font-size:9px;letter-spacing:1px;margin-bottom:4px">{_lv_nd_lbl}</div><div style="color:#FFCC00;font-size:20px;font-weight:700">${abs(_lv_net_debit):,.0f}</div></div>
+<div style="text-align:center;min-width:80px"><div style="color:#888;font-size:9px;letter-spacing:1px;margin-bottom:4px">MAX LOSS</div><div style="color:#FF4444;font-size:20px;font-weight:700">{_lv_ml_s}</div></div>
+<div style="text-align:center;min-width:80px"><div style="color:#888;font-size:9px;letter-spacing:1px;margin-bottom:4px">MAX PROFIT</div><div style="color:#00CC44;font-size:20px;font-weight:700">{_lv_mp_s}</div></div>
+<div style="text-align:center;min-width:80px"><div style="color:#888;font-size:9px;letter-spacing:1px;margin-bottom:4px">CHANCE OF PROFIT</div><div style="color:#FFF;font-size:20px;font-weight:700">{_lv_pop_s}</div></div>
+<div style="text-align:center;min-width:120px"><div style="color:#888;font-size:9px;letter-spacing:1px;margin-bottom:4px">BREAKEVEN</div><div style="color:#00AAFF;font-size:14px;font-weight:700;line-height:1.4">{_lv_be_d}</div></div>
+</div>''',unsafe_allow_html=True)
+                _lv_fig=go.Figure()
+                _lv_bm=_lv_be[0] if _lv_be else None
+                if _lv_bm:
+                    _ml2=_lv_S<=_lv_bm; _mp3=_lv_S>=_lv_bm
+                    _Sl=np.append(_lv_S[_ml2],_lv_bm); _Pl=np.append(_lv_total[_ml2],float(np.interp(_lv_bm,_lv_S,_lv_total)))
+                    _Sp=np.insert(_lv_S[_mp3],0,_lv_bm); _Pp=np.insert(_lv_total[_mp3],0,float(np.interp(_lv_bm,_lv_S,_lv_total)))
+                    _lv_fig.add_trace(go.Scatter(x=_Sl,y=_Pl,mode="lines",line=dict(color="#FF2B43",width=3),fill="tozeroy",fillcolor="rgba(255,43,67,0.22)",showlegend=False,hovertemplate="$%{x:,.2f}<br>P&L: $%{y:,.0f}<extra></extra>"))
+                    _lv_fig.add_trace(go.Scatter(x=_Sp,y=_Pp,mode="lines",line=dict(color="#00CC44",width=3),fill="tozeroy",fillcolor="rgba(0,204,68,0.18)",showlegend=False,hovertemplate="$%{x:,.2f}<br>P&L: $%{y:,.0f}<extra></extra>"))
                 else:
-                    _lv_fig.add_trace(go.Scatter(x=_lv_S, y=_lv_total, mode="lines",
-                        line=dict(color="#FF6600", width=3), fill="tozeroy",
-                        fillcolor="rgba(255,102,0,0.18)", showlegend=False))
-                _lv_fig.add_hline(y=0, line_color="#2A2A2A", line_width=1)
-                _lv_fig.add_vline(x=_lv_spot, line_color="#555", line_dash="dot", line_width=1,
-                    annotation_text=f"Spot ${_lv_spot:,.2f}",
-                    annotation_font=dict(size=9, color="#888", family="IBM Plex Mono"),
-                    annotation_position="top right")
-                for _lv_be_v in _lv_be_list:
-                    _lv_fig.add_vline(x=_lv_be_v, line_color="#00AAFF", line_width=1.5)
-                    _lv_fig.add_annotation(x=_lv_be_v,
-                        y=max(_lv_total)*0.7 if max(_lv_total) > 0 else 0,
-                        text=f"${_lv_be_v:,.2f}",
-                        showarrow=False, font=dict(color="#00AAFF", size=11, family="IBM Plex Mono"),
-                        xanchor="left", xshift=6)
-                _lv_fig.update_layout(
-                    height=340, margin=dict(l=65, r=20, t=16, b=42),
-                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    xaxis=dict(showgrid=True, gridcolor="#0D0D0D", zeroline=False,
-                        color="#888", tickprefix="$", tickfont=dict(size=9, family="IBM Plex Mono")),
-                    yaxis=dict(showgrid=True, gridcolor="#0D0D0D", zeroline=False,
-                        color="#888", tickprefix="$", tickfont=dict(size=9, family="IBM Plex Mono")),
-                    hovermode="x unified")
-                st.plotly_chart(_lv_fig, use_container_width=True, config={"displayModeBar": False})
-
-                # ── Greeks footer ──
-                _lv_gc1, _lv_gc2, _lv_gc3, _lv_gc4 = st.columns(4)
-                _lv_gc1.markdown(f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #AA44FF;padding:8px;font-family:monospace;text-align:center"><div style="color:#555;font-size:8px;letter-spacing:1px">NET DELTA</div><div style="color:#BB88FF;font-size:15px;font-weight:700">{_lv_net_delta:+.2f}</div></div>', unsafe_allow_html=True)
-                _lv_gc2.markdown(f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #FF8C00;padding:8px;font-family:monospace;text-align:center"><div style="color:#555;font-size:8px;letter-spacing:1px">NET THETA</div><div style="color:#FF8C00;font-size:15px;font-weight:700">{_lv_net_theta:+.4f}</div></div>', unsafe_allow_html=True)
-                _lv_gc3.markdown(f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #00CC44;padding:8px;font-family:monospace;text-align:center"><div style="color:#555;font-size:8px;letter-spacing:1px">NET GAMMA</div><div style="color:#00CC44;font-size:15px;font-weight:700">{_lv_net_gamma:+.5f}</div></div>', unsafe_allow_html=True)
-                _lv_gc4.markdown(f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #00AAFF;padding:8px;font-family:monospace;text-align:center"><div style="color:#555;font-size:8px;letter-spacing:1px">NET VEGA</div><div style="color:#00AAFF;font-size:15px;font-weight:700">{_lv_net_vega:+.4f}</div></div>', unsafe_allow_html=True)
-                st.markdown(f'<div style="color:#555;font-size:9px;font-family:monospace;margin-top:4px;margin-bottom:8px">DATE: {_oexp_fmt} ({_lv_dte_days}d) &nbsp;|&nbsp; IV: {_lv_iv_override:.1f}% &nbsp;|&nbsp; SPOT: ${_lv_spot:,.2f} &nbsp;|&nbsp; STRATEGY: {_lv_strat}</div>', unsafe_allow_html=True)
-                st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+                    _lv_fig.add_trace(go.Scatter(x=_lv_S,y=_lv_total,mode="lines",line=dict(color="#FF6600",width=3),fill="tozeroy",fillcolor="rgba(255,102,0,0.18)",showlegend=False))
+                _lv_fig.add_hline(y=0,line_color="#2A2A2A",line_width=1)
+                _lv_fig.add_vline(x=_lv_spot,line_color="#555",line_dash="dot",line_width=1,annotation_text=f"Spot ${_lv_spot:,.2f}",annotation_font=dict(size=9,color="#888",family="IBM Plex Mono"),annotation_position="top right")
+                for _bv in _lv_be:
+                    _lv_fig.add_vline(x=_bv,line_color="#00AAFF",line_width=1.5)
+                    _lv_fig.add_annotation(x=_bv,y=max(_lv_total)*0.7 if max(_lv_total)>0 else 0,text=f"${_bv:,.2f}",showarrow=False,font=dict(color="#00AAFF",size=11,family="IBM Plex Mono"),xanchor="left",xshift=6)
+                _lv_fig.update_layout(height=320,margin=dict(l=60,r=20,t=16,b=42),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(showgrid=True,gridcolor="#0D0D0D",zeroline=False,color="#888",tickprefix="$",tickfont=dict(size=9,family="IBM Plex Mono")),
+                    yaxis=dict(showgrid=True,gridcolor="#0D0D0D",zeroline=False,color="#888",tickprefix="$",tickfont=dict(size=9,family="IBM Plex Mono")),hovermode="x unified")
+                st.plotly_chart(_lv_fig,use_container_width=True,config={"displayModeBar":False})
+                _lv_gc=st.columns(4)
+                _lv_gc[0].markdown(f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #AA44FF;padding:8px;font-family:monospace;text-align:center"><div style="color:#555;font-size:8px">DELTA</div><div style="color:#BB88FF;font-size:14px;font-weight:700">{_lv_nd:+.2f}</div></div>',unsafe_allow_html=True)
+                _lv_gc[1].markdown(f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #FF8C00;padding:8px;font-family:monospace;text-align:center"><div style="color:#555;font-size:8px">THETA</div><div style="color:#FF8C00;font-size:14px;font-weight:700">{_lv_nt:+.4f}</div></div>',unsafe_allow_html=True)
+                _lv_gc[2].markdown(f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #00CC44;padding:8px;font-family:monospace;text-align:center"><div style="color:#555;font-size:8px">GAMMA</div><div style="color:#00CC44;font-size:14px;font-weight:700">{_lv_ng:+.5f}</div></div>',unsafe_allow_html=True)
+                _lv_gc[3].markdown(f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #00AAFF;padding:8px;font-family:monospace;text-align:center"><div style="color:#555;font-size:8px">VEGA</div><div style="color:#00AAFF;font-size:14px;font-weight:700">{_lv_nv:+.4f}</div></div>',unsafe_allow_html=True)
+                st.markdown(f'<div style="color:#555;font-size:9px;font-family:monospace;margin-top:4px">DTE: {_lv_dte_override}d &nbsp;|&nbsp; IV: {_lv_iv_override:.1f}% &nbsp;|&nbsp; SPOT: ${_lv_spot:,.2f} &nbsp;|&nbsp; {_lv_strat}</div>',unsafe_allow_html=True)
+                st.markdown('<hr class="bb-divider">',unsafe_allow_html=True)
                 # ── END PAYOFF BUILDER ──
-
                 _oscored = score_options_chain(_oc, _op, _oq["price"], vix=_o_vix, expiry_date=_opt_sel_exp)
 
                 _ovix_str = f"{_o_vix:.1f}" if _o_vix else "N/A"
@@ -2189,7 +2149,22 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
 
             # ── SPX DIRECTION PREDICTOR ─────────────────────────────
             st.markdown('<div class="bb-ph">🧭 SPX DAILY DIRECTION PREDICTOR — QUANT ENGINE</div>', unsafe_allow_html=True)
-            _dir_result = compute_spx_direction(_0dte_chain, _spx, _vix_data)
+            # Use CBOE data as fallback for direction predictor if no Alpaca chain
+            _dir_chain_src = _0dte_chain
+            _dir_spx_src   = _spx
+            if not _dir_chain_src or not _dir_spx_src:
+                try:
+                    _fb_spot, _fb_opts = fetch_cboe_gex("SPX")
+                    if _fb_spot and _fb_opts:
+                        _dir_spx_src = {"spot": _fb_spot, "vwap": _fb_spot, "high": _fb_spot*1.005, "low": _fb_spot*0.995}
+                        # Build minimal chain from CBOE opts
+                        _dir_chain_src = [{"strike": float(r.get("strike",0)), "option_type": r.get("option_type","call").lower(),
+                                           "open_interest": int(r.get("open_interest",0) or 0),
+                                           "gamma": float(r.get("gamma",0) or 0), "expiration_date": r.get("expiration_date","")}
+                                          for r in (_fb_opts or []) if r.get("strike")]
+                except Exception:
+                    pass
+            _dir_result = compute_spx_direction(_dir_chain_src, _dir_spx_src, _vix_data)
             if _dir_result:
                 _d = _dir_result
                 _conf_colors = {"HIGH": "#00CC44", "MEDIUM": "#FF8C00", "LOW": "#888"}
@@ -2245,6 +2220,28 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                             'Direction predictor requires options chain + SPX data.</div>',
                             unsafe_allow_html=True)
 
+            st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+            # ── 1-Min SPX Intraday Chart ──
+            st.markdown('<div class="bb-ph">📈 SPX INTRADAY — 1 MIN (CURRENT SESSION)</div>', unsafe_allow_html=True)
+            _spx_tv_sym = "FOREXCOM:SPXUSD"
+            components.html(f"""<!DOCTYPE html><html>
+<head><style>body{{margin:0;padding:0;background:#000;overflow:hidden}}</style></head>
+<body><div class="tradingview-widget-container">
+<div id="tv_spx_1m"></div>
+<script src="https://s3.tradingview.com/tv.js"></script>
+<script>
+new TradingView.widget({{
+  "width":"100%","height":320,"symbol":"{_spx_tv_sym}","interval":"1",
+  "range":"1D","timezone":"America/Los_Angeles","theme":"dark","style":"1","locale":"en",
+  "toolbar_bg":"#000","enable_publishing":false,"hide_side_toolbar":false,
+  "allow_symbol_change":false,"save_image":false,
+  "container_id":"tv_spx_1m",
+  "backgroundColor":"rgba(0,0,0,1)","gridColor":"rgba(20,20,20,1)",
+  "studies":["STD;Volume"],
+  "show_popup_button":false
+}});
+</script></div></body></html>""", height=325, scrolling=False)
             st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
             st.markdown('<div class="bb-ph">📊 GAMMA EXPOSURE (GEX) PROFILE</div>', unsafe_allow_html=True)
@@ -2753,7 +2750,10 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
                     f'<span style="color:{_s_c};font-weight:600;min-width:50px;text-align:right">{_ei["surprise_pct"]:+.1f}%</span>'
                     f'</div>', unsafe_allow_html=True)
         else:
-            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">ESI data requires macro calendar with actuals.</p>', unsafe_allow_html=True)
+            if _esi and _esi.get("_no_key"):
+                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">ESI requires a FRED API key. Add FRED_API_KEY to secrets.</p>', unsafe_allow_html=True)
+            else:
+                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">ESI unavailable — add FRED_API_KEY for macro calendar data.</p>', unsafe_allow_html=True)
 
     with _cot_col:
         st.markdown('<div class="bb-ph">🏛️ INSTITUTIONAL POSITIONING (CFTC COT)</div>', unsafe_allow_html=True)
