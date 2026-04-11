@@ -20,7 +20,7 @@ from skyfield.api import Topos
 import pandas_market_calendars as mcal
 # For Black-Scholes Greeks Engine
 from scipy.stats import norm
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
 try:
     import orjson as json
@@ -442,7 +442,7 @@ def get_heatmap_data():
                 rows.append({"ticker": tkr, "sector": sector, "pct": pct, "price": price, "change": chg, "market_cap": mcap})
         return rows
     except Exception as e:
-        logger.error({"error": str(e)}, "Heatmap Fetch Error")
+        logger.error("Heatmap Fetch Error: %s", e)
         return []
 
 @st.cache_data(ttl=300)
@@ -1019,7 +1019,7 @@ def top_movers():
         sorted_q = sorted(results, key=lambda x: x["pct"], reverse=True)
         return sorted_q[:10], sorted_q[-10:]
     except Exception as e:
-        logger.error({"error": str(e)}, "Top Movers Error")
+        logger.error("Top Movers Error: %s", e)
         return [], []
 
 
@@ -2856,7 +2856,8 @@ def get_ticker_exchange(ticker):
         if tv_prefix: return f"{tv_prefix}:{ticker}"
     except Exception as e:
         logger.debug(f"Error caught: {e}")
-    for prefix in ["NASDAQ", "NYSE", "AMEX"]: return f"{prefix}:{ticker}"
+    for prefix in ["NASDAQ", "NYSE", "AMEX"]:
+        pass  # fallback only; exchange lookup failed
     return f"NASDAQ:{ticker}"
 
 
@@ -3292,7 +3293,7 @@ def get_earnings_matrix(ticker):
             "analyst_targets": analyst_targets,
         }
     except Exception as e:
-        logger.error({"error": str(e)}, "Earnings Matrix Error")
+        logger.error("Earnings Matrix Error: %s", e)
         return None
 
 
@@ -3648,7 +3649,7 @@ def fetch_ai_hotspots_json(gemini_api_key: str) -> list:
         cleaned = _strip_llm_json(response.text)
         parsed = json.loads(cleaned)
         if not isinstance(parsed, list):
-            logger.warning({"msg": "AI hotspots returned non-list JSON"})
+            logger.warning("AI hotspots returned non-list JSON")
             return []
         # Validate each entry has the required keys
         valid = []
@@ -3660,10 +3661,10 @@ def fetch_ai_hotspots_json(gemini_api_key: str) -> list:
                     "name": str(item["name"]),
                     "url": str(item.get("url", "")),
                 })
-        logger.info({"count": len(valid)}, "AI hotspots fetched")
+        logger.info("AI hotspots fetched: count=%s", len(valid))
         return valid
     except Exception as exc:
-        logger.error({"error": str(exc)}, "AI hotspots fetch failed")
+        logger.error("AI hotspots fetch failed: %s", exc)
         return []
 
 @st.cache_data(ttl=300)
@@ -4348,6 +4349,23 @@ def get_iv_term_structure(ticker="SPY"):
         selected_exps = exps[:min(8, len(exps))]
         today = datetime.today().date()
 
+        # Helper defined once outside loop — avoids redefining on every expiry iteration
+        def _interp_atm_iv(df_side, spot):
+            df_side = df_side.copy()
+            df_side["_dist"] = (df_side["strike"] - spot).abs()
+            nearest = df_side.nsmallest(2, "_dist")
+            if len(nearest) == 0: return None
+            if len(nearest) == 1: return float(nearest["impliedVolatility"].iloc[0])
+            k1, k2 = nearest["strike"].values
+            v1, v2 = nearest["impliedVolatility"].values
+            if k1 == k2: return float(v1)
+            d1 = abs(np.log(spot / k1))
+            d2 = abs(np.log(spot / k2))
+            if d1 + d2 == 0: return float(v1)
+            w1 = d2 / (d1 + d2)
+            w2 = d1 / (d1 + d2)
+            return float(v1 * w1 + v2 * w2)
+
         rows = []
         for exp in selected_exps:
             try:
@@ -4362,28 +4380,13 @@ def get_iv_term_structure(ticker="SPY"):
                 exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
                 dte = max((exp_date - today).days, 1)
 
-                import numpy as np
+                call_iv = _interp_atm_iv(calls, price) if not calls.empty and "strike" in calls.columns else None
+                put_iv = _interp_atm_iv(puts, price) if not puts.empty and "strike" in puts.columns else None
 
-                def interp_atm(df_side, spot):
-                    df_side = df_side.copy()
-                    df_side["_dist"] = (df_side["strike"] - spot).abs()
-                    nearest = df_side.nsmallest(2, "_dist")
-                    if len(nearest) == 0: return None
-                    if len(nearest) == 1: return float(nearest["impliedVolatility"].iloc[0])
-                    k1, k2 = nearest["strike"].values
-                    v1, v2 = nearest["impliedVolatility"].values
-                    if k1 == k2: return float(v1)
-                    d1 = abs(np.log(spot / k1))
-                    d2 = abs(np.log(spot / k2))
-                    if d1+d2 == 0: return float(v1)
-                    w1 = d2 / (d1 + d2)
-                    w2 = d1 / (d1 + d2)
-                    return float(v1 * w1 + v2 * w2)
-
-                call_iv = interp_atm(calls, price) if not calls.empty and "strike" in calls.columns else None
-                put_iv = interp_atm(puts, price) if not puts.empty and "strike" in puts.columns else None
-                
-                atm_call = calls.nsmallest(1, "_dist") if not calls.empty else pd.DataFrame()
+                # Add _dist to original calls before nsmallest (interp_atm only modifies a copy)
+                if not calls.empty and "strike" in calls.columns:
+                    calls["_dist"] = (calls["strike"] - price).abs()
+                atm_call = calls.nsmallest(1, "_dist") if not calls.empty and "_dist" in calls.columns else pd.DataFrame()
 
 
                 # Average call and put ATM IV
