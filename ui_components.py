@@ -913,99 +913,134 @@ def gemini_response(user_msg, history, context=""):
 # ════════════════════════════════════════════════════════════════════
 
 def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
-    """Renders the Gamma Exposure (GEX) Plotly bar chart.
-
-    FIX: Removed text labels above bars (too small/overlapping).
-         Added large, readable hover tooltip via hoverlabel.
-         Staggered annotations vertically to prevent overlap.
-
-    Args:
-        gex: dict {spy_key: $M}
-        gf_spy: gamma flip in SPY scale
-        mp_spy: max pain in SPY scale
-        spot_spx: SPX spot price for range filtering + spot line
-        display_pct: ±% window around spot to display (default 0.05 = ±5%)
+    """Renders the Gamma Exposure (GEX) Plotly SPX candlestick chart with GEX levels.
     """
+    import yfinance as yf
+    import pandas as pd
     if not gex or go is None: return None
 
-    all_strikes_spx = [k * 10 for k in sorted(gex.keys())]
-    all_gex_vals = [gex[k / 10] for k in all_strikes_spx]
+    # Identify Call and Put walls
+    # GEX is dict {spy_strike: gex_m} -> SPX strike = spy_strike * 10
+    call_gex = [(k*10, v) for k, v in gex.items() if v > 0]
+    put_gex = [(k*10, v) for k, v in gex.items() if v < 0]
+    
+    # Sort by absolute GEX
+    call_gex.sort(key=lambda x: x[1], reverse=True)
+    put_gex.sort(key=lambda x: abs(x[1]), reverse=True)
+    
+    # Take top 7 for Call Walls, top 5 for Put Walls
+    top_calls = call_gex[:7]
+    top_puts = put_gex[:5]
+    
+    # Fetch ^SPX intraday data
+    df = yf.download("^SPX", period="5d", interval="15m", progress=False)
+    
+    fig = go.Figure()
+    
+    if df is not None and not df.empty:
+        df = df.dropna()
+        if len(df) < 5: return None
+        # Check MultiIndex
+        if isinstance(df.columns, pd.MultiIndex):
+            close_col = df.columns[df.columns.get_level_values(0) == "Close"][0]
+            open_col = df.columns[df.columns.get_level_values(0) == "Open"][0]
+            high_col = df.columns[df.columns.get_level_values(0) == "High"][0]
+            low_col = df.columns[df.columns.get_level_values(0) == "Low"][0]
+        else:
+            close_col = "Close"
+            open_col = "Open"
+            high_col = "High"
+            low_col = "Low"
+            
+        fig.add_trace(go.Candlestick(
+            x=df.index,
+            open=df[open_col].values.flatten() if hasattr(df[open_col], "values") else df[open_col],
+            high=df[high_col].values.flatten() if hasattr(df[high_col], "values") else df[high_col],
+            low=df[low_col].values.flatten() if hasattr(df[low_col], "values") else df[low_col],
+            close=df[close_col].values.flatten() if hasattr(df[close_col], "values") else df[close_col],
+            name="SPX",
+            increasing_line_color="#00CC44",
+            decreasing_line_color="#FF4444"
+        ))
 
-    # Filter to ±display_pct around spot for a tight, readable chart
-    if spot_spx and spot_spx > 0:
-        lo = spot_spx * (1 - display_pct)
-        hi = spot_spx * (1 + display_pct)
-        pairs = [(s, v) for s, v in zip(all_strikes_spx, all_gex_vals) if lo <= s <= hi]
-    else:
-        pairs = list(zip(all_strikes_spx, all_gex_vals))
+    # Add Call Wall lines
+    for i, (strike, gex_val) in enumerate(top_calls):
+        line_width = 3 if i == 0 else 1.5
+        line_dash = "solid" if i <= 2 else "dash"
+        color = "#00CC44"
+        label = f"C{i+1}" if i > 0 else "CALL WALL (C1)"
+        fig.add_hline(
+            y=strike, 
+            line=dict(color=color, dash=line_dash, width=line_width),
+            annotation_text=f"{label}: {strike:.0f}",
+            annotation_position="top right",
+            annotation_font=dict(color=color, size=11, family="IBM Plex Mono")
+        )
 
-    if not pairs:
-        pairs = list(zip(all_strikes_spx, all_gex_vals))
+    # Add Put Wall lines
+    for i, (strike, gex_val) in enumerate(top_puts):
+        line_width = 3 if i == 0 else 1.5
+        line_dash = "solid" if i == 0 else "dash"
+        color = "#FF4444"
+        label = f"P{i+1}" if i > 0 else "PUT WALL (P1)"
+        fig.add_hline(
+            y=strike, 
+            line=dict(color=color, dash=line_dash, width=line_width),
+            annotation_text=f"{label}: {strike:.0f}",
+            annotation_position="bottom right",
+            annotation_font=dict(color=color, size=11, family="IBM Plex Mono")
+        )
 
-    strikes_spx, gex_vals = zip(*pairs) if pairs else ([], [])
-    colors = ["#00CC44" if v >= 0 else "#FF4444" for v in gex_vals]
+    # Add Gamma Flip and Max Pain
+    if gf_spy:
+        gf_spx = gf_spy * 10
+        fig.add_hline(
+            y=gf_spx, 
+            line=dict(color="#FFCC00", dash="dot", width=1.5),
+            annotation_text=f"γ Flip: {gf_spx:.0f}",
+            annotation_position="top left",
+            annotation_font=dict(color="#FFCC00", size=11, family="IBM Plex Mono")
+        )
+                      
+    if mp_spy:
+        mp_spx = mp_spy * 10
+        fig.add_hline(
+            y=mp_spx, 
+            line=dict(color="#AA44FF", dash="dot", width=1.5),
+            annotation_text=f"Max Pain: {mp_spx:.0f}",
+            annotation_position="bottom left",
+            annotation_font=dict(color="#AA44FF", size=11, family="IBM Plex Mono")
+        )
 
-    fig = go.Figure(go.Bar(
-        x=list(strikes_spx), y=list(gex_vals),
-        marker=dict(color=colors, line=dict(width=0)),
-        # ── FIX: No text labels on bars — they were too small and overlapping
-        hovertemplate=(
-            "<b style='font-size:15px'>Strike: %{x:,.0f}</b><br>"
-            "<b style='font-size:14px'>GEX: $%{y:.2f}M</b>"
-            "<extra></extra>"
-        ),
-    ))
-
-    fig.update_layout(
-        **CHART_LAYOUT,
-        height=360,
-        xaxis_title="SPX Strike",
-        yaxis_title="GEX ($M)",
-        title=dict(
-            text="Dealer Gamma Exposure by Strike",
-            font=dict(color="#FF6600", size=12)
-        ),
-        bargap=0.15,
-        # ── FIX: Larger, more readable hover tooltip
-        hoverlabel=dict(
-            bgcolor="#0D0D0D",
-            bordercolor="#FF6600",
-            font=dict(size=14, color="#FF8C00", family="IBM Plex Mono"),
-            namelength=0,
-        ),
-    )
-
-    # ── FIX: Stagger annotation y-positions to prevent overlap
-    # Spot line — top right, yref paper so it's always visible
+    # Spot line
     if spot_spx:
-        fig.add_vline(
-            x=spot_spx,
+        fig.add_hline(
+            y=spot_spx,
             line=dict(color="#FFFFFF", dash="solid", width=1.5),
             annotation_text=f"Spot: {spot_spx:,.0f}",
             annotation_font=dict(color="#FFFFFF", size=11, family="IBM Plex Mono"),
-            annotation_position="top right",
-            annotation_yshift=0,
+            annotation_position="top left"
         )
-    # Gamma flip — top left, shifted down to avoid spot label
-    if gf_spy:
-        fig.add_vline(
-            x=gf_spy * 10,
-            line=dict(color="#FFCC00", dash="dash", width=1.2),
-            annotation_text=f"γ Flip: {gf_spy * 10:,.0f}",
-            annotation_font=dict(color="#FFCC00", size=11, family="IBM Plex Mono"),
-            annotation_position="top left",
-            annotation_yshift=-22,   # shift down so it doesn't collide with spot
-        )
-    # Max pain — bottom right, well separated from top labels
-    if mp_spy:
-        fig.add_vline(
-            x=mp_spy * 10,
-            line=dict(color="#AA44FF", dash="dot", width=1.2),
-            annotation_text=f"Max Pain: {mp_spy * 10:,.0f}",
-            annotation_font=dict(color="#AA44FF", size=11, family="IBM Plex Mono"),
-            annotation_position="bottom right",
-            annotation_yshift=8,
-        )
+
+    fig.update_layout(
+        **CHART_LAYOUT,
+        xaxis_rangeslider_visible=False,
+        height=500,
+        margin=dict(l=10, r=60, t=30, b=10),
+        title=dict(
+            text="SPX 0DTE - Gamma Levels & Price Action", 
+            font=dict(color="#FF6600", size=14)
+        ),
+        xaxis=dict(showgrid=False, color="#555"),
+        yaxis=dict(showgrid=True, gridcolor="#111", color="#555", side="right", tickformat=".0f")
+    )
+    
+    # Set Y-axis range to focus on spot price and walls
+    if spot_spx and spot_spx > 0:
+        lo = spot_spx * (1 - display_pct)
+        hi = spot_spx * (1 + display_pct)
+        fig.update_yaxes(range=[lo, hi])
+
     return fig
 
 
@@ -1381,6 +1416,9 @@ def render_geo_tab():
             _geo_events = list(_geo_events) + ai_events
 
     # Build JSON injection script
+    # SECURITY: Escape '</script>' and '<!--' sequences that could break
+    # out of the <script> block and create an XSS vector if any API response
+    # (e.g., vessel names, conflict event descriptions) contains them.
     _sentinel_data = json.dumps({
         "events":  _geo_events,
         "planes":  _geo_planes,
@@ -1388,8 +1426,14 @@ def render_geo_tab():
         "vessels": _geo_vessels,
         "infra":   _geo_infra,
     }, default=str)
+    # Replace dangerous sequences: </script> → <\/script>,  <!-- → <\!--
+    _sentinel_data_safe = (
+        _sentinel_data
+        .replace("</", r"<\/")      # prevents </script> injection
+        .replace("<!--", r"<\!--")  # prevents HTML comment injection
+    )
     _inject_script = (
-        f'<script>window.__SENTINEL_DATA__ = {_sentinel_data};</script>\n'
+        f'<script>window.__SENTINEL_DATA__ = {_sentinel_data_safe};</script>\n'
     )
 
     # Read globe.html from disk and prepend injected data

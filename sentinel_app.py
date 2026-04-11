@@ -569,6 +569,161 @@ with st.sidebar:
     st.session_state.macro_theses = st.text_area("Macro theses", value=st.session_state.macro_theses, placeholder="Watching Fed pivot...", height=55)
     st.session_state.geo_watch    = st.text_area("Geo watch",    value=st.session_state.geo_watch,    placeholder="Red Sea, Taiwan...",   height=45)
 
+    # ────────────────────────────────────────────────────────────────
+    # 🚨 THRESHOLD ALERTS ENGINE
+    # ────────────────────────────────────────────────────────────────
+    st.markdown('<hr style="border-top:1px solid #222;margin:8px 0">', unsafe_allow_html=True)
+
+    with st.expander("🚨 THRESHOLD ALERTS", expanded=False):
+        st.markdown(
+            '<div style="color:#888;font-size:9px;font-family:monospace;margin-bottom:6px">'
+            'Set thresholds for VIX, PCR, and individual tickers. Alerts fire as toasts '
+            'and optionally POST to your webhook. 5-min cooldown per alert type.</div>',
+            unsafe_allow_html=True)
+
+        # Initialize alert state
+        if "alert_cooldowns" not in st.session_state:
+            st.session_state.alert_cooldowns = {}
+        if "alert_vix_threshold" not in st.session_state:
+            st.session_state.alert_vix_threshold = 25.0
+        if "alert_pcr_threshold" not in st.session_state:
+            st.session_state.alert_pcr_threshold = 1.2
+        if "alert_tickers" not in st.session_state:
+            st.session_state.alert_tickers = ""
+        if "alert_ticker_prices" not in st.session_state:
+            st.session_state.alert_ticker_prices = ""
+        if "alert_webhook_url" not in st.session_state:
+            st.session_state.alert_webhook_url = ""
+        if "alerts_enabled" not in st.session_state:
+            st.session_state.alerts_enabled = False
+
+        st.session_state.alerts_enabled = st.toggle("Enable Alerts", value=st.session_state.alerts_enabled, key="alert_toggle_ui")
+
+        _ac1, _ac2 = st.columns(2)
+        with _ac1:
+            st.session_state.alert_vix_threshold = st.number_input(
+                "VIX Above", value=st.session_state.alert_vix_threshold,
+                min_value=5.0, max_value=100.0, step=1.0, format="%.1f",
+                key="alert_vix_input",
+                help="Alert fires when VIX exceeds this level")
+        with _ac2:
+            st.session_state.alert_pcr_threshold = st.number_input(
+                "PCR Above", value=st.session_state.alert_pcr_threshold,
+                min_value=0.1, max_value=5.0, step=0.1, format="%.2f",
+                key="alert_pcr_input",
+                help="Alert fires when Put/Call Ratio exceeds this level")
+
+        st.session_state.alert_tickers = st.text_input(
+            "Price Alert Tickers", value=st.session_state.alert_tickers,
+            placeholder="AAPL, TSLA, NVDA", key="alert_tickers_input",
+            help="Comma-separated tickers to monitor for price thresholds")
+
+        st.session_state.alert_ticker_prices = st.text_input(
+            "Price Thresholds (above)", value=st.session_state.alert_ticker_prices,
+            placeholder="200.00, 350.00, 150.00", key="alert_prices_input",
+            help="Corresponding price thresholds (above). Match order with tickers above.")
+
+        st.session_state.alert_webhook_url = st.text_input(
+            "Webhook URL (optional)", value=st.session_state.alert_webhook_url,
+            type="password", placeholder="https://hooks.slack.com/...", key="alert_webhook_input",
+            help="Optional webhook URL for external notifications (Slack, Discord, etc.)")
+
+        # Alert status indicator
+        if st.session_state.alerts_enabled:
+            _active_count = 0
+            if st.session_state.alert_vix_threshold > 0: _active_count += 1
+            if st.session_state.alert_pcr_threshold > 0: _active_count += 1
+            _tkr_list = [t.strip().upper() for t in st.session_state.alert_tickers.split(",") if t.strip()]
+            _active_count += len(_tkr_list)
+            st.markdown(
+                f'<div style="font-family:monospace;font-size:9px;color:#00CC44;padding:4px 0">'
+                f'✅ MONITORING {_active_count} THRESHOLD(S) — refreshing every 30s</div>',
+                unsafe_allow_html=True)
+        else:
+            st.markdown(
+                '<div style="font-family:monospace;font-size:9px;color:#555;padding:4px 0">'
+                '⏸ Alerts paused</div>',
+                unsafe_allow_html=True)
+
+    # ── Alert Fragment (runs in background every 30s) ──
+    if st.session_state.get("alerts_enabled", False):
+        @st.fragment(run_every="30s")
+        def _run_alert_monitor():
+            import time as _alert_time
+            _now = _alert_time.time()
+            _cooldown_secs = 300  # 5-minute cooldown
+
+            def _can_fire(alert_key):
+                last = st.session_state.alert_cooldowns.get(alert_key, 0)
+                return (_alert_time.monotonic() - last) > _cooldown_secs
+
+            def _mark_fired(alert_key):
+                st.session_state.alert_cooldowns[alert_key] = _alert_time.monotonic()
+
+            def _send_webhook(msg):
+                url = st.session_state.get("alert_webhook_url", "")
+                if url:
+                    try:
+                        import requests
+                        requests.post(url, json={"text": msg, "source": "Sentinel Terminal"}, timeout=5)
+                    except Exception:
+                        pass
+
+            _alerts_fired = []
+
+            # VIX check
+            try:
+                _v = get_vix_full()
+                if _v and _v[0] and _v[0] > st.session_state.alert_vix_threshold:
+                    if _can_fire("vix"):
+                        _msg = f"🚨 VIX ALERT: {_v[0]:.2f} > {st.session_state.alert_vix_threshold:.1f}"
+                        st.toast(_msg, icon="🔴")
+                        _send_webhook(_msg)
+                        _mark_fired("vix")
+                        _alerts_fired.append(_msg)
+            except Exception:
+                pass
+
+            # PCR check
+            try:
+                _0c, _ = fetch_0dte_chain("SPY") if bool(_get_secret("ALPACA_API_KEY")) else (None, None)
+                _pcr_val = compute_pcr(_0c) if _0c else None
+                if _pcr_val is None:
+                    _, _cboe_o = fetch_cboe_gex("SPX")
+                    _pcr_val = compute_cboe_pcr(_cboe_o)
+                if _pcr_val and _pcr_val > st.session_state.alert_pcr_threshold:
+                    if _can_fire("pcr"):
+                        _msg = f"🚨 PCR ALERT: {_pcr_val:.2f} > {st.session_state.alert_pcr_threshold:.2f}"
+                        st.toast(_msg, icon="📊")
+                        _send_webhook(_msg)
+                        _mark_fired("pcr")
+                        _alerts_fired.append(_msg)
+            except Exception:
+                pass
+
+            # Ticker price checks
+            _tkrs = [t.strip().upper() for t in st.session_state.get("alert_tickers", "").split(",") if t.strip()]
+            _prices = st.session_state.get("alert_ticker_prices", "").split(",")
+            for i, t in enumerate(_tkrs):
+                try:
+                    _thresh = float(_prices[i].strip()) if i < len(_prices) and _prices[i].strip() else None
+                    if _thresh is None:
+                        continue
+                    _q = yahoo_quote(t)
+                    if _q and _q["price"] > _thresh:
+                        _ak = f"ticker_{t}"
+                        if _can_fire(_ak):
+                            _msg = f"🚨 {t} PRICE ALERT: ${_q['price']:.2f} > ${_thresh:.2f}"
+                            st.toast(_msg, icon="💰")
+                            _send_webhook(_msg)
+                            _mark_fired(_ak)
+                            _alerts_fired.append(_msg)
+                except Exception:
+                    continue
+
+        _run_alert_monitor()
+
+
 # ════════════════════════════════════════════════════════════════════
 # HEADER + TABS
 # ════════════════════════════════════════════════════════════════════
@@ -581,7 +736,7 @@ st.markdown(f"""
 <div style="font-size:10px;color:#000;opacity:0.75">{now_pst()} &nbsp;|&nbsp; LIVE</div>
 </div>""", unsafe_allow_html=True)
 
-tabs = st.tabs(["BRIEF","MARKETS","SPX 0DTE","MACRO","CRYPTO","POLYMARKET","GEO","EARNINGS","SENTINEL AI"])
+tabs = st.tabs(["BRIEF","MARKETS","OPTIONS","MACRO","CRYPTO","POLYMARKET","GEO","EARNINGS","SENTINEL AI"])
 
 # ════════════════════════════════════════════════════════════════════
 # TAB 0 — MORNING BRIEF
@@ -594,7 +749,13 @@ with tabs[0]:
         ref_col, mkt_col = st.columns([1, 1])
         with ref_col:
             if st.button("↺ REFRESH ALL DATA"):
-                st.cache_data.clear(); st.rerun()
+                try: multi_quotes.clear()
+                except: pass
+                try: get_vix_full.clear()
+                except: pass
+                try: get_futures.clear()
+                except: pass
+                st.rerun()
             st.markdown(f'<div style="color:#888;font-size:10px;margin-top:4px">Last updated: {now_pst()}</div>', unsafe_allow_html=True)
         with mkt_col:
             mkt_status, mkt_color, mkt_detail = is_market_open()
@@ -807,13 +968,13 @@ with tabs[1]:
     with fc:
         # Bind to master_ticker for cross-tab state persistence
         def _on_flash_change():
-            val = st.session_state.get("flash", "").upper().strip()
+            val = st.session_state.get(f"flash_{st.session_state.master_ticker}", "").upper().strip()
             if val:
                 st.session_state.master_ticker = val
-        _default_flash = st.session_state.master_ticker if st.session_state.master_ticker else ""
+        
         flash_ticker = st.text_input(
-            "⚡ TICKER LOOKUP", value=_default_flash,
-            placeholder="NVDA, AAPL, TSLA, SPY, GLD…", key="flash",
+            "⚡ TICKER LOOKUP",
+            placeholder="NVDA, AAPL, TSLA, SPY, GLD…", key=f"flash_{st.session_state.master_ticker}",
             on_change=_on_flash_change,
             help="Type a ticker symbol to see price, chart, options, insider trades, and short data. This ticker persists across tabs.")
 
@@ -858,86 +1019,6 @@ with tabs[1]:
             st.markdown('<div class="bb-ph" style="margin-top:8px">CHART — TRADINGVIEW (RSI + SMA)</div>', unsafe_allow_html=True)
             components.html(tv_chart(tv_sym, 480), height=485, scrolling=False)
 
-            st.markdown('<div class="bb-ph">📋 OPTIONS INTELLIGENCE — ADAPTIVE SCORING ENGINE</div>', unsafe_allow_html=True)
-            expiries = options_expiries(tkr)
-            selected_exp = None
-            if not expiries:
-                options_expiries.clear(tkr)
-            else:
-                def _fmt_exp(d):
-                    try: return datetime.strptime(str(d), "%Y-%m-%d").strftime("%B %-d, %Y")
-                    except: return str(d)
-                selected_exp = st.selectbox("EXPIRY DATE", expiries, index=0, key=f"exp_{tkr}", format_func=_fmt_exp)
-            with st.spinner("Loading options…"):
-                calls, puts, exp_date = options_chain(tkr, selected_exp)
-            if calls is not None:
-                exp_dt = None
-                try:
-                    exp_dt = datetime.strptime(str(exp_date), "%Y-%m-%d")
-                    exp_fmt = exp_dt.strftime("%B %-d, %Y")
-                except:
-                    exp_fmt = str(exp_date)
-
-                try:
-                    v_info = get_vix_full()
-                    current_vix = v_info[0] if v_info else 20.0
-                except:
-                    current_vix = 20.0
-
-                scored = score_options_chain(calls, puts, q["price"], vix=current_vix, expiry_date=selected_exp)
-
-                vix_str = f"{current_vix:.1f}" if current_vix else "N/A"
-                if current_vix and current_vix > 25:
-                    regime = f'<span style="color:#FF4444;font-weight:700">HIGH VOL (VIX {vix_str})</span> — Δ-weighted'
-                elif current_vix and current_vix < 15:
-                    regime = f'<span style="color:#00CC44;font-weight:700">LOW VOL (VIX {vix_str})</span> — Flow-weighted'
-                else:
-                    regime = f'<span style="color:#FF8C00;font-weight:700">NEUTRAL (VIX {vix_str})</span> — Balanced'
-
-                st.markdown(f'<div style="color:#888;font-size:11px;font-family:monospace;margin-bottom:6px">EXPIRY: {exp_fmt} | CURRENT: {fmt_p(q["price"])} | REGIME: {regime}</div>', unsafe_allow_html=True)
-
-                cc, pc = st.columns(2)
-                with cc:
-                    st.markdown('<div style="color:#00CC44;font-size:10px;font-weight:700;letter-spacing:2px">▲ TOP CALLS (by score)</div>', unsafe_allow_html=True)
-                    st.markdown(render_scored_options(scored["top_calls"], side="calls"), unsafe_allow_html=True)
-                with pc:
-                    st.markdown('<div style="color:#FF4444;font-size:10px;font-weight:700;letter-spacing:2px">▼ TOP PUTS (by score)</div>', unsafe_allow_html=True)
-                    st.markdown(render_scored_options(scored["top_puts"], side="puts"), unsafe_allow_html=True)
-
-                if scored.get("unusual"):
-                    st.markdown(render_unusual_trade(scored["unusual"], ticker=tkr, expiry=exp_fmt), unsafe_allow_html=True)
-                
-                with st.expander("🔧 TRUE BLACK-SCHOLES ENGINE (WHAT-IF)", expanded=False):
-                    st.markdown('<div style="color:#888;font-size:10px;margin-bottom:8px">Calculate Delta, Gamma, Theta locally bypassing Alpaca endpoint limits.</div>', unsafe_allow_html=True)
-                    wc1, wc2, wc3, wc4, wc5 = st.columns(5)
-                    with wc1: bs_s = st.number_input("Spot Price", value=float(q["price"]), format="%.2f", key=f"bs_s_{tkr}")
-                    with wc2: bs_k = st.number_input("Strike", value=float(q["price"]), format="%.2f", key=f"bs_k_{tkr}")
-                    with wc3:
-                        dt_exp = max((exp_dt.date() - datetime.today().date()).days, 1) if exp_dt else 14
-                        bs_t = st.number_input("Days to Expire", value=float(dt_exp), format="%.1f", key=f"bs_t_{tkr}")
-                    with wc4:
-                        bs_v = st.number_input("Implied Vol (%)", value=float(current_vix) if current_vix else 20.0, format="%.1f", key=f"bs_v_{tkr}")
-                    with wc5: bs_side = st.selectbox("Type", ["call", "put"], key=f"bs_side_{tkr}")
-                    
-                    bs_res = bs_greeks_engine(bs_s, bs_k, bs_t / 365.0, 0.045, bs_v / 100.0, bs_side)
-                    rc1, rc2, rc3, rc4, rc5 = st.columns(5)
-                    rc1.metric("Delta", f"{bs_res['delta']:.4f}", help="Rate of change of option price per $1 move in underlying. Calls: 0 to 1, Puts: -1 to 0.")
-                    rc2.metric("Gamma", f"{bs_res['gamma']:.6f}", help="Rate of change of Delta per $1 move. High gamma = delta shifts fast (near ATM, short-dated).")
-                    rc3.metric("Theta (Daily)", f"{bs_res['theta']:.4f}", help="Time decay — how much option value erodes per day. Accelerates near expiry.")
-                    rc4.metric("Vega (1%)", f"{bs_res.get('vega', 0):.4f}", help="Sensitivity to a 1% change in implied volatility. Higher for longer-dated options.")
-                    rc5.metric("Rho (1%)", f"{bs_res.get('rho', 0):.4f}", help="Sensitivity to a 1% change in interest rates. Matters more for LEAPS.")
-
-                with st.expander("📊 **FULL OPTIONS CHAIN**", expanded=False):
-                    fc, fp = st.columns(2)
-                    with fc:
-                        st.markdown('<div style="color:#00CC44;font-size:9px;font-weight:700;letter-spacing:2px">▲ ALL CALLS</div>', unsafe_allow_html=True)
-                        st.markdown(render_options_table(calls, "calls", q["price"]), unsafe_allow_html=True)
-                    with fp:
-                        st.markdown('<div style="color:#FF4444;font-size:9px;font-weight:700;letter-spacing:2px">▼ ALL PUTS</div>', unsafe_allow_html=True)
-                        st.markdown(render_options_table(puts, "puts", q["price"]), unsafe_allow_html=True)
-            else:
-                st.warning(f"Options data failed to load for {tkr}")
-                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Options unavailable for this ticker.</p>', unsafe_allow_html=True)
 
             st.markdown('<div class="bb-ph" style="margin-top:12px">🔍 INSIDER TRANSACTIONS</div>', unsafe_allow_html=True)
             if st.session_state.finnhub_key.get_secret_value():
@@ -1575,9 +1656,451 @@ with tabs[1]:
             st.markdown(render_news_card(title,url,src,d,"bb-news bb-news-macro"), unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════
-# TAB 2 — SPX 0DTE
+# TAB 2 — OPTIONS (Payoff Builder + Options Chain + 0DTE GEX)
 # ════════════════════════════════════════════════════════════════════
 with tabs[2]:
+    # ────────────────────────────────────────────────────────────────
+    # 📐 OPTIONS PAYOFF DIAGRAM & STRATEGY ENGINE
+    # ────────────────────────────────────────────────────────────────
+    with st.expander("📐 OPTIONS PAYOFF DIAGRAM & STRATEGY ENGINE", expanded=False):
+        # ── Strategy taxonomy ──
+        _STRAT_TAXONOMY = {
+            "Novice": {
+                "Long Call": [("call", 1, 1)],
+                "Long Put": [("put", 1, 1)],
+                "Covered Call": [("stock", 1, 1), ("call", -1, 1)],
+                "Cash-Secured Put": [("put", -1, 1)],
+                "Protective Put": [("stock", 1, 1), ("put", 1, 1)],
+            },
+            "Intermediate — Credit Spreads": {
+                "Bull Put Spread": [("put", -1, 1), ("put", 1, 2)],
+                "Bear Call Spread": [("call", -1, 1), ("call", 1, 2)],
+            },
+            "Intermediate — Neutral": {
+                "Iron Butterfly": [("put", 1, 1), ("put", -1, 2), ("call", -1, 2), ("call", 1, 3)],
+                "Iron Condor": [("put", 1, 1), ("put", -1, 2), ("call", -1, 3), ("call", 1, 4)],
+                "Long Put Butterfly": [("put", 1, 1), ("put", -2, 2), ("put", 1, 3)],
+                "Long Call Butterfly": [("call", 1, 1), ("call", -2, 2), ("call", 1, 3)],
+            },
+            "Intermediate — Calendar/Diagonal": {
+                "Calendar Call Spread": [("call", -1, 1), ("call", 1, 1)],
+                "Calendar Put Spread": [("put", -1, 1), ("put", 1, 1)],
+                "Diagonal Call Spread": [("call", -1, 1), ("call", 1, 2)],
+                "Diagonal Put Spread": [("put", -1, 1), ("put", 1, 2)],
+            },
+            "Intermediate — Debit Spreads": {
+                "Bull Call Spread": [("call", 1, 1), ("call", -1, 2)],
+                "Bear Put Spread": [("put", 1, 2), ("put", -1, 1)],
+            },
+            "Intermediate — Directional/Other": {
+                "Inverse Iron Butterfly": [("put", -1, 1), ("put", 1, 2), ("call", 1, 2), ("call", -1, 3)],
+                "Inverse Iron Condor": [("put", -1, 1), ("put", 1, 2), ("call", 1, 3), ("call", -1, 4)],
+                "Short Put Butterfly": [("put", -1, 1), ("put", 2, 2), ("put", -1, 3)],
+                "Short Call Butterfly": [("call", -1, 1), ("call", 2, 2), ("call", -1, 3)],
+                "Straddle": [("call", 1, 1), ("put", 1, 1)],
+                "Strangle": [("call", 1, 2), ("put", 1, 1)],
+                "Collar": [("stock", 1, 1), ("put", 1, 1), ("call", -1, 2)],
+            },
+            "Advanced — Naked Income": {
+                "Short Put": [("put", -1, 1)],
+                "Short Call": [("call", -1, 1)],
+                "Covered Short Straddle": [("stock", 1, 1), ("call", -1, 1), ("put", -1, 1)],
+                "Covered Short Strangle": [("stock", 1, 1), ("call", -1, 2), ("put", -1, 1)],
+            },
+            "Advanced — Neutral/Directional": {
+                "Short Straddle": [("call", -1, 1), ("put", -1, 1)],
+                "Short Strangle": [("call", -1, 2), ("put", -1, 1)],
+                "Short Call Condor": [("call", -1, 1), ("call", 1, 2), ("call", 1, 3), ("call", -1, 4)],
+                "Short Put Condor": [("put", -1, 1), ("put", 1, 2), ("put", 1, 3), ("put", -1, 4)],
+                "Long Call Condor": [("call", 1, 1), ("call", -1, 2), ("call", -1, 3), ("call", 1, 4)],
+                "Long Put Condor": [("put", 1, 1), ("put", -1, 2), ("put", -1, 3), ("put", 1, 4)],
+            },
+            "Advanced — Ladders/Ratios": {
+                "Bull Call Ladder": [("call", 1, 1), ("call", -1, 2), ("call", -1, 3)],
+                "Bear Call Ladder": [("call", -1, 1), ("call", 1, 2), ("call", 1, 3)],
+                "Bull Put Ladder": [("put", -1, 1), ("put", 1, 2), ("put", 1, 3)],
+                "Bear Put Ladder": [("put", 1, 1), ("put", -1, 2), ("put", -1, 3)],
+                "Call Ratio Backspread": [("call", -1, 1), ("call", 2, 2)],
+                "Put Ratio Backspread": [("put", -1, 2), ("put", 2, 1)],
+                "Broken Wing Put": [("put", 1, 1), ("put", -2, 2), ("put", 1, 3)],
+                "Broken Wing Call": [("call", 1, 1), ("call", -2, 2), ("call", 1, 3)],
+                "Jade Lizard": [("put", -1, 1), ("call", -1, 2), ("call", 1, 3)],
+                "Reverse Jade Lizard": [("call", -1, 1), ("put", -1, 2), ("put", 1, 1)],
+            },
+            "Expert — Ratio/Synthetic": {
+                "Call Ratio Spread": [("call", 1, 1), ("call", -2, 2)],
+                "Put Ratio Spread": [("put", 1, 2), ("put", -2, 1)],
+                "Long Synthetic Future": [("call", 1, 1), ("put", -1, 1)],
+                "Short Synthetic Future": [("call", -1, 1), ("put", 1, 1)],
+                "Synthetic Put": [("stock", -1, 1), ("call", 1, 1)],
+            },
+            "Expert — Arbitrage/Other": {
+                "Long Combo": [("call", 1, 2), ("put", -1, 1)],
+                "Short Combo": [("call", -1, 2), ("put", 1, 1)],
+                "Strip": [("call", 1, 1), ("put", 2, 1)],
+                "Strap": [("call", 2, 1), ("put", 1, 1)],
+                "Guts": [("call", 1, 1), ("put", 1, 2)],
+                "Short Guts": [("call", -1, 1), ("put", -1, 2)],
+                "Double Diagonal": [("call", -1, 2), ("call", 1, 3), ("put", -1, 2), ("put", 1, 1)],
+            },
+        }
+
+        _cat_names = list(_STRAT_TAXONOMY.keys())
+        _sel_cat = st.selectbox("Strategy Category", _cat_names, index=0, key="payoff_cat")
+        _strat_names = list(_STRAT_TAXONOMY[_sel_cat].keys())
+        _sel_strat = st.selectbox("Specific Strategy", _strat_names, index=0, key="payoff_strat")
+        _legs = _STRAT_TAXONOMY[_sel_cat][_sel_strat]
+
+        # Determine how many distinct strikes this strategy needs
+        _strike_indices = sorted(set(leg[2] for leg in _legs if leg[0] != "stock"))
+        _n_strikes = len(_strike_indices) if _strike_indices else 1
+
+        # Default spot from master ticker
+        _payoff_default_spot = 100.0
+        _payoff_default_iv = 20.0
+        try:
+            _payoff_tkr = st.session_state.master_ticker
+            if _payoff_tkr:
+                _pq = yahoo_quote(_payoff_tkr)
+                if _pq:
+                    _payoff_default_spot = float(_pq["price"])
+            _vix_info = get_vix_full()
+            if _vix_info and _vix_info[0]:
+                _payoff_default_iv = float(_vix_info[0])
+        except Exception:
+            pass
+
+        # Input fields
+        _inp_cols = st.columns(4)
+        with _inp_cols[0]:
+            _po_spot = st.number_input("Spot Price ($)", value=_payoff_default_spot, min_value=0.01, format="%.2f", key="po_spot")
+        with _inp_cols[1]:
+            _po_qty = st.number_input("Quantity (contracts)", value=1, min_value=1, max_value=1000, step=1, key="po_qty")
+        with _inp_cols[2]:
+            _po_dte = st.number_input("Days to Expiry", value=30, min_value=1, max_value=730, step=1, key="po_dte")
+        with _inp_cols[3]:
+            _po_iv = st.number_input("Implied Volatility (%)", value=_payoff_default_iv, min_value=1.0, max_value=300.0, format="%.1f", key="po_iv")
+
+        # Strike inputs — dynamic based on strategy
+        _strike_labels = ["Strike 1 ($)", "Strike 2 ($)", "Strike 3 ($)", "Strike 4 ($)"]
+        _strike_defaults = [_po_spot, _po_spot * 1.02, _po_spot * 1.05, _po_spot * 1.08]
+        _strike_vals = {}
+        if _n_strikes > 0:
+            _sk_cols = st.columns(min(_n_strikes, 4))
+            for i, si in enumerate(_strike_indices):
+                with _sk_cols[i % len(_sk_cols)]:
+                    _strike_vals[si] = st.number_input(
+                        _strike_labels[i] if i < 4 else f"Strike {i+1} ($)",
+                        value=_strike_defaults[min(i, 3)],
+                        min_value=0.01, format="%.2f", key=f"po_k{si}")
+
+        # Premium input
+        _po_premium = st.number_input("Net Premium (+ credit / − debit per share)", value=0.0, format="%.2f", key="po_prem",
+                                       help="Net premium received (positive) or paid (negative) per share. For spreads: net credit/debit of all legs.")
+
+        # ── Computation ──
+        _S_range = np.linspace(_po_spot * 0.80, _po_spot * 1.20, 500)
+        _total_pnl = np.zeros_like(_S_range)
+
+        _net_delta = 0.0
+        _net_gamma = 0.0
+        _net_theta = 0.0
+        _net_vega = 0.0
+        _T = max(_po_dte / 365.0, 1/365.0)
+        _sigma = _po_iv / 100.0
+
+        for leg in _legs:
+            _ltype, _lqty, _lstrike_idx = leg
+            _abs_qty = abs(_lqty) * _po_qty
+            _sign = 1 if _lqty > 0 else -1
+
+            if _ltype == "stock":
+                # Stock leg: P&L = sign * qty * 100 * (S - spot)
+                _total_pnl += _sign * _abs_qty * 100 * (_S_range - _po_spot)
+                _net_delta += _sign * _abs_qty * 100
+            else:
+                _K = _strike_vals.get(_lstrike_idx, _po_spot)
+                if _ltype == "call":
+                    _intrinsic = np.maximum(_S_range - _K, 0)
+                else:  # put
+                    _intrinsic = np.maximum(_K - _S_range, 0)
+                _total_pnl += _sign * _abs_qty * 100 * _intrinsic
+
+                # Greeks
+                _g = bs_greeks_engine(_po_spot, _K, _T, 0.045, _sigma, _ltype)
+                _net_delta += _sign * _abs_qty * 100 * _g["delta"]
+                _net_gamma += _sign * _abs_qty * 100 * _g["gamma"]
+                _net_theta += _sign * _abs_qty * 100 * _g["theta"]
+                _net_vega += _sign * _abs_qty * 100 * _g["vega"]
+
+        # Add net premium
+        _total_prem_adj = _po_premium * _po_qty * 100
+        _total_pnl += _total_prem_adj
+
+        # Breakevens
+        _sign_changes = np.where(np.diff(np.sign(_total_pnl)))[0]
+        _breakevens = []
+        for idx in _sign_changes:
+            _be = np.interp(0, [_total_pnl[idx], _total_pnl[idx+1]], [_S_range[idx], _S_range[idx+1]])
+            _breakevens.append(round(float(_be), 2))
+
+        _max_profit = float(np.max(_total_pnl))
+        _max_loss = float(np.min(_total_pnl))
+
+        # POP approximation
+        _pop = None
+        if _breakevens and _sigma > 0 and _po_dte > 0:
+            try:
+                # If strategy profits above breakeven, POP = P(S > BE)
+                # If strategy profits below breakeven, POP = P(S < BE)
+                _above_profit = _total_pnl[-1] > 0
+                if len(_breakevens) == 1:
+                    d = (np.log(_po_spot / _breakevens[0]) + 0.5 * _sigma**2 * _T) / (_sigma * np.sqrt(_T))
+                    if _above_profit:
+                        _pop = float(_norm_dist.cdf(d)) * 100
+                    else:
+                        _pop = float(_norm_dist.cdf(-d)) * 100
+                elif len(_breakevens) == 2:
+                    d1 = (np.log(_po_spot / _breakevens[0]) + 0.5 * _sigma**2 * _T) / (_sigma * np.sqrt(_T))
+                    d2 = (np.log(_po_spot / _breakevens[1]) + 0.5 * _sigma**2 * _T) / (_sigma * np.sqrt(_T))
+                    # Profit is between breakevens if mid-range P&L > 0
+                    _mid_idx = len(_S_range) // 2
+                    if _total_pnl[_mid_idx] > 0:
+                        _pop = float(_norm_dist.cdf(d1) - _norm_dist.cdf(d2)) * 100
+                    else:
+                        _pop = float(1 - (_norm_dist.cdf(d1) - _norm_dist.cdf(d2))) * 100
+                    _pop = abs(_pop)
+            except Exception:
+                _pop = None
+
+        # ── Visualization ──
+        _fig_pay = dark_fig(400)
+
+        # Green/Red shaded regions
+        _profit_mask = _total_pnl >= 0
+        _loss_mask = _total_pnl < 0
+
+        _fig_pay.add_trace(go.Scatter(
+            x=_S_range, y=np.where(_profit_mask, _total_pnl, 0),
+            fill='tozeroy', fillcolor='rgba(0,204,68,0.1)',
+            line=dict(width=0), showlegend=False, hoverinfo='skip'))
+        _fig_pay.add_trace(go.Scatter(
+            x=_S_range, y=np.where(_loss_mask, _total_pnl, 0),
+            fill='tozeroy', fillcolor='rgba(255,68,68,0.1)',
+            line=dict(width=0), showlegend=False, hoverinfo='skip'))
+
+        # P&L curve
+        _fig_pay.add_trace(go.Scatter(
+            x=_S_range, y=_total_pnl,
+            mode='lines', name='P&L',
+            line=dict(color='#FF6600', width=3),
+            hovertemplate='Price: $%{x:.2f}<br>P&L: $%{y:,.2f}<extra></extra>'))
+
+        # Zero line
+        _fig_pay.add_hline(y=0, line_dash='dash', line_color='#444', line_width=1)
+
+        # Spot price vertical
+        _fig_pay.add_vline(x=_po_spot, line_dash='dot', line_color='#888', line_width=1,
+                           annotation_text=f"Spot ${_po_spot:.2f}", annotation_position="top right",
+                           annotation_font=dict(size=9, color="#888"))
+
+        # Breakeven lines
+        for _be in _breakevens:
+            _fig_pay.add_vline(x=_be, line_dash='dot', line_color='#00AAFF', line_width=1.5)
+            _fig_pay.add_annotation(x=_be, y=0, text=f"BE ${_be:.2f}",
+                                    showarrow=True, arrowhead=2, arrowcolor='#00AAFF',
+                                    font=dict(size=9, color='#00AAFF', family='IBM Plex Mono'),
+                                    ay=-30)
+
+        # Max profit / loss annotations
+        _mp_idx = int(np.argmax(_total_pnl))
+        _ml_idx = int(np.argmin(_total_pnl))
+        if _max_profit > 0:
+            _fig_pay.add_annotation(x=float(_S_range[_mp_idx]), y=_max_profit,
+                                    text=f"MAX PROFIT ${_max_profit:,.0f}",
+                                    showarrow=True, arrowhead=2, arrowcolor='#00CC44',
+                                    font=dict(size=9, color='#00CC44', family='IBM Plex Mono'),
+                                    ay=-25)
+        if _max_loss < 0:
+            _fig_pay.add_annotation(x=float(_S_range[_ml_idx]), y=_max_loss,
+                                    text=f"MAX LOSS ${_max_loss:,.0f}",
+                                    showarrow=True, arrowhead=2, arrowcolor='#FF4444',
+                                    font=dict(size=9, color='#FF4444', family='IBM Plex Mono'),
+                                    ay=25)
+
+        _fig_pay.update_layout(
+            showlegend=False,
+            title=dict(text=f"{_sel_strat.upper()} — PAYOFF AT EXPIRATION", font=dict(size=11, color="#FF6600"), x=0),
+            xaxis=dict(title="Underlying Price ($)", color="#555", gridcolor="#111", tickprefix="$", tickfont=dict(size=9)),
+            yaxis=dict(title="Profit / Loss ($)", color="#555", gridcolor="#111", tickprefix="$", tickfont=dict(size=9)),
+            margin=dict(l=60, r=20, t=36, b=40),
+        )
+        st.plotly_chart(_fig_pay, use_container_width=True)
+
+        # ── Output Grid ──
+        _out_cols = st.columns(4)
+        with _out_cols[0]:
+            st.markdown(
+                f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:3px solid #FF6600;'
+                f'padding:10px;font-family:monospace;text-align:center">'
+                f'<div style="color:#555;font-size:8px;letter-spacing:1px">NET DELTA</div>'
+                f'<div style="color:#BB88FF;font-size:16px;font-weight:700">{_net_delta:+.2f}</div>'
+                f'<div style="color:#555;font-size:8px;margin-top:4px">GAMMA: {_net_gamma:+.4f}</div></div>',
+                unsafe_allow_html=True)
+        with _out_cols[1]:
+            st.markdown(
+                f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:3px solid #FF6600;'
+                f'padding:10px;font-family:monospace;text-align:center">'
+                f'<div style="color:#555;font-size:8px;letter-spacing:1px">NET THETA</div>'
+                f'<div style="color:#FF8C00;font-size:16px;font-weight:700">{_net_theta:+.4f}</div>'
+                f'<div style="color:#555;font-size:8px;margin-top:4px">VEGA: {_net_vega:+.4f}</div></div>',
+                unsafe_allow_html=True)
+        with _out_cols[2]:
+            _mp_c = "#00CC44" if _max_profit > 0 else "#888"
+            _ml_c = "#FF4444" if _max_loss < 0 else "#888"
+            _mp_str = f"${_max_profit:,.0f}" if _max_profit < 1e7 else "UNLIMITED"
+            _ml_str = f"${_max_loss:,.0f}" if _max_loss > -1e7 else "UNLIMITED"
+            st.markdown(
+                f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:3px solid #00CC44;'
+                f'padding:10px;font-family:monospace;text-align:center">'
+                f'<div style="color:#555;font-size:8px;letter-spacing:1px">MAX PROFIT</div>'
+                f'<div style="color:{_mp_c};font-size:16px;font-weight:700">{_mp_str}</div>'
+                f'<div style="color:#555;font-size:8px;margin-top:4px">'
+                f'MAX LOSS: <span style="color:{_ml_c};font-weight:700">{_ml_str}</span></div></div>',
+                unsafe_allow_html=True)
+        with _out_cols[3]:
+            _be_str = " / ".join(f"${b:,.2f}" for b in _breakevens) if _breakevens else "—"
+            _pop_str = f"{_pop:.0f}%" if _pop is not None else "—"
+            _pop_c = "#00CC44" if _pop and _pop > 50 else "#FF4444" if _pop and _pop < 40 else "#FF8C00"
+            st.markdown(
+                f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:3px solid #00AAFF;'
+                f'padding:10px;font-family:monospace;text-align:center">'
+                f'<div style="color:#555;font-size:8px;letter-spacing:1px">BREAKEVEN(S)</div>'
+                f'<div style="color:#00AAFF;font-size:14px;font-weight:700">{_be_str}</div>'
+                f'<div style="color:#555;font-size:8px;margin-top:4px">'
+                f'POP: <span style="color:{_pop_c};font-weight:700">{_pop_str}</span></div></div>',
+                unsafe_allow_html=True)
+
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+    # ────────────────────────────────────────────────────────────────
+    # OPTIONS CHAIN — MIGRATED FROM MARKETS TAB
+    # ────────────────────────────────────────────────────────────────
+    st.markdown('<div class="bb-ph">📋 OPTIONS INTELLIGENCE — ADAPTIVE SCORING ENGINE</div>', unsafe_allow_html=True)
+
+    _opt_fc, _ = st.columns([2,3])
+    with _opt_fc:
+        def _on_opt_flash_change():
+            val = st.session_state.get("opt_flash", "").upper().strip()
+            if val:
+                st.session_state.master_ticker = val
+        _opt_default = st.session_state.master_ticker if st.session_state.master_ticker else ""
+        _opt_ticker = st.text_input(
+            "⚡ TICKER LOOKUP", value=_opt_default,
+            placeholder="SPY, NVDA, AAPL, TSLA…", key="opt_flash",
+            on_change=_on_opt_flash_change,
+            help="Type a ticker to view options chain, scoring, and Greeks. Syncs with MARKETS tab.")
+
+    if _opt_ticker:
+        _ot = _opt_ticker.upper().strip()
+        _oq = yahoo_quote(_ot)
+        if _oq:
+            st.markdown(
+                f'<div style="display:flex;align-items:baseline;gap:14px;margin-bottom:10px">'
+                f'<span style="color:#FF6600;font-size:16px;font-weight:700;font-family:monospace">{_ot}</span>'
+                f'<span style="color:#FFF;font-size:24px;font-weight:700;font-family:monospace">{fmt_p(_oq["price"])}</span>'
+                f'<span style="color:{pct_color(_oq["pct"])};font-size:14px;font-weight:600;font-family:monospace">'
+                f'{"+" if _oq["pct"]>=0 else ""}{_oq["pct"]:.2f}%</span></div>', unsafe_allow_html=True)
+
+            _opt_expiries = options_expiries(_ot)
+            _opt_sel_exp = None
+            if not _opt_expiries:
+                options_expiries.clear(_ot)
+            else:
+                def _of_fmt(d):
+                    try: return datetime.strptime(str(d), "%Y-%m-%d").strftime("%B %-d, %Y")
+                    except: return str(d)
+                _opt_sel_exp = st.selectbox("EXPIRY DATE", _opt_expiries, index=0, key=f"opt_exp_{_ot}", format_func=_of_fmt)
+
+            with st.spinner("Loading options…"):
+                _oc, _op, _oe = options_chain(_ot, _opt_sel_exp)
+
+            if _oc is not None:
+                _oexp_dt = None
+                try:
+                    _oexp_dt = datetime.strptime(str(_oe), "%Y-%m-%d")
+                    _oexp_fmt = _oexp_dt.strftime("%B %-d, %Y")
+                except:
+                    _oexp_fmt = str(_oe)
+
+                try:
+                    _ov_info = get_vix_full()
+                    _o_vix = _ov_info[0] if _ov_info else 20.0
+                except:
+                    _o_vix = 20.0
+
+                _oscored = score_options_chain(_oc, _op, _oq["price"], vix=_o_vix, expiry_date=_opt_sel_exp)
+
+                _ovix_str = f"{_o_vix:.1f}" if _o_vix else "N/A"
+                if _o_vix and _o_vix > 25:
+                    _oregime = f'<span style="color:#FF4444;font-weight:700">HIGH VOL (VIX {_ovix_str})</span> — Δ-weighted'
+                elif _o_vix and _o_vix < 15:
+                    _oregime = f'<span style="color:#00CC44;font-weight:700">LOW VOL (VIX {_ovix_str})</span> — Flow-weighted'
+                else:
+                    _oregime = f'<span style="color:#FF8C00;font-weight:700">NEUTRAL (VIX {_ovix_str})</span> — Balanced'
+
+                st.markdown(f'<div style="color:#888;font-size:11px;font-family:monospace;margin-bottom:6px">EXPIRY: {_oexp_fmt} | CURRENT: {fmt_p(_oq["price"])} | REGIME: {_oregime}</div>', unsafe_allow_html=True)
+
+                _occ, _opc = st.columns(2)
+                with _occ:
+                    st.markdown('<div style="color:#00CC44;font-size:10px;font-weight:700;letter-spacing:2px">▲ TOP CALLS (by score)</div>', unsafe_allow_html=True)
+                    st.markdown(render_scored_options(_oscored["top_calls"], side="calls"), unsafe_allow_html=True)
+                with _opc:
+                    st.markdown('<div style="color:#FF4444;font-size:10px;font-weight:700;letter-spacing:2px">▼ TOP PUTS (by score)</div>', unsafe_allow_html=True)
+                    st.markdown(render_scored_options(_oscored["top_puts"], side="puts"), unsafe_allow_html=True)
+
+                if _oscored.get("unusual"):
+                    st.markdown(render_unusual_trade(_oscored["unusual"], ticker=_ot, expiry=_oexp_fmt), unsafe_allow_html=True)
+
+                with st.expander("🔧 TRUE BLACK-SCHOLES ENGINE (WHAT-IF)", expanded=False):
+                    st.markdown('<div style="color:#888;font-size:10px;margin-bottom:8px">Calculate Delta, Gamma, Theta locally bypassing Alpaca endpoint limits.</div>', unsafe_allow_html=True)
+                    _bsc1, _bsc2, _bsc3, _bsc4, _bsc5 = st.columns(5)
+                    with _bsc1: _bs_s = st.number_input("Spot Price", value=float(_oq["price"]), format="%.2f", key=f"obs_s_{_ot}")
+                    with _bsc2: _bs_k = st.number_input("Strike", value=float(_oq["price"]), format="%.2f", key=f"obs_k_{_ot}")
+                    with _bsc3:
+                        _odt_exp = max((_oexp_dt.date() - datetime.today().date()).days, 1) if _oexp_dt else 14
+                        _bs_t = st.number_input("Days to Expire", value=float(_odt_exp), format="%.1f", key=f"obs_t_{_ot}")
+                    with _bsc4:
+                        _bs_v = st.number_input("Implied Vol (%)", value=float(_o_vix) if _o_vix else 20.0, format="%.1f", key=f"obs_v_{_ot}")
+                    with _bsc5: _bs_side = st.selectbox("Type", ["call", "put"], key=f"obs_side_{_ot}")
+
+                    _bs_res = bs_greeks_engine(_bs_s, _bs_k, _bs_t / 365.0, 0.045, _bs_v / 100.0, _bs_side)
+                    _brc1, _brc2, _brc3, _brc4, _brc5 = st.columns(5)
+                    _brc1.metric("Delta", f"{_bs_res['delta']:.4f}", help="Rate of change of option price per $1 move in underlying. Calls: 0 to 1, Puts: -1 to 0.")
+                    _brc2.metric("Gamma", f"{_bs_res['gamma']:.6f}", help="Rate of change of Delta per $1 move. High gamma = delta shifts fast (near ATM, short-dated).")
+                    _brc3.metric("Theta (Daily)", f"{_bs_res['theta']:.4f}", help="Time decay — how much option value erodes per day. Accelerates near expiry.")
+                    _brc4.metric("Vega (1%)", f"{_bs_res.get('vega', 0):.4f}", help="Sensitivity to a 1% change in implied volatility. Higher for longer-dated options.")
+                    _brc5.metric("Rho (1%)", f"{_bs_res.get('rho', 0):.4f}", help="Sensitivity to a 1% change in interest rates. Matters more for LEAPS.")
+
+                with st.expander("📊 **FULL OPTIONS CHAIN**", expanded=False):
+                    _ofc, _ofp = st.columns(2)
+                    with _ofc:
+                        st.markdown('<div style="color:#00CC44;font-size:9px;font-weight:700;letter-spacing:2px">▲ ALL CALLS</div>', unsafe_allow_html=True)
+                        st.markdown(render_options_table(_oc, "calls", _oq["price"]), unsafe_allow_html=True)
+                    with _ofp:
+                        st.markdown('<div style="color:#FF4444;font-size:9px;font-weight:700;letter-spacing:2px">▼ ALL PUTS</div>', unsafe_allow_html=True)
+                        st.markdown(render_options_table(_op, "puts", _oq["price"]), unsafe_allow_html=True)
+            else:
+                st.warning(f"Options data failed to load for {_ot}")
+                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Options unavailable for this ticker.</p>', unsafe_allow_html=True)
+        else:
+            st.error(f"No data for '{_ot}'. Check ticker symbol.")
+
+    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+    # ────────────────────────────────────────────────────────────────
+    # 0DTE GEX & TRADE ENGINE (kept from original SPX 0DTE tab)
+    # ────────────────────────────────────────────────────────────────
     if "trade_log_0dte" not in st.session_state:
         st.session_state.trade_log_0dte = []
 
@@ -1878,6 +2401,8 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                             unsafe_allow_html=True)
 
         render_0dte_fragment()
+
+
 
 # ════════════════════════════════════════════════════════════════════
 # TAB 3 — MACRO

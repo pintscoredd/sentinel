@@ -63,12 +63,25 @@ _yf_last_request = 0.0
 _YF_MIN_GAP = 0.35          # minimum seconds between Yahoo API calls
 _yf_ticker_cache = {}        # symbol → (yf.Ticker, timestamp)
 _YF_CACHE_TTL = 120          # reuse Ticker objects for 2 minutes
+_YF_CACHE_MAX_SIZE = 200     # max tickers to cache — prevents unbounded memory growth
+
+def _evict_yf_cache():
+    """Evict oldest entries from ticker cache when over max size.
+    Must be called while holding _yf_lock."""
+    if len(_yf_ticker_cache) <= _YF_CACHE_MAX_SIZE:
+        return
+    # Sort by timestamp, remove oldest 25%
+    items = sorted(_yf_ticker_cache.items(), key=lambda x: x[1][1])
+    evict_count = len(items) - int(_YF_CACHE_MAX_SIZE * 0.75)
+    for key, _ in items[:evict_count]:
+        _yf_ticker_cache.pop(key, None)
 
 def get_yf_ticker(ticker):
     """Return a yfinance Ticker with global rate limiting.
     
     Serializes all Yahoo requests with a minimum gap to prevent 429 errors.
     Caches Ticker objects per-symbol to avoid redundant HTTP sessions.
+    Cache is bounded to _YF_CACHE_MAX_SIZE entries with LRU-style eviction.
     """
     if yf is None: return None
     global _yf_last_request
@@ -93,6 +106,7 @@ def get_yf_ticker(ticker):
     
         tk = yf.Ticker(ticker)
         _yf_ticker_cache[ticker] = (tk, _time.time())
+        _evict_yf_cache()
         return tk
 
 
@@ -162,47 +176,82 @@ def _do_fetch_robust_json(url, params=None, headers=None, timeout=10):
     r.raise_for_status()
     return json.loads(r.content)
 
+# Thread-safe circuit breaker — prevents race conditions on concurrent
+# Streamlit sessions mutating failure counts across two bytecodes.
+_cb_lock = _threading.Lock()
+_API_CIRCUIT_BREAKERS = {}
+
 def _fetch_robust_json(url, params=None, headers=None, timeout=10):
-    """Centralized, robust external fetcher using exponential backoff and fast JSON parsing."""
+    """Centralized, robust external fetcher using exponential backoff and fast JSON parsing.
+    
+    Circuit breaker is protected by _cb_lock to prevent race conditions
+    where concurrent threads read stale failure counts and either trip
+    too late or reset prematurely.
+    """
     from urllib.parse import urlparse
     import time
     
     api_name = urlparse(url).netloc
-    global _API_CIRCUIT_BREAKERS
-    if '_API_CIRCUIT_BREAKERS' not in globals():
-        _API_CIRCUIT_BREAKERS = {}
-    cb = _API_CIRCUIT_BREAKERS.setdefault(api_name, {"failures": 0, "last_fail": 0})
     
-    if cb["failures"] >= 3 and (time.time() - cb["last_fail"]) < 300:
-        logger.warning(f"Circuit breaker open for {api_name} - skipping request")
-        return None
+    with _cb_lock:
+        cb = _API_CIRCUIT_BREAKERS.setdefault(api_name, {"failures": 0, "last_fail": 0})
+        if cb["failures"] >= 3 and (time.time() - cb["last_fail"]) < 300:
+            logger.warning(f"Circuit breaker open for {api_name} - skipping request")
+            return None
         
     try:
         res = _do_fetch_robust_json(url, params=params, headers=headers, timeout=timeout)
-        cb["failures"] = 0
+        with _cb_lock:
+            cb = _API_CIRCUIT_BREAKERS.setdefault(api_name, {"failures": 0, "last_fail": 0})
+            cb["failures"] = 0
         return res
     except Exception as e:
-        cb["failures"] += 1
-        cb["last_fail"] = time.time()
+        with _cb_lock:
+            cb = _API_CIRCUIT_BREAKERS.setdefault(api_name, {"failures": 0, "last_fail": 0})
+            cb["failures"] = cb["failures"] + 1
+            cb["last_fail"] = time.time()
         logger.error(f"Request failed for {api_name}: {e}")
         return None
 
 
 # ── Persistent event loop for async operations ──────────────────
 # Avoids creating/tearing down a new loop on every call (asyncio.run overhead).
+# Uses a lock to prevent duplicate loop/thread creation on Streamlit hot-reload.
 _async_loop = None
 _async_thread = None
+_async_loop_lock = _threading.Lock()
 
 def _get_persistent_loop():
-    """Return a persistent event loop running on a dedicated background thread."""
+    """Return a persistent event loop running on a dedicated background thread.
+    
+    Thread-safe: uses a lock to prevent duplicate loops on Streamlit
+    hot-reload. If the old loop is still alive but our reference was
+    lost (module reload), we reuse it instead of spawning a zombie.
+    """
     global _async_loop, _async_thread
-    if _async_loop is not None and _async_loop.is_running():
+    with _async_loop_lock:
+        # Fast path: existing loop is alive and running
+        if _async_loop is not None and _async_loop.is_running():
+            return _async_loop
+        
+        # If thread is alive but loop ref was lost, stop the old thread first
+        if _async_thread is not None and _async_thread.is_alive():
+            try:
+                if _async_loop is not None:
+                    _async_loop.call_soon_threadsafe(_async_loop.stop)
+                    _async_thread.join(timeout=2)
+            except Exception:
+                pass
+        
+        import threading
+        _async_loop = asyncio.new_event_loop()
+        _async_thread = threading.Thread(
+            target=_async_loop.run_forever,
+            daemon=True,
+            name="sentinel-async-loop"  # named for debugging zombie threads
+        )
+        _async_thread.start()
         return _async_loop
-    import threading
-    _async_loop = asyncio.new_event_loop()
-    _async_thread = threading.Thread(target=_async_loop.run_forever, daemon=True)
-    _async_thread.start()
-    return _async_loop
 
 def run_async(coro):
     """Run an async coroutine using a persistent event loop.
@@ -719,20 +768,29 @@ def bs_greeks_vectorized(S, K, T, r, sigma, side="call", q=0.0):
     Accepts scalar S/T/r/q and array K/sigma (or all arrays).
     Returns dict of numpy arrays: delta, gamma, theta, vega, rho.
     Eliminates the df.apply(axis=1) bottleneck for large option chains.
+    
+    K values <= 0 are clamped to 1e-10 BEFORE np.log to prevent
+    RuntimeWarning and NaN/Inf poisoning from malformed yfinance data.
     """
     K = np.asarray(K, dtype=np.float64)
     sigma = np.asarray(sigma, dtype=np.float64)
     
-    # Clamp to avoid math domain errors
+    # Clamp K > 0 to avoid np.log(S/K) → -inf/NaN from zero/negative strikes
+    # (yfinance occasionally returns 0 or negative strikes from parsing artifacts)
+    K = np.maximum(K, 1e-10)
     sigma = np.maximum(sigma, 1e-6)
-    T_safe = max(T, 1e-10)
-    S_safe = max(S, 1e-10)
+    T_safe = np.maximum(T, 1e-10)
+    S_safe = np.maximum(S, 1e-10)
     
     sqrt_T = np.sqrt(T_safe)
     S_adj = S_safe * np.exp(-q * T_safe)
     
     d1 = (np.log(S_safe / K) + (r - q + 0.5 * sigma**2) * T_safe) / (sigma * sqrt_T)
     d2 = d1 - sigma * sqrt_T
+    
+    # Clamp d1/d2 to reasonable range to prevent overflow in norm.cdf/pdf
+    d1 = np.clip(d1, -50, 50)
+    d2 = np.clip(d2, -50, 50)
     
     N_d1 = norm.cdf(d1)
     N_d2 = norm.cdf(d2)
@@ -765,13 +823,17 @@ def bs_greeks_vectorized(S, K, T, r, sigma, side="call", q=0.0):
     else:
         rho = -K * T_safe * discount * norm.cdf(-d2) / 100.0
     
-    return {
+    # Final NaN/Inf safety net — replace any remaining poison values with 0
+    result = {
         "delta": np.round(delta, 4),
         "gamma": np.round(gamma, 6),
         "theta": np.round(theta, 4),
         "vega": np.round(vega, 4),
         "rho": np.round(rho, 4),
     }
+    for key in result:
+        result[key] = np.nan_to_num(result[key], nan=0.0, posinf=0.0, neginf=0.0)
+    return result
 
 @st.cache_data(ttl=21600)
 def get_finra_short_volume(ticker):
@@ -1567,6 +1629,9 @@ def fetch_0dte_chain(underlying="SPY"):
     try:
         c_data = _fetch_robust_json("https://paper-api.alpaca.markets/v2/options/contracts", 
                                     headers=headers, params={"underlying_symbols": underlying, "status": "active", "limit": 1000}, timeout=10)
+        if not c_data:
+            logger.error("fetch_0dte_chain: Alpaca contracts endpoint returned None (timeout/circuit breaker)")
+            return [], "Alpaca API unavailable — network timeout or circuit breaker tripped"
         dates = [c.get("expiration_date") for c in c_data.get("option_contracts", []) if c.get("expiration_date") and c.get("expiration_date") >= today_str]
         if not dates: return [], "No active option contracts found"
         target_expiry = sorted(list(set(dates)))[0]
@@ -1577,18 +1642,29 @@ def fetch_0dte_chain(underlying="SPY"):
         url = f"https://data.alpaca.markets/v1beta1/options/snapshots/{underlying}"
         params = {"feed": "indicative", "limit": 250, "expiration_date": target_expiry}
         data = _fetch_robust_json(url, headers=headers, params=params, timeout=15)
+        # Guard against None: _fetch_robust_json returns None on timeout/circuit breaker
+        if not data:
+            logger.error("fetch_0dte_chain: Alpaca snapshots endpoint returned None")
+            return [], "Alpaca snapshots API unavailable — network timeout or circuit breaker"
         snapshots = data.get("snapshots", {})
         seen_tokens = set()
         pages = 0
 
-        while data.get("next_page_token") and pages < 10:
+        # Pagination: guard every iteration against None response
+        while data is not None and data.get("next_page_token") and pages < 10:
             token = data["next_page_token"]
             if token in seen_tokens:
                 break
             seen_tokens.add(token)
             params["page_token"] = token
+            import time
+            time.sleep(0.5)
             data = _fetch_robust_json(url, headers=headers, params=params, timeout=15)
-            snapshots.update(data.get("snapshots", {}))
+            if data is not None:
+                snapshots.update(data.get("snapshots", {}))
+            else:
+                logger.warning(f"fetch_0dte_chain: pagination page {pages+1} returned None, stopping")
+                break
             pages += 1
 
         chain = []
@@ -1915,6 +1991,7 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
             _gain = _delta_r.where(_delta_r > 0, 0.0).rolling(14).mean()
             _loss = (-_delta_r.where(_delta_r < 0, 0.0)).rolling(14).mean()
             _rs = _gain / _loss.replace(0, np.nan)
+            _rs = np.nan_to_num(_rs, nan=50.0, posinf=100.0, neginf=0.0)
             _rsi = 100.0 - (100.0 / (1.0 + _rs))
             rsi_val = float(_rsi.iloc[-1]) if not _rsi.empty else 50.0
 
@@ -2038,6 +2115,8 @@ def compute_max_pain(chain):
         k = opt["strike"]
         if opt["type"] == "call": call_oi[k] = call_oi.get(k, 0) + opt.get("oi", 0)
         else: put_oi[k] = put_oi.get(k, 0) + opt.get("oi", 0)
+
+    if sum(call_oi.values()) == 0 and sum(put_oi.values()) == 0: return None
 
     s0 = strikes[0]
     pain = 0.0
@@ -2630,6 +2709,9 @@ def get_macro_calendar(fred_key=None, days_back=0):
         fk = st.secrets.get("FINNHUB_API_KEY") or st.secrets.get("finnhub_api_key") or ""
         if fk: params["token"] = str(fk).strip()
         data = _fetch_robust_json("https://finnhub.io/api/v1/calendar/economic", params=params, timeout=12)
+        if not data:
+            logger.warning("get_macro_calendar: Finnhub economic calendar returned None")
+            raise ValueError("Finnhub API unavailable")
         events = data.get("economicCalendar", [])
         HIGH_KW = ["cpi","fomc","fed","nonfarm","non-farm","payroll","gdp","pce","employment situation"]
         MED_KW  = ["ppi","retail sales","ism","pmi","housing starts","durable goods","jolts","adp","jobless","consumer confidence","industrial production","trade balance"]
@@ -2714,7 +2796,32 @@ def get_macro_calendar(fred_key=None, days_back=0):
         d = _last_weekday(y, m, 3)
         if d: static_events.append(("GDP (Advance Estimate)", d, "HIGH"))
 
-    FOMC_APPROX = [_date(2025,3,19), _date(2025,5,7), _date(2025,6,18), _date(2025,7,30), _date(2025,9,17), _date(2025,10,29), _date(2025,12,10), _date(2026,1,28), _date(2026,3,18), _date(2026,4,29), _date(2026,6,17), _date(2026,7,29), _date(2026,9,16), _date(2026,10,28), _date(2026,12,16)]
+    FOMC_APPROX = [
+        # 2025
+        _date(2025,3,19), _date(2025,5,7), _date(2025,6,18), _date(2025,7,30),
+        _date(2025,9,17), _date(2025,10,29), _date(2025,12,10),
+        # 2026
+        _date(2026,1,28), _date(2026,3,18), _date(2026,4,29), _date(2026,6,17),
+        _date(2026,7,29), _date(2026,9,16), _date(2026,10,28), _date(2026,12,16),
+        # 2027 (projected — 8 meetings per year, ~6 week cadence)
+        _date(2027,1,27), _date(2027,3,17), _date(2027,4,28), _date(2027,6,16),
+        _date(2027,7,28), _date(2027,9,15), _date(2027,10,27), _date(2027,12,15),
+        # 2028 (projected)
+        _date(2028,1,26), _date(2028,3,15), _date(2028,4,26), _date(2028,6,14),
+        _date(2028,7,26), _date(2028,9,13), _date(2028,10,25), _date(2028,12,13),
+    ]
+    # Detect if all hardcoded FOMC dates are in the past — warn about data gap
+    if FOMC_APPROX and today > max(FOMC_APPROX):
+        logger.warning(
+            "FOMC_APPROX dates are exhausted (last: %s). "
+            "Macro calendar will show no FOMC meetings until dates are updated. "
+            "Update data_fetchers.py with new FOMC schedule.",
+            max(FOMC_APPROX).isoformat()
+        )
+        static_events.append((
+            "⚠️ FOMC dates need update — schedule may be inaccurate",
+            today, "HIGH"
+        ))
     for fd in FOMC_APPROX:
         if today <= fd <= horizon: static_events.append(("FOMC Meeting (Fed Rate Decision)", fd, "HIGH"))
 
@@ -4241,7 +4348,7 @@ def get_iv_term_structure(ticker="SPY"):
                 if chain is None:
                     continue
 
-                calls, puts = chain.calls, chain.puts
+                calls, puts = chain.calls.copy(), chain.puts.copy()
                 if calls.empty and puts.empty:
                     continue
 
@@ -4342,7 +4449,7 @@ def get_iv_skew(ticker="SPY"):
                 chain = tk.option_chain(exp)
                 if chain is None:
                     continue
-                calls, puts = chain.calls, chain.puts
+                calls, puts = chain.calls.copy(), chain.puts.copy()
                 if calls.empty or puts.empty:
                     continue
 
@@ -4861,7 +4968,7 @@ def get_expected_move(ticker):
         if chain is None:
             return None
 
-        calls, puts = chain.calls, chain.puts
+        calls, puts = chain.calls.copy(), chain.puts.copy()
         if calls.empty or puts.empty:
             return None
 
