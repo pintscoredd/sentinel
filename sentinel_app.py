@@ -178,9 +178,26 @@ background: var(--bg2) !important; color: var(--org2) !important;
 border: 1px solid var(--muted) !important; border-radius: 0 !important;
 font-family: var(--mono) !important; font-size: 12px !important;
 }
-.stNumberInput > div > div > button {
-background: var(--bg2) !important; color: var(--org) !important;
+.stNumberInput > div > div > button,
+.stNumberInput button {
+background: var(--bg1) !important; color: var(--org) !important;
 border: 1px solid var(--muted) !important; border-radius: 0 !important;
+font-family: var(--mono) !important; font-size: 13px !important;
+font-weight: 700 !important;
+}
+.stNumberInput > div > div > button:hover,
+.stNumberInput button:hover {
+background: var(--org) !important; color: var(--blk) !important;
+}
+/* Force number input container to match selectbox style */
+.stNumberInput > div {
+background: var(--bg1) !important;
+border: 1px solid var(--muted) !important;
+border-radius: 0 !important;
+}
+.stNumberInput > div > div {
+background: transparent !important;
+border: none !important;
 }
 .stSelectbox > div > div { color: var(--org2) !important; }
 
@@ -1124,108 +1141,349 @@ with tabs[1]:
                     st.markdown('<div style="color:#555;font-size:11px">Financials temporarily unavailable.</div>', unsafe_allow_html=True)
             # --- END: Financials ---
 
+            # ── QUARTERLY FINANCIALS (Markets Tab) ─────────────────────────
+            st.markdown('<div class="bb-ph" style="margin-top:12px">📊 QUARTERLY FINANCIALS</div>', unsafe_allow_html=True)
+            try:
+                with st.spinner("Loading quarterly financials…"):
+                    _mkt_fin_data = get_full_financials(tkr)
+                if _mkt_fin_data:
+                    _mkt_qs = sorted(_mkt_fin_data.keys(), reverse=True)
+                    def _mkt_fmt_val(v, unit="auto"):
+                        if v is None: return '<span style="color:#333">—</span>'
+                        if unit == "%": return f'<span style="color:#CCC">{v:.1f}%</span>'
+                        if unit == "raw": return f'<span style="color:#CCC">{v:.2f}</span>'
+                        abs_v = abs(v)
+                        if abs_v >= 1e12:   v_d, sfx = v/1e12, "T"
+                        elif abs_v >= 1e9:  v_d, sfx = v/1e9,  "B"
+                        elif abs_v >= 1e6:  v_d, sfx = v/1e6,  "M"
+                        elif abs_v >= 1e3:  v_d, sfx = v/1e3,  "K"
+                        else:               v_d, sfx = v,       ""
+                        c = "#00CC44" if v >= 0 else "#FF4444"
+                        return f'<span style="color:{c};font-weight:600">{v_d:,.1f}{sfx}</span>'
+                    _MKT_METRICS = [
+                        ("Revenue",      "revenue",       "auto"),
+                        ("Gross Profit", "gross_profit",  "auto"),
+                        ("Op. Income",   "op_income",     "auto"),
+                        ("Net Income",   "net_income",    "auto"),
+                        ("EBITDA",       "ebitda",        "auto"),
+                        ("Free CF",      "free_cashflow", "auto"),
+                        ("Op. CF",       "op_cashflow",   "auto"),
+                        ("Gross Margin", "gross_margin",  "%"),
+                        ("Op. Margin",   "op_margin",     "%"),
+                        ("Net Margin",   "net_margin",    "%"),
+                        ("Total Debt",   "total_debt",    "auto"),
+                        ("Cash",         "cash",          "auto"),
+                        ("EPS (Dil.)",   "eps",           "raw"),
+                    ]
+                    _qf_hdr = "".join(f'<span style="color:#FF6600;font-weight:700;text-align:right;font-family:monospace;font-size:10px">{q}</span>' for q in _mkt_qs)
+                    _qf_html = (
+                        f'<div style="background:#080808;border:1px solid #1A1A1A;border-radius:4px;padding:12px;margin:6px 0">'
+                        f'<div style="display:grid;grid-template-columns:130px repeat({len(_mkt_qs)},1fr);gap:6px;'
+                        f'padding:5px 8px;border-bottom:1px solid #FF6600;margin-bottom:4px">'
+                        f'<span style="color:#FF6600;font-family:monospace;font-size:10px;font-weight:700;letter-spacing:1px">METRIC</span>{_qf_hdr}</div>'
+                    )
+                    for _i, (_lbl, _key, _unit) in enumerate(_MKT_METRICS):
+                        _row_bg = "background:#050505;" if _i % 2 == 0 else ""
+                        _cells = "".join(
+                            f'<span style="text-align:right;font-family:monospace;font-size:11px">{_mkt_fmt_val(_mkt_fin_data.get(q, {}).get(_key), _unit)}</span>'
+                            for q in _mkt_qs
+                        )
+                        _qf_html += (
+                            f'<div style="display:grid;grid-template-columns:130px repeat({len(_mkt_qs)},1fr);gap:6px;'
+                            f'padding:5px 8px;border-bottom:1px solid #0D0D0D;{_row_bg}">'
+                            f'<span style="color:#888;font-family:monospace;font-size:11px">{_lbl}</span>{_cells}</div>'
+                        )
+                    _qf_html += '</div>'
+                    st.markdown(_qf_html, unsafe_allow_html=True)
+                else:
+                    st.markdown('<div style="color:#555;font-size:11px;font-family:monospace">Quarterly financials unavailable.</div>', unsafe_allow_html=True)
+            except Exception:
+                pass
+            # ── END QUARTERLY FINANCIALS ────────────────────────────────────
+
             # ── EARNINGS MATRIX (Markets Tab) ──────────────────────────────
-            st.markdown('<div class="bb-ph" style="margin-top:12px">📊 EARNINGS MATRIX</div>', unsafe_allow_html=True)
+            st.markdown('<div class="bb-ph" style="margin-top:14px">📈 EARNINGS MATRIX</div>', unsafe_allow_html=True)
             with st.spinner(f"Building Earnings Matrix for {tkr}…"):
                 _mkt_em_data = get_earnings_matrix(tkr)
             if _mkt_em_data:
-                _me_years    = _mkt_em_data["years"]
-                _me_qlabels  = _mkt_em_data["q_labels"]
+                _me_years     = _mkt_em_data["years"]
+                _me_qlabels   = _mkt_em_data["q_labels"]
                 _me_quarterly = _mkt_em_data["quarterly"]
                 _me_estimates = _mkt_em_data.get("estimates", {})
                 _me_beats     = _mkt_em_data.get("beats", {})
                 _me_surprise  = _mkt_em_data.get("surprise_pct", {})
                 _me_revenue_q = _mkt_em_data.get("revenue_q", {})
                 _me_annual    = _mkt_em_data["annual"]
+                _me_annual_rev = _mkt_em_data.get("annual_revenue", {})
                 _me_yoy       = _mkt_em_data["yoy_growth"]
+                _me_ann_growth = _mkt_em_data.get("annual_growth", {})
+                _me_rev_growth = _mkt_em_data.get("rev_growth", {})
+                _me_ann_rev_growth = _mkt_em_data.get("annual_rev_growth", {})
                 _me_streak    = _mkt_em_data.get("streak", 0)
                 _me_beat_rate = _mkt_em_data.get("beat_rate", 0)
                 _me_company   = _mkt_em_data.get("company", tkr)
                 _me_currency  = _mkt_em_data.get("currency", "USD")
+                _me_vals      = _mkt_em_data.get("valuations", {})
+                _me_ratings   = _mkt_em_data.get("analyst_ratings", {})
                 _me_streak_c  = "#00CC44" if _me_streak > 0 else ("#FF4444" if _me_streak < 0 else "#888")
                 _me_br_c      = "#00CC44" if _me_beat_rate >= 75 else "#FF8C00" if _me_beat_rate >= 50 else "#FF4444"
-                st.markdown(
-                    f'<div class="em-container"><div class="em-header">'
-                    f'<span class="em-badge">Earnings Matrix</span>'
-                    f'<span class="em-ticker-label">● {tkr}</span>'
-                    f'<span class="em-metric-label">EPS (GAAP)</span>'
-                    f'<span style="margin-left:auto;font-family:monospace;font-size:10px;color:{_me_streak_c};font-weight:700">'
-                    f'{"🔥 "+str(_me_streak)+"Q BEAT" if _me_streak>0 else ("⚠️ "+str(abs(_me_streak))+"Q MISS" if _me_streak<0 else "—")}</span>'
-                    f'<span style="margin-left:12px;font-family:monospace;font-size:10px;color:{_me_br_c}">Beat Rate: {_me_beat_rate:.0f}%</span>'
-                    f'</div>', unsafe_allow_html=True)
-                _me_lc, _me_rc = st.columns(2)
-                with _me_lc:
-                    st.markdown(f'<div style="color:#555;font-family:monospace;font-size:9px;margin-bottom:6px;letter-spacing:1px">EPS ACTUAL vs ESTIMATE — {_me_currency} ($)</div>', unsafe_allow_html=True)
-                    _me_yr_hdr = "".join(f"<th>{yr}</th>" for yr in _me_years)
-                    _me_eps_html = f'<table class="em-table"><thead><tr><th></th>{_me_yr_hdr}</tr></thead><tbody>'
-                    for ql in _me_qlabels:
-                        _me_eps_html += f"<tr><td>{ql}</td>"
-                        for yr in _me_years:
-                            val = _me_quarterly.get(yr, {}).get(ql)
-                            est = _me_estimates.get(yr, {}).get(ql)
-                            beat = _me_beats.get(yr, {}).get(ql)
-                            surp = _me_surprise.get(yr, {}).get(ql)
-                            if val is not None:
-                                color = "#00CC44" if val >= 0 else "#FF4444"
-                                icon = ' <span style="color:#00CC44;font-size:8px">✓</span>' if beat is True else (' <span style="color:#FF4444;font-size:8px">✗</span>' if beat is False else "")
-                                surp_str = (f'<br><span style="color:{"#00CC44" if (surp or 0)>=0 else "#FF4444"};font-size:8px">{surp:+.1f}%</span>' if surp is not None else "")
-                                est_str = (f'<br><span style="color:#555;font-size:8px">est {est:.2f}</span>' if est is not None else "")
-                                _me_eps_html += f'<td style="color:{color}">{val:.2f}{icon}{est_str}{surp_str}</td>'
-                            else:
-                                _me_eps_html += '<td style="color:#333">—</td>'
-                        _me_eps_html += "</tr>"
-                    _me_eps_html += '<tr class="em-annual"><td>Annual</td>'
+                _me_streak_txt = (f"🔥 {_me_streak}Q BEAT" if _me_streak > 0 else (f"⚠️ {abs(_me_streak)}Q MISS" if _me_streak < 0 else "—"))
+
+                # ── Build EPS table HTML ──
+                _me_yr_hdr = "".join(f"<th>{yr}</th>" for yr in _me_years)
+                _me_eps_html = (
+                    f'<div style="color:#555;font-family:monospace;font-size:9px;margin-bottom:6px;letter-spacing:1px">'
+                    f'EPS ACTUAL vs ESTIMATE — {_me_currency} ($)</div>'
+                    f'<table class="em-table"><thead><tr><th></th>{_me_yr_hdr}</tr></thead><tbody>'
+                )
+                for ql in _me_qlabels:
+                    _me_eps_html += f"<tr><td>{ql}</td>"
                     for yr in _me_years:
-                        val = _me_annual.get(yr)
+                        val  = _me_quarterly.get(yr, {}).get(ql)
+                        est  = _me_estimates.get(yr, {}).get(ql)
+                        beat = _me_beats.get(yr, {}).get(ql)
+                        surp = _me_surprise.get(yr, {}).get(ql)
                         if val is not None:
-                            _me_eps_html += f'<td style="color:{"#00CC44" if val>=0 else "#FF4444"};font-weight:700">{val:.2f}</td>'
+                            _ec = "#00CC44" if val >= 0 else "#FF4444"
+                            _icon = (' <span style="color:#00CC44;font-size:8px">✓</span>' if beat is True
+                                     else (' <span style="color:#FF4444;font-size:8px">✗</span>' if beat is False else ""))
+                            _surp_s = (f'<br><span style="color:{"#00CC44" if (surp or 0)>=0 else "#FF4444"};font-size:8px">{surp:+.1f}%</span>'
+                                       if surp is not None else "")
+                            _est_s  = (f'<br><span style="color:#555;font-size:8px">est {est:.2f}</span>'
+                                       if est is not None else "")
+                            _me_eps_html += f'<td style="color:{_ec}">{val:.2f}{_icon}{_est_s}{_surp_s}</td>'
                         else:
                             _me_eps_html += '<td style="color:#333">—</td>'
-                    _me_eps_html += "</tr></tbody></table>"
-                    st.markdown(_me_eps_html, unsafe_allow_html=True)
-                with _me_rc:
-                    st.markdown('<div style="color:#555;font-family:monospace;font-size:9px;margin-bottom:6px;letter-spacing:1px">YoY EPS GROWTH</div>', unsafe_allow_html=True)
-                    _me_g_hdr = "".join(f"<th>{yr}</th>" for yr in _me_years)
-                    _me_g_html = f'<table class="em-table"><thead><tr><th></th>{_me_g_hdr}</tr></thead><tbody>'
-                    for ql in _me_qlabels:
-                        _me_g_html += f"<tr><td>{ql}</td>"
-                        for yr in _me_years:
-                            val = _me_yoy.get(yr, {}).get(ql)
-                            if val is not None:
-                                _me_g_html += f'<td style="color:{"#00CC44" if val>=0 else "#FF4444"}">{val:+.1f}%</td>'
-                            else:
-                                _me_g_html += '<td style="color:#333">—</td>'
-                        _me_g_html += "</tr>"
-                    _me_g_html += '<tr class="em-annual"><td>Annual</td>'
+                    _me_eps_html += "</tr>"
+                _me_eps_html += '<tr class="em-annual"><td>Annual</td>'
+                for yr in _me_years:
+                    val = _me_annual.get(yr)
+                    _me_eps_html += (f'<td style="color:{"#00CC44" if val>=0 else "#FF4444"};font-weight:700">{val:.2f}</td>'
+                                     if val is not None else '<td style="color:#333">—</td>')
+                _me_eps_html += "</tr></tbody></table>"
+
+                # ── Build YoY growth table HTML ──
+                _me_g_hdr  = "".join(f"<th>{yr}</th>" for yr in _me_years)
+                _me_g_html = (
+                    '<div style="color:#555;font-family:monospace;font-size:9px;margin-bottom:6px;letter-spacing:1px">YoY EPS GROWTH</div>'
+                    f'<table class="em-table"><thead><tr><th></th>{_me_g_hdr}</tr></thead><tbody>'
+                )
+                for ql in _me_qlabels:
+                    _me_g_html += f"<tr><td>{ql}</td>"
                     for yr in _me_years:
-                        val = _mkt_em_data["annual_growth"].get(yr)
-                        if val is not None:
-                            _me_g_html += f'<td style="color:{"#00CC44" if val>=0 else "#FF4444"};font-weight:700">{val:+.1f}%</td>'
-                        else:
-                            _me_g_html += '<td style="color:#333">—</td>'
-                    _me_g_html += "</tr></tbody></table>"
-                    st.markdown(_me_g_html, unsafe_allow_html=True)
-                # Revenue table
+                        val = _me_yoy.get(yr, {}).get(ql)
+                        _me_g_html += (f'<td style="color:{"#00CC44" if val>=0 else "#FF4444"}">{val:+.1f}%</td>'
+                                       if val is not None else '<td style="color:#333">—</td>')
+                    _me_g_html += "</tr>"
+                _me_g_html += '<tr class="em-annual"><td>Annual</td>'
+                for yr in _me_years:
+                    val = _me_ann_growth.get(yr)
+                    _me_g_html += (f'<td style="color:{"#00CC44" if val>=0 else "#FF4444"};font-weight:700">{val:+.1f}%</td>'
+                                   if val is not None else '<td style="color:#333">—</td>')
+                _me_g_html += "</tr></tbody></table>"
+
+                # ── Build Revenue table HTML ──
+                _me_rev_html = ""
                 if _me_revenue_q:
-                    _me_rev_hdr = "".join(f"<th>{yr}</th>" for yr in _me_years)
-                    _me_rev_html = f'<div style="color:#555;font-family:monospace;font-size:9px;margin:8px 0 4px;letter-spacing:1px">QUARTERLY REVENUE</div>'
-                    _me_rev_html += f'<table class="em-table"><thead><tr><th></th>{_me_rev_hdr}</tr></thead><tbody>'
+                    _me_rev_hdr  = "".join(f"<th>{yr}</th>" for yr in _me_years)
+                    _me_rev_html = (
+                        '<div style="color:#555;font-family:monospace;font-size:9px;margin:10px 0 4px;letter-spacing:1px">QUARTERLY REVENUE</div>'
+                        f'<table class="em-table"><thead><tr><th></th>{_me_rev_hdr}</tr></thead><tbody>'
+                    )
                     for ql in _me_qlabels:
                         _me_rev_html += f"<tr><td>{ql}</td>"
                         for yr in _me_years:
                             val = _me_revenue_q.get(yr, {}).get(ql)
                             if val is not None:
-                                if abs(val) >= 1e12: rv_s = f"${val/1e12:.2f}T"
-                                elif abs(val) >= 1e9: rv_s = f"${val/1e9:.1f}B"
-                                elif abs(val) >= 1e6: rv_s = f"${val/1e6:.0f}M"
-                                else: rv_s = f"${val:,.0f}"
+                                rv_s = (f"${val/1e12:.2f}T" if abs(val)>=1e12
+                                        else f"${val/1e9:.1f}B" if abs(val)>=1e9
+                                        else f"${val/1e6:.0f}M" if abs(val)>=1e6
+                                        else f"${val:,.0f}")
                                 _me_rev_html += f'<td style="color:#CCC">{rv_s}</td>'
                             else:
                                 _me_rev_html += '<td style="color:#333">—</td>'
                         _me_rev_html += "</tr>"
-                    _me_rev_html += "</tbody></table>"
-                    st.markdown(_me_rev_html, unsafe_allow_html=True)
-                st.markdown('</div>', unsafe_allow_html=True)
+                    _me_rev_html += '<tr class="em-annual"><td>Annual</td>'
+                    for yr in _me_years:
+                        val = _me_annual_rev.get(yr)
+                        if val is not None:
+                            rv_a = (f"${val/1e12:.2f}T" if abs(val)>=1e12
+                                    else f"${val/1e9:.1f}B" if abs(val)>=1e9
+                                    else f"${val/1e6:.0f}M")
+                            _me_rev_html += f'<td style="color:#FF8C00;font-weight:700">{rv_a}</td>'
+                        else:
+                            _me_rev_html += '<td style="color:#333">—</td>'
+                    _me_rev_html += "</tr></tbody></table>"
+
+                    # Revenue YoY growth
+                    _me_rg_hdr  = "".join(f"<th>{yr}</th>" for yr in _me_years)
+                    _me_rev_html += (
+                        '<div style="color:#555;font-family:monospace;font-size:9px;margin:10px 0 4px;letter-spacing:1px">REVENUE YoY %</div>'
+                        f'<table class="em-table"><thead><tr><th></th>{_me_rg_hdr}</tr></thead><tbody>'
+                    )
+                    for ql in _me_qlabels:
+                        _me_rev_html += f"<tr><td>{ql}</td>"
+                        for yr in _me_years:
+                            val = _me_rev_growth.get(yr, {}).get(ql)
+                            _me_rev_html += (f'<td style="color:{"#00CC44" if val>=0 else "#FF4444"}">{val:+.1f}%</td>'
+                                             if val is not None else '<td style="color:#333">—</td>')
+                        _me_rev_html += "</tr>"
+                    _me_rev_html += '<tr class="em-annual"><td>Annual</td>'
+                    for yr in _me_years:
+                        val = _me_ann_rev_growth.get(yr)
+                        _me_rev_html += (f'<td style="color:{"#00CC44" if val>=0 else "#FF4444"};font-weight:700">{val:+.1f}%</td>'
+                                         if val is not None else '<td style="color:#333">—</td>')
+                    _me_rev_html += "</tr></tbody></table>"
+
+                # ── Build Valuation multiples HTML ──
+                _me_val_html = ""
+                if _me_vals:
+                    _me_val_html = (
+                        '<div style="color:#FF6600;font-size:10px;letter-spacing:1px;font-family:monospace;font-weight:700;margin:12px 0 6px">VALUATION MULTIPLES</div>'
+                        '<table class="em-val-table"><thead><tr><th></th><th>Last 4Q</th><th>Forward</th></tr></thead><tbody>'
+                    )
+                    for _mn, _mp in _me_vals.items():
+                        def _vc(v_str):
+                            try:
+                                v = float(v_str.replace("x",""))
+                                return "#00CC44" if v < 15 else ("#FF8C00" if v < 25 else "#FF6600")
+                            except: return "#888"
+                        _lq = _mp.get("Last 4Q","—"); _fw = _mp.get("Forward","—")
+                        _me_val_html += f'<tr><td>{_mn}</td><td style="color:{_vc(_lq)}">{_lq}</td><td style="color:{_vc(_fw)}">{_fw}</td></tr>'
+                    _me_val_html += "</tbody></table>"
+
+                # ── Build Analyst Ratings HTML ──
+                _me_rat_html = ""
+                if _me_ratings:
+                    _cons = _me_ratings.get("consensus","—")
+                    _nana = _me_ratings.get("num_analysts", 0)
+                    _sb   = _me_ratings.get("strong_buy",  0)
+                    _b    = _me_ratings.get("buy",         0)
+                    _h    = _me_ratings.get("hold",        0)
+                    _s    = _me_ratings.get("sell",        0)
+                    _ss   = _me_ratings.get("strong_sell", 0)
+                    _tot  = _me_ratings.get("total_rated", _sb+_b+_h+_s+_ss) or 1
+                    _tmean = _me_ratings.get("target_mean",   0)
+                    _tmed  = _me_ratings.get("target_median", 0)
+                    _tlow  = _me_ratings.get("target_low",    0)
+                    _thi   = _me_ratings.get("target_high",   0)
+                    _cur_p = _mkt_em_data.get("price", 0)
+                    _cons_c = ("#00CC44" if _cons.lower() in ("buy","strong buy","strongbuy","outperform","overweight")
+                               else "#FF4444" if _cons.lower() in ("sell","strong sell","underperform","underweight")
+                               else "#FF8C00")
+                    def _pbar(n, total, color):
+                        pct = min(round(n / total * 100), 100) if total > 0 else 0
+                        return (f'<div style="display:flex;align-items:center;gap:6px;margin:2px 0">'
+                                f'<span style="width:70px;color:#888;font-size:9px">{n}</span>'
+                                f'<div style="flex:1;background:#111;height:6px;border-radius:2px">'
+                                f'<div style="width:{pct}%;background:{color};height:6px;border-radius:2px"></div></div>'
+                                f'<span style="color:{color};font-size:9px;width:32px;text-align:right">{pct}%</span></div>')
+                    _me_rat_html = (
+                        f'<div style="color:#00AAFF;font-size:10px;letter-spacing:1px;font-family:monospace;font-weight:700;margin:12px 0 6px">'
+                        f'ANALYST RATINGS <span style="color:#555;font-weight:400;font-size:8px">({_nana} analysts)</span></div>'
+                        f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">'
+                        f'<span style="color:{_cons_c};font-size:16px;font-weight:900;font-family:monospace">{_cons}</span>'
+                        f'</div>'
+                        f'<div style="font-family:monospace;font-size:10px;color:#555;margin-bottom:4px;letter-spacing:1px">BREAKDOWN</div>'
+                        f'<div style="display:flex;align-items:center;gap:6px;margin:2px 0">'
+                        f'<span style="width:70px;color:#00CC44;font-size:9px;font-weight:700">Strong Buy</span>'
+                        f'<div style="flex:1;background:#111;height:6px;border-radius:2px"><div style="width:{min(round(_sb/_tot*100),100)}%;background:#00CC44;height:6px;border-radius:2px"></div></div>'
+                        f'<span style="color:#00CC44;font-size:9px;width:26px;text-align:right">{_sb}</span></div>'
+                        f'<div style="display:flex;align-items:center;gap:6px;margin:2px 0">'
+                        f'<span style="width:70px;color:#00AA33;font-size:9px;font-weight:700">Buy</span>'
+                        f'<div style="flex:1;background:#111;height:6px;border-radius:2px"><div style="width:{min(round(_b/_tot*100),100)}%;background:#00AA33;height:6px;border-radius:2px"></div></div>'
+                        f'<span style="color:#00AA33;font-size:9px;width:26px;text-align:right">{_b}</span></div>'
+                        f'<div style="display:flex;align-items:center;gap:6px;margin:2px 0">'
+                        f'<span style="width:70px;color:#FF8C00;font-size:9px;font-weight:700">Hold</span>'
+                        f'<div style="flex:1;background:#111;height:6px;border-radius:2px"><div style="width:{min(round(_h/_tot*100),100)}%;background:#FF8C00;height:6px;border-radius:2px"></div></div>'
+                        f'<span style="color:#FF8C00;font-size:9px;width:26px;text-align:right">{_h}</span></div>'
+                        f'<div style="display:flex;align-items:center;gap:6px;margin:2px 0">'
+                        f'<span style="width:70px;color:#FF6655;font-size:9px;font-weight:700">Sell</span>'
+                        f'<div style="flex:1;background:#111;height:6px;border-radius:2px"><div style="width:{min(round(_s/_tot*100),100)}%;background:#FF6655;height:6px;border-radius:2px"></div></div>'
+                        f'<span style="color:#FF6655;font-size:9px;width:26px;text-align:right">{_s}</span></div>'
+                        f'<div style="display:flex;align-items:center;gap:6px;margin:2px 0">'
+                        f'<span style="width:70px;color:#FF4444;font-size:9px;font-weight:700">Strong Sell</span>'
+                        f'<div style="flex:1;background:#111;height:6px;border-radius:2px"><div style="width:{min(round(_ss/_tot*100),100)}%;background:#FF4444;height:6px;border-radius:2px"></div></div>'
+                        f'<span style="color:#FF4444;font-size:9px;width:26px;text-align:right">{_ss}</span></div>'
+                    )
+                    if _tmean > 0 or _tlow > 0 or _thi > 0:
+                        _up_dn = (f'+{((_tmean-_cur_p)/_cur_p*100):.1f}%' if _cur_p > 0 and _tmean > 0
+                                  else "")
+                        _pt_c  = "#00CC44" if _tmean > _cur_p else "#FF4444"
+                        _me_rat_html += (
+                            f'<div style="margin-top:8px;padding-top:6px;border-top:1px solid #1A1A1A;font-family:monospace;font-size:10px">'
+                            f'<div style="color:#555;font-size:8px;letter-spacing:1px;margin-bottom:4px">PRICE TARGETS</div>'
+                            f'<div style="display:flex;justify-content:space-between">'
+                            f'<span style="color:#888">Low: <span style="color:#CCC">${_tlow:,.2f}</span></span>'
+                            f'<span style="color:#888">Mean: <span style="color:{_pt_c};font-weight:700">${_tmean:,.2f}</span>'
+                            f'{"&nbsp;<span style=color:"+_pt_c+";font-size:9px>"+_up_dn+"</span>" if _up_dn else ""}</span>'
+                            f'<span style="color:#888">High: <span style="color:#CCC">${_thi:,.2f}</span></span>'
+                            f'</div>'
+                            f'</div>'
+                        )
+
+                # ── Render all panels as single HTML block ──
+                _em_full_html = (
+                    f'<div class="em-container">'
+                    f'<div class="em-header">'
+                    f'<span class="em-badge">Earnings Matrix</span>'
+                    f'<span class="em-ticker-label">● {tkr}</span>'
+                    f'<span class="em-metric-label">EPS (GAAP) · {_me_currency}</span>'
+                    f'<span style="margin-left:auto;font-family:monospace;font-size:10px;color:{_me_streak_c};font-weight:700">{_me_streak_txt}</span>'
+                    f'<span style="margin-left:12px;font-family:monospace;font-size:10px;color:{_me_br_c}">Beat Rate: {_me_beat_rate:.0f}%</span>'
+                    f'</div>'
+                    # Two-column EPS + YoY tables
+                    f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:8px">'
+                    f'<div>{_me_eps_html}</div>'
+                    f'<div>{_me_g_html}</div>'
+                    f'</div>'
+                    # Revenue tables (full width)
+                    f'{_me_rev_html}'
+                    # Valuation + Analyst side by side
+                    f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:4px">'
+                    f'<div>{_me_val_html}</div>'
+                    f'<div>{_me_rat_html}</div>'
+                    f'</div>'
+                    f'</div>'
+                )
+                st.markdown(_em_full_html, unsafe_allow_html=True)
+
+                # ── Quarterly Revenue Trend Chart ──
+                if _me_revenue_q:
+                    _rev_chart_labels, _rev_chart_vals = [], []
+                    for yr in _me_years:
+                        for ql in _me_qlabels:
+                            val = _me_revenue_q.get(yr, {}).get(ql)
+                            if val is not None:
+                                _rev_chart_labels.append(f"{ql[:2]} {yr}")
+                                _rev_chart_vals.append(val / 1e9)
+                    if len(_rev_chart_labels) >= 2:
+                        st.markdown('<div class="bb-ph" style="margin-top:12px">📉 QUARTERLY REVENUE TREND</div>', unsafe_allow_html=True)
+                        _fig_rev = dark_fig(220)
+                        _fig_rev.add_trace(go.Bar(
+                            x=_rev_chart_labels, y=_rev_chart_vals,
+                            marker=dict(color="rgba(255,102,0,0.25)", line=dict(color="#FF6600", width=1)),
+                            hovertext=[f"${v:.2f}B" for v in _rev_chart_vals], hoverinfo="text",
+                            name="Revenue ($B)",
+                        ))
+                        _fig_rev.add_trace(go.Scatter(
+                            x=_rev_chart_labels, y=_rev_chart_vals,
+                            mode="lines+markers",
+                            line=dict(color="#FF6600", width=2),
+                            marker=dict(size=6, color="#FF6600", line=dict(width=1, color="#000")),
+                            text=[f"${v:.2f}B" for v in _rev_chart_vals],
+                            textposition="top center", textfont=dict(size=7, color="#FF8C00"),
+                            hoverinfo="skip", showlegend=False,
+                        ))
+                        _fig_rev.update_layout(
+                            margin=dict(l=40, r=10, t=28, b=40), height=220,
+                            title=dict(text="QUARTERLY REVENUE ($B)", font=dict(size=10, color="#FF6600"), x=0),
+                            xaxis=dict(color="#555", tickfont=dict(size=7, color="#666"), tickangle=-45, showgrid=False),
+                            yaxis=dict(color="#555", tickfont=dict(size=9), gridcolor="#111", tickprefix="$", ticksuffix="B"),
+                            legend=dict(font=dict(size=8, color="#888"), bgcolor="rgba(0,0,0,0)"),
+                            showlegend=False,
+                        )
+                        st.plotly_chart(_fig_rev, use_container_width=True, config={"displayModeBar": False})
             else:
                 st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Earnings matrix data unavailable.</p>', unsafe_allow_html=True)
             # ── END EARNINGS MATRIX ──────────────────────────────────────────
@@ -3900,6 +4158,62 @@ with tabs[7]:
                         unsafe_allow_html=True)
                         
                     _analyst_targets = _em_data.get("analyst_targets", [])
+                    _et_ratings = _em_data.get("analyst_ratings", {})
+
+                    # ── Analyst Ratings Block (Earnings Tab) ──
+                    if _et_ratings:
+                        _et_cons  = _et_ratings.get("consensus","—")
+                        _et_nana  = _et_ratings.get("num_analysts", 0)
+                        _et_sb    = _et_ratings.get("strong_buy",  0)
+                        _et_b     = _et_ratings.get("buy",         0)
+                        _et_h     = _et_ratings.get("hold",        0)
+                        _et_s     = _et_ratings.get("sell",        0)
+                        _et_ss    = _et_ratings.get("strong_sell", 0)
+                        _et_tot   = max(_et_ratings.get("total_rated", _et_sb+_et_b+_et_h+_et_s+_et_ss), 1)
+                        _et_tmean = _et_ratings.get("target_mean",   0)
+                        _et_tmed  = _et_ratings.get("target_median", 0)
+                        _et_tlow  = _et_ratings.get("target_low",    0)
+                        _et_thi   = _et_ratings.get("target_high",   0)
+                        _et_cur   = _em_data.get("price", 0)
+                        _et_cc    = ("#00CC44" if _et_cons.lower() in ("buy","strong buy","strongbuy","outperform","overweight")
+                                     else "#FF4444" if _et_cons.lower() in ("sell","strong sell","underperform","underweight")
+                                     else "#FF8C00")
+                        _et_up_dn = (f'+{((_et_tmean-_et_cur)/_et_cur*100):.1f}%' if _et_cur > 0 and _et_tmean > 0 else "")
+                        _et_pt_c  = "#00CC44" if _et_tmean > _et_cur else "#FF4444"
+                        def _et_bar(lbl, n, tot, col):
+                            p = min(round(n / tot * 100), 100) if tot > 0 else 0
+                            return (f'<div style="display:flex;align-items:center;gap:5px;margin:2px 0">'
+                                    f'<span style="width:58px;color:{col};font-size:8px">{lbl}</span>'
+                                    f'<div style="flex:1;background:#111;height:5px;border-radius:2px">'
+                                    f'<div style="width:{p}%;background:{col};height:5px;border-radius:2px"></div></div>'
+                                    f'<span style="color:{col};font-size:8px;width:22px;text-align:right">{n}</span></div>')
+                        _rat_html = (
+                            f'<div style="margin-top:14px;padding:10px;background:#0A0A0A;border:1px solid #1A1A1A;'
+                            f'border-radius:3px;font-family:monospace;font-size:10px">'
+                            f'<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">'
+                            f'<span style="color:#00AAFF;font-weight:700;letter-spacing:1px">ANALYST RATINGS</span>'
+                            f'<span style="color:#555;font-size:8px">{_et_nana} analysts</span></div>'
+                            f'<span style="color:{_et_cc};font-size:15px;font-weight:900;display:block;margin-bottom:7px">{_et_cons}</span>'
+                            + _et_bar("Strong Buy", _et_sb, _et_tot, "#00CC44")
+                            + _et_bar("Buy",         _et_b,  _et_tot, "#00AA33")
+                            + _et_bar("Hold",        _et_h,  _et_tot, "#FF8C00")
+                            + _et_bar("Sell",        _et_s,  _et_tot, "#FF6655")
+                            + _et_bar("Str. Sell",   _et_ss, _et_tot, "#FF4444")
+                        )
+                        if _et_tmean > 0 or _et_tlow > 0 or _et_thi > 0:
+                            _rat_html += (
+                                f'<div style="margin-top:7px;padding-top:5px;border-top:1px solid #1A1A1A">'
+                                f'<div style="color:#555;font-size:8px;letter-spacing:1px;margin-bottom:3px">PRICE TARGETS</div>'
+                                f'<div style="display:flex;justify-content:space-between">'
+                                f'<span style="color:#888;font-size:9px">Low <b style="color:#CCC">${_et_tlow:,.2f}</b></span>'
+                                f'<span style="color:#888;font-size:9px">Mean <b style="color:{_et_pt_c}">${_et_tmean:,.2f}</b>'
+                                + (f' <b style="color:{_et_pt_c};font-size:8px">{_et_up_dn}</b>' if _et_up_dn else "")
+                                + f'</span><span style="color:#888;font-size:9px">High <b style="color:#CCC">${_et_thi:,.2f}</b></span>'
+                                f'</div></div>'
+                            )
+                        _rat_html += '</div>'
+                        st.markdown(_rat_html, unsafe_allow_html=True)
+
                     if _analyst_targets:
                         at_html = '<div style="margin-top:14px;padding:10px;background:#0A0A0A;border:1px solid #1A1A1A;border-radius:3px;font-family:monospace;font-size:10px">'
                         at_html += '<div style="color:#00AAFF;font-weight:700;margin-bottom:6px">TOP ANALYST TARGETS <span style="font-weight:100;color:#555;font-size:8px">(Track Record)</span></div>'

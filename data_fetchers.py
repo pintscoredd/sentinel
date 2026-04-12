@@ -3321,6 +3321,90 @@ def get_earnings_matrix(ticker):
                 analyst_targets = (best_targets + other_targets)[:5]
         except Exception as e:
             logger.debug(f"Error caught: {e}")
+
+        # ── Analyst Ratings Consensus ──
+        analyst_ratings = {}
+        try:
+            rec_key = info.get("recommendationKey", "") or ""
+            num_analysts = _safe_int(info.get("numberOfAnalystOpinions"), 0)
+            target_mean   = _safe_float(info.get("targetMeanPrice"), 0)
+            target_median = _safe_float(info.get("targetMedianPrice"), 0)
+            target_low    = _safe_float(info.get("targetLowPrice"), 0)
+            target_high   = _safe_float(info.get("targetHighPrice"), 0)
+
+            # Period breakdown from recommendations_summary
+            strong_buy = buy = hold = sell = strong_sell = 0
+            try:
+                rs = t.recommendations_summary
+                if rs is not None and not rs.empty:
+                    latest = rs.iloc[0]
+                    strong_buy  = int(latest.get("strongBuy",  0) or 0)
+                    buy         = int(latest.get("buy",        0) or 0)
+                    hold        = int(latest.get("hold",       0) or 0)
+                    sell        = int(latest.get("sell",       0) or 0)
+                    strong_sell = int(latest.get("strongSell", 0) or 0)
+            except Exception:
+                pass
+
+            # Fallback: derive counts from upgrades_downgrades if summary empty
+            if (strong_buy + buy + hold + sell + strong_sell) == 0:
+                try:
+                    ud2 = t.upgrades_downgrades
+                    if ud2 is not None and not ud2.empty:
+                        ud2 = ud2.reset_index()
+                        cutoff = pd.Timestamp.now() - pd.Timedelta(days=90)
+                        ud2 = ud2[pd.to_datetime(ud2["GradeDate"]) >= cutoff]
+                        grade_map = {
+                            "Strong Buy": "strong_buy", "Buy": "buy", "Outperform": "buy",
+                            "Overweight": "buy", "Positive": "buy",
+                            "Hold": "hold", "Neutral": "hold", "Market Perform": "hold",
+                            "Equal-Weight": "hold", "In-Line": "hold",
+                            "Underperform": "sell", "Underweight": "sell",
+                            "Negative": "sell", "Sell": "sell",
+                            "Strong Sell": "strong_sell",
+                        }
+                        for _, row in ud2.iterrows():
+                            g = str(row.get("ToGrade", "") or "")
+                            bucket = grade_map.get(g)
+                            if bucket == "strong_buy":  strong_buy  += 1
+                            elif bucket == "buy":       buy         += 1
+                            elif bucket == "hold":      hold        += 1
+                            elif bucket == "sell":      sell        += 1
+                            elif bucket == "strong_sell": strong_sell += 1
+                except Exception:
+                    pass
+
+            total_rated = strong_buy + buy + hold + sell + strong_sell
+            if total_rated == 0 and num_analysts > 0:
+                # No breakdown available but we know count — leave zeros
+                pass
+
+            _consensus_label = rec_key.replace("_", " ").title() if rec_key else ""
+            if not _consensus_label:
+                bullish = strong_buy + buy
+                bearish = sell + strong_sell
+                if total_rated > 0:
+                    if bullish / total_rated >= 0.60:   _consensus_label = "Buy"
+                    elif bearish / total_rated >= 0.40: _consensus_label = "Sell"
+                    else:                               _consensus_label = "Hold"
+
+            analyst_ratings = {
+                "consensus":     _consensus_label or "—",
+                "num_analysts":  num_analysts or total_rated,
+                "strong_buy":    strong_buy,
+                "buy":           buy,
+                "hold":          hold,
+                "sell":          sell,
+                "strong_sell":   strong_sell,
+                "total_rated":   total_rated,
+                "target_mean":   target_mean,
+                "target_median": target_median,
+                "target_low":    target_low,
+                "target_high":   target_high,
+            }
+        except Exception as e:
+            logger.debug(f"Analyst ratings error: {e}")
+
         return {
             "quarterly": quarterly,
             "estimates": estimates,
@@ -3346,6 +3430,7 @@ def get_earnings_matrix(ticker):
             "trailing_eps": _safe_float(info.get("trailingEps"), 0),
             "market_cap": _safe_float(info.get("marketCap"), 0),
             "analyst_targets": analyst_targets,
+            "analyst_ratings": analyst_ratings,
         }
     except Exception as e:
         logger.error("Earnings Matrix Error: %s", e)
