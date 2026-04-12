@@ -407,8 +407,12 @@ def get_heatmap_data():
     tickers = [tkr for _, tkr in flat_jobs]
     
     try:
-        data = yf.download(list(set(tickers)), period="5d", progress=False, threads=True)
-        closes = data["Close"]
+        data = yf.download(list(set(tickers)), period="5d", progress=False, threads=True, auto_adjust=True)
+        # Handle both multi-level and single-level column index
+        if isinstance(data.columns, pd.MultiIndex):
+            closes = data["Close"] if "Close" in data.columns.get_level_values(0) else data.xs("Close", axis=1, level=0, drop_level=True)
+        else:
+            closes = data["Close"] if "Close" in data.columns else data
 
         # Batch fetch market cap using yfinance directly (fast_info avoids 401)
         mcaps = {}
@@ -2846,19 +2850,48 @@ def get_ticker_exchange(ticker):
     EXCHANGE_MAP = {
         "NMS": "NASDAQ", "NGM": "NASDAQ", "NCM": "NASDAQ", "NYQ": "NYSE",
         "ASE": "AMEX", "AMEX": "AMEX", "PCX": "AMEX", "PNK": "OTC", "OTC": "OTC",
-        "BTT": "NYSE", "NYSEArca": "AMEX", "NasdaqCM": "NASDAQ", "NasdaqGS": "NASDAQ", "NasdaqGM": "NASDAQ", "NYSE": "NYSE",
+        "BTT": "NYSE", "NYSEArca": "AMEX", "NasdaqCM": "NASDAQ", "NasdaqGS": "NASDAQ",
+        "NasdaqGM": "NASDAQ", "NYSE": "NYSE", "NYSEMkt": "AMEX", "BATS": "BATS",
+        "CBOE": "CBOE", "PINK": "OTC",
     }
+    # Known tickers that are definitely on NYSE or other exchanges
+    NYSE_KNOWN = {
+        "JPM","BAC","WFC","GS","MS","C","AXP","V","MA","BRK-B","XOM","CVX","JNJ",
+        "PG","KO","WMT","HD","UNH","MMM","IBM","GE","CAT","BA","RTX","LMT","HON",
+        "DE","MCD","DIS","MO","PM","T","VZ","PFE","ABBV","BMY","MRK","LLY","ABT",
+        "TMO","UNP","NSC","SHW","ECL","LIN","APD","NUE","FCX","CLF","X","DD",
+        "DOW","NEM","FCX","PSX","MPC","VLO","OXY","COP","SLB","HAL","EOG","DVN",
+        "PLD","AMT","CCI","PSA","SPG","O","DLR","WELL","AVB","EQR","NEE","DUK",
+        "SO","AEP","D","EXC","PCG","SRE","XEL","CEG","WM","RSG","CMG","YUM",
+        "DG","DLTR","TGT","KR","SYY","CLX","KMB","GIS","CPB","CAG","HRL",
+    }
+    if ticker.upper() in NYSE_KNOWN:
+        return f"NYSE:{ticker.upper()}"
     try:
         tk = get_yf_ticker(ticker)
         info = tk.info if tk else {}
-        exch = info.get("exchange", "") or info.get("fullExchangeName", "")
+        exch = info.get("exchange", "") or info.get("fullExchangeName", "") or ""
         tv_prefix = EXCHANGE_MAP.get(exch, None)
-        if tv_prefix: return f"{tv_prefix}:{ticker}"
+        if tv_prefix and tv_prefix != "OTC":
+            return f"{tv_prefix}:{ticker}"
+        exch_lower = exch.lower()
+        if "nasdaq" in exch_lower: return f"NASDAQ:{ticker}"
+        if "nyse" in exch_lower or "new york" in exch_lower: return f"NYSE:{ticker}"
+        if "amex" in exch_lower or "arca" in exch_lower: return f"AMEX:{ticker}"
+        # Use quoteType / market to differentiate
+        market = info.get("market", "")
+        if market in ("us_market",):
+            qt = info.get("quoteType", "")
+            if qt == "EQUITY":
+                # Check if symbol sounds NASDAQ-like (4+ letters, no -) or NYSE-like
+                clean = ticker.upper().replace("-","")
+                if len(clean) >= 4 and clean.isalpha():
+                    return f"NASDAQ:{ticker}"
+                return f"NYSE:{ticker}"
     except Exception as e:
         logger.debug(f"Error caught: {e}")
-    for prefix in ["NASDAQ", "NYSE", "AMEX"]:
-        pass  # fallback only; exchange lookup failed
-    return f"NASDAQ:{ticker}"
+    # Fallback: try NYSE first (more large-caps on NYSE than NASDAQ)
+    return f"NYSE:{ticker}"
 
 
 @st.cache_data(ttl=1800)
@@ -2867,7 +2900,28 @@ def get_full_financials(ticker):
     try:
         t = get_yf_ticker(ticker)
         if t is None: return {}
-        income, cashflow, balance = t.quarterly_financials, t.quarterly_cashflow, t.quarterly_balance_sheet
+        
+        # Try multiple attribute names for compatibility across yfinance versions
+        income, cashflow, balance = None, None, None
+        for attr in ["quarterly_financials", "quarterly_income_stmt"]:
+            try:
+                val = getattr(t, attr, None)
+                if val is not None and not val.empty:
+                    income = val; break
+            except Exception: pass
+        for attr in ["quarterly_cashflow", "quarterly_cash_flow"]:
+            try:
+                val = getattr(t, attr, None)
+                if val is not None and not val.empty:
+                    cashflow = val; break
+            except Exception: pass
+        for attr in ["quarterly_balance_sheet", "quarterly_balancesheet"]:
+            try:
+                val = getattr(t, attr, None)
+                if val is not None and not val.empty:
+                    balance = val; break
+            except Exception: pass
+
         if income is None or income.empty: return {}
 
         quarters = list(income.columns[:4])
@@ -2884,18 +2938,18 @@ def get_full_financials(ticker):
                         if v is not None and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))): return float(v)
                 return None
 
-            row["revenue"]    = _get(income, "Total Revenue")
+            row["revenue"]    = _get(income, "Total Revenue", "Revenue")
             row["gross_profit"]= _get(income, "Gross Profit")
-            row["op_income"]  = _get(income, "Operating Income", "EBIT")
-            row["net_income"] = _get(income, "Net Income")
-            row["ebitda"]     = _get(income, "EBITDA", "Normalized EBITDA")
-            row["eps"]        = _get(income, "Diluted EPS", "Basic EPS")
-            row["int_expense"]= _get(income, "Interest Expense")
+            row["op_income"]  = _get(income, "Operating Income", "EBIT", "Operating Income Or Loss")
+            row["net_income"] = _get(income, "Net Income", "Net Income Common Stockholders")
+            row["ebitda"]     = _get(income, "EBITDA", "Normalized EBITDA", "Reconciled Ebitda")
+            row["eps"]        = _get(income, "Diluted EPS", "Basic EPS", "Basic Continuous Operations")
+            row["int_expense"]= _get(income, "Interest Expense", "Interest Expense Non Operating")
             row["free_cashflow"] = _get(cashflow, "Free Cash Flow")
-            row["op_cashflow"]   = _get(cashflow, "Operating Cash Flow")
-            row["capex"]         = _get(cashflow, "Capital Expenditure")
-            row["total_debt"]    = _get(balance, "Total Debt", "Long Term Debt And Capital Lease Obligation")
-            row["cash"]          = _get(balance, "Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments")
+            row["op_cashflow"]   = _get(cashflow, "Operating Cash Flow", "Cash Flow From Continuing Operating Activities")
+            row["capex"]         = _get(cashflow, "Capital Expenditure", "Purchase Of Ppe")
+            row["total_debt"]    = _get(balance, "Total Debt", "Long Term Debt And Capital Lease Obligation", "Total Liabilities Net Minority Interest")
+            row["cash"]          = _get(balance, "Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments", "Cash And Short Term Investments")
 
             if row["revenue"] and row["revenue"] > 0:
                 if row["gross_profit"] is not None: row["gross_margin"] = row["gross_profit"] / row["revenue"] * 100
@@ -2904,7 +2958,8 @@ def get_full_financials(ticker):
 
             results[q_str] = row
         return results
-    except Exception:
+    except Exception as e:
+        logger.debug(f"get_full_financials error: {e}")
         return {}
 
 @st.cache_data(ttl=1800)
