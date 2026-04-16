@@ -1198,15 +1198,63 @@
       sg.setAttribute('color', new THREE.Float32BufferAttribute(sc, 3));
       scene.add(new THREE.Points(sg, new THREE.PointsMaterial({ size: .11, vertexColors: true })));
 
-      // ── HOTSPOT DATA (dynamic from Streamlit or fallback)
+      // ── HOTSPOT DATA (auto-updated from GDELT + dynamic theater scan)
       let HOTSPOTS = [];
-      const FALLBACK_HOTSPOTS = [
-        { lat: 31.5, lon: 34.8, label: 'GAZA/ISRAEL', sev: 'critical', type: 'conflict', title: 'Gaza — Active Conflict Zone', body: 'Ongoing operations in Gaza.', mkt: 'WTI, GLD, XLE, ITA', tags: ['OIL RISK', 'ESCALATION'] },
-        { lat: 14, lon: 43, label: 'RED SEA', sev: 'critical', type: 'shipping', title: 'Red Sea — Houthi Shipping Campaign', body: 'Houthi attacks on commercial vessels.', mkt: 'Container ETFs, FDX, UPS', tags: ['SHIPPING', 'HOUTHI'] },
+      // Minimal static fallback — only used if ALL dynamic fetches fail
+      const STATIC_FALLBACK_HOTSPOTS = [
+        { lat: 31.5, lon: 34.8, label: 'MIDDLE EAST', sev: 'critical', type: 'conflict', title: 'Middle East — Active Conflict Zone', body: 'Ongoing operations and tensions.', mkt: 'WTI, GLD, XLE, ITA', tags: ['OIL RISK', 'ESCALATION'] },
         { lat: 49, lon: 31, label: 'UKRAINE', sev: 'critical', type: 'conflict', title: 'Ukraine — Active War Theater', body: 'Frontline active across 1,000km.', mkt: 'NG=F, ZW=F, Defense ETFs', tags: ['NATGAS', 'GRAIN', 'NATO'] },
-        { lat: 25, lon: 121, label: 'TAIWAN', sev: 'elevated', type: 'trade', title: 'Taiwan Strait — PLA Military Posture', body: 'TSMC produces 90%+ advanced chips.', mkt: 'SMH, NVDA, AAPL, TSM', tags: ['TSMC', 'SEMICONDUCTORS'] },
-        { lat: 26.5, lon: 56, label: 'HORMUZ', sev: 'elevated', type: 'energy', title: 'Strait of Hormuz', body: '20% of global oil transits daily.', mkt: 'WTI, Brent, XLE', tags: ['OIL', 'IRAN'] },
       ];
+      // Dynamic hotspot queries — searches GDELT for latest conflict zones
+      const DYNAMIC_HOTSPOT_QUERIES = [
+        { query: 'US Iran conflict blockade military', label: 'US-IRAN', lat: 26.5, lon: 56, type: 'conflict', mkt: 'WTI, XLE, GLD, USO' },
+        { query: 'gaza israel hamas ceasefire war', label: 'GAZA/ISRAEL', lat: 31.5, lon: 34.8, type: 'conflict', mkt: 'WTI, GLD, XLE, ITA' },
+        { query: 'houthi red sea shipping attack', label: 'RED SEA', lat: 14, lon: 43, type: 'shipping', mkt: 'Container ETFs, FDX, UPS' },
+        { query: 'ukraine russia war frontline', label: 'UKRAINE', lat: 49, lon: 31, type: 'conflict', mkt: 'NG=F, ZW=F, Defense ETFs' },
+        { query: 'taiwan china PLA military strait semiconductor', label: 'TAIWAN', lat: 25, lon: 121, type: 'trade', mkt: 'SMH, NVDA, AAPL, TSM' },
+        { query: 'strait hormuz iran tanker blockade', label: 'HORMUZ', lat: 26.5, lon: 56, type: 'energy', mkt: 'WTI, Brent, XLE' },
+        { query: 'sahel mali niger coup military', label: 'SAHEL', lat: 14, lon: 2, type: 'conflict', mkt: 'Uranium, Gold miners' },
+        { query: 'north korea missile nuclear', label: 'N. KOREA', lat: 39, lon: 126, type: 'conflict', mkt: 'Defense ETFs, KRW' },
+        { query: 'south china sea philippines dispute', label: 'S. CHINA SEA', lat: 12, lon: 115, type: 'trade', mkt: 'Shipping, FXI' },
+        { query: 'sudan civil war RSF humanitarian', label: 'SUDAN', lat: 15.6, lon: 32.5, type: 'conflict', mkt: 'Gold miners, Humanitarian' },
+      ];
+
+      async function autoUpdateHotspots() {
+        const newHotspots = [];
+        const promises = DYNAMIC_HOTSPOT_QUERIES.map(async (q) => {
+          try {
+            const ctrl = new AbortController();
+            setTimeout(() => ctrl.abort(), 8000);
+            const url = `https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(q.query)}%20sourcelang:english&mode=ArtList&maxrecords=3&format=json&timespan=48h`;
+            const r = await fetch(url, { signal: ctrl.signal });
+            if (!r.ok) return null;
+            const data = await r.json();
+            const count = (data.articles || []).length;
+            if (count === 0) return null;
+            const sev = count >= 3 ? 'critical' : count >= 1 ? 'elevated' : 'watch';
+            const topArt = (data.articles || [])[0];
+            const body = topArt ? (topArt.title || '').substring(0, 120) : 'Active geopolitical situation';
+            return {
+              lat: q.lat, lon: q.lon, label: q.label, sev, type: q.type,
+              title: q.label + ' — ' + (sev === 'critical' ? 'Active Conflict' : sev === 'elevated' ? 'Elevated Tensions' : 'Monitoring'),
+              body, mkt: q.mkt, tags: ['LIVE', sev.toUpperCase()],
+            };
+          } catch (e) { return null; }
+        });
+        const results = await Promise.allSettled(promises);
+        results.forEach(r => { if (r.status === 'fulfilled' && r.value) newHotspots.push(r.value); });
+        if (newHotspots.length > 0) {
+          HOTSPOTS = newHotspots;
+        } else {
+          HOTSPOTS = STATIC_FALLBACK_HOTSPOTS.slice();
+        }
+        renderMarkers();
+      }
+      // Auto-update hotspots on load and every 10 minutes
+      autoUpdateHotspots();
+      setInterval(autoUpdateHotspots, 600000);
+
+      const FALLBACK_HOTSPOTS = STATIC_FALLBACK_HOTSPOTS;
 
       const COLORS = { critical: '#FF4444', elevated: '#FF8C00', watch: '#FFCC00' };
       let customEvents = [], activeFilter = 'all';
@@ -2745,8 +2793,8 @@
       const nf = document.getElementById('nf-items');
       // GDELT DOC 2.0 API — multiple query variants for resilience
       const URLS = [
-        'https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict OR war OR strike OR attack OR military)%20sourcelang:english&mode=ArtList&maxrecords=8&format=json&timespan=24h&sort=DateDesc',
-        'https://api.gdeltproject.org/api/v2/doc/doc?query=(geopolitical OR sanctions OR military)%20sourcelang:english&mode=ArtList&maxrecords=8&format=json&timespan=48h&sort=DateDesc',
+        'https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict OR war OR strike OR attack OR military OR Iran OR blockade OR ceasefire)%20sourcelang:english&mode=ArtList&maxrecords=8&format=json&timespan=24h&sort=DateDesc',
+        'https://api.gdeltproject.org/api/v2/doc/doc?query=(geopolitical OR sanctions OR military OR Iran OR naval)%20sourcelang:english&mode=ArtList&maxrecords=8&format=json&timespan=48h&sort=DateDesc',
         'https://api.gdeltproject.org/api/v2/doc/doc?query=conflict%20sourcelang:english&mode=ArtList&maxrecords=5&format=json&timespan=72h',
       ];
       for (const url of URLS) {
@@ -2784,10 +2832,11 @@
 
     // ── THEATER STATUS
     const THEATERS = [
+      { name: 'US-IRAN', query: 'US Iran conflict blockade ceasefire nuclear', lat: 26.5, lon: 56, base: 'critical' },
       { name: 'MIDDLE EAST', query: 'gaza israel hamas hezbollah', lat: 31.5, lon: 34.8, base: 'critical' },
       { name: 'UKRAINE', query: 'ukraine russia war frontline', lat: 49, lon: 31, base: 'critical' },
       { name: 'RED SEA', query: 'houthi red sea shipping attack', lat: 14, lon: 43, base: 'critical' },
-      { name: 'HORMUZ', query: 'strait hormuz iran tanker', lat: 26.5, lon: 56, base: 'elevated' },
+      { name: 'HORMUZ', query: 'strait hormuz iran tanker blockade', lat: 26.5, lon: 56, base: 'elevated' },
       { name: 'SAHEL', query: 'sahel mali niger coup', lat: 14, lon: 2, base: 'elevated' },
       { name: 'TAIWAN', query: 'taiwan china PLA military strait', lat: 25, lon: 121, base: 'watch' },
       { name: 'S. CHINA SEA', query: 'south china sea philippines', lat: 12, lon: 115, base: 'watch' },

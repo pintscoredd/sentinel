@@ -645,7 +645,11 @@ SENTINEL BRIEFING — {EXACT DATE FROM INJECTION} {TIME PST}
 
 ▌ GEOPOLITICAL RADAR
   Use injected LIVE GEOPOLITICAL HEADLINES as primary source. Label each entry [LIVE HEADLINE] or [MODEL KNOWLEDGE].
-  For each event (minimum 2, maximum 4):
+  IMPORTANT: Always factor in ALL ongoing geopolitical conflicts that are currently active, even if not in GDELT headlines.
+  As of mid-April 2026, active situations include: US-Iran conflict (naval blockade, ceasefire negotiations, Strait of Hormuz tensions),
+  Ukraine-Russia war, Middle East (Gaza/Israel), Red Sea shipping disruptions (Houthis), Taiwan Strait tensions, Sudan civil war.
+  Cross-reference these with injected headlines — if a conflict is absent from GDELT, note it from model knowledge and assess market impact.
+  For each event (minimum 3, maximum 5):
   [EVENT NAME] — [Status in 1-2 sentences using specific locations, actor names, and dates]
   → Direct market impact: [specific assets/sectors already pricing this, with % move if known]
   → Second-order: [one level deeper — which sector, currency, or EM economy feels this next]
@@ -932,36 +936,50 @@ def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
     top_calls = call_gex[:7]
     top_puts = put_gex[:5]
     
-    # Fetch ^SPX intraday data
-    df = yf.download("^SPX", period="5d", interval="15m", progress=False)
+    # Fetch ^SPX intraday data — 5-minute candles, today's session only
+    df = yf.download("^SPX", period="1d", interval="5m", progress=False)
     
     fig = go.Figure()
     
     if df is not None and not df.empty:
         df = df.dropna()
-        if len(df) < 5: return None
-        # Check MultiIndex
-        if isinstance(df.columns, pd.MultiIndex):
-            close_col = df.columns[df.columns.get_level_values(0) == "Close"][0]
-            open_col = df.columns[df.columns.get_level_values(0) == "Open"][0]
-            high_col = df.columns[df.columns.get_level_values(0) == "High"][0]
-            low_col = df.columns[df.columns.get_level_values(0) == "Low"][0]
+        # Filter to today's session only
+        import pytz as _ptz
+        _et = _ptz.timezone("US/Eastern")
+        _today = pd.Timestamp.now(tz=_et).normalize()
+        if df.index.tz is None:
+            df.index = df.index.tz_localize("US/Eastern")
+        df = df[df.index >= _today]
+        if len(df) < 2:
+            # Fallback: if no data today (weekend/holiday), use last trading day
+            df = yf.download("^SPX", period="1d", interval="5m", progress=False)
+            if df is not None and not df.empty:
+                df = df.dropna()
+        if df is None or df.empty or len(df) < 2:
+            pass  # Will still render GEX levels without candles
         else:
-            close_col = "Close"
-            open_col = "Open"
-            high_col = "High"
-            low_col = "Low"
-            
-        fig.add_trace(go.Candlestick(
-            x=df.index,
-            open=df[open_col].values.flatten() if hasattr(df[open_col], "values") else df[open_col],
-            high=df[high_col].values.flatten() if hasattr(df[high_col], "values") else df[high_col],
-            low=df[low_col].values.flatten() if hasattr(df[low_col], "values") else df[low_col],
-            close=df[close_col].values.flatten() if hasattr(df[close_col], "values") else df[close_col],
-            name="SPX",
-            increasing_line_color="#00CC44",
-            decreasing_line_color="#FF4444"
-        ))
+            # Check MultiIndex
+            if isinstance(df.columns, pd.MultiIndex):
+                close_col = df.columns[df.columns.get_level_values(0) == "Close"][0]
+                open_col = df.columns[df.columns.get_level_values(0) == "Open"][0]
+                high_col = df.columns[df.columns.get_level_values(0) == "High"][0]
+                low_col = df.columns[df.columns.get_level_values(0) == "Low"][0]
+            else:
+                close_col = "Close"
+                open_col = "Open"
+                high_col = "High"
+                low_col = "Low"
+                
+            fig.add_trace(go.Candlestick(
+                x=df.index,
+                open=df[open_col].values.flatten() if hasattr(df[open_col], "values") else df[open_col],
+                high=df[high_col].values.flatten() if hasattr(df[high_col], "values") else df[high_col],
+                low=df[low_col].values.flatten() if hasattr(df[low_col], "values") else df[low_col],
+                close=df[close_col].values.flatten() if hasattr(df[close_col], "values") else df[close_col],
+                name="SPX",
+                increasing_line_color="#00CC44",
+                decreasing_line_color="#FF4444"
+            ))
 
     # Add Call Wall lines
     for i, (strike, gex_val) in enumerate(top_calls):

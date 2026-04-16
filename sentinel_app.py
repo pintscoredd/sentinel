@@ -1460,6 +1460,12 @@ with tabs[1]:
                     if len(_rev_chart_labels) >= 2:
                         st.markdown('<div class="bb-ph" style="margin-top:12px">📉 QUARTERLY REVENUE TREND</div>', unsafe_allow_html=True)
                         _fig_rev = dark_fig(220)
+                        # Scale y-axis properly based on actual data range
+                        _rev_min = min(_rev_chart_vals) if _rev_chart_vals else 0
+                        _rev_max = max(_rev_chart_vals) if _rev_chart_vals else 1
+                        _rev_pad = (_rev_max - _rev_min) * 0.15 if _rev_max > _rev_min else _rev_max * 0.1
+                        _rev_ymin = max(0, _rev_min - _rev_pad)
+                        _rev_ymax = _rev_max + _rev_pad
                         _fig_rev.add_trace(go.Bar(
                             x=_rev_chart_labels, y=_rev_chart_vals,
                             marker=dict(color="rgba(255,102,0,0.25)", line=dict(color="#FF6600", width=1)),
@@ -1479,7 +1485,8 @@ with tabs[1]:
                             margin=dict(l=40, r=10, t=28, b=40), height=220,
                             title=dict(text="QUARTERLY REVENUE ($B)", font=dict(size=10, color="#FF6600"), x=0),
                             xaxis=dict(color="#555", tickfont=dict(size=7, color="#666"), tickangle=-45, showgrid=False),
-                            yaxis=dict(color="#555", tickfont=dict(size=9), gridcolor="#111", tickprefix="$", ticksuffix="B"),
+                            yaxis=dict(color="#555", tickfont=dict(size=9), gridcolor="#111", tickprefix="$", ticksuffix="B",
+                                       range=[_rev_ymin, _rev_ymax]),
                             legend=dict(font=dict(size=8, color="#888"), bgcolor="rgba(0,0,0,0)"),
                             showlegend=False,
                         )
@@ -2603,28 +2610,6 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
 
             st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-            # ── 5-Min SPX Intraday Chart ──
-            st.markdown('<div class="bb-ph">📈 SPX INTRADAY — 5 MIN (CURRENT SESSION)</div>', unsafe_allow_html=True)
-            _spx_tv_sym = "FOREXCOM:SPXUSD"
-            components.html(f"""<!DOCTYPE html><html>
-<head><style>body{{margin:0;padding:0;background:#000;overflow:hidden}}</style></head>
-<body><div class="tradingview-widget-container">
-<div id="tv_spx_1m"></div>
-<script src="https://s3.tradingview.com/tv.js"></script>
-<script>
-new TradingView.widget({{
-  "width":"100%","height":320,"symbol":"{_spx_tv_sym}","interval":"5",
-  "range":"1D","timezone":"America/Los_Angeles","theme":"dark","style":"1","locale":"en",
-  "toolbar_bg":"#000","enable_publishing":false,"hide_side_toolbar":false,
-  "allow_symbol_change":false,"save_image":false,
-  "container_id":"tv_spx_1m",
-  "backgroundColor":"rgba(0,0,0,1)","gridColor":"rgba(20,20,20,1)",
-  "studies":["STD;Volume"],
-  "show_popup_button":false
-}});
-</script></div></body></html>""", height=325, scrolling=False)
-            st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
             st.markdown('<div class="bb-ph">📊 GAMMA EXPOSURE (GEX) PROFILE</div>', unsafe_allow_html=True)
 
             _exp_col, _range_col = st.columns([2, 2])
@@ -2691,7 +2676,7 @@ new TradingView.widget({{
                 _src_html += "</div>"
                 st.markdown(_src_html, unsafe_allow_html=True)
 
-                _gex_col, _info_col = st.columns([3, 2])
+                _gex_col, _ovw_col = st.columns([3, 2])
                 with _gex_col:
                     _fig = render_0dte_gex_chart(_gex, _gf_spy, _mp_spy,
                                                 spot_spx=_spot_for_chart,
@@ -2700,18 +2685,71 @@ new TradingView.widget({{
                         st.plotly_chart(_fig, use_container_width=True, config={'displayModeBar': False})
                     else:
                         st.markdown('<div style="color:#555;font-family:monospace;font-size:11px">GEX data unavailable.</div>', unsafe_allow_html=True)
-                with _info_col:
-                    _wall_strike, _wall_gex = None, 0
-                    for _wk, _wv in _gex.items():
-                        if abs(_wv) > abs(_wall_gex):
-                            _wall_gex, _wall_strike = _wv, _wk
-                    _wall_spx = f"${_wall_strike * 10:,.0f}" if _wall_strike else "—"
-                    _wall_dir = "Call Wall" if _wall_gex >= 0 else "Put Wall"
-                    st.markdown(render_0dte_gex_decoder(
-                        _gf_spy, _mp_spy, _wall_spx, _wall_dir,
-                        spot_spx=_spot_for_chart,
-                        wall_gex_m=abs(_wall_gex) if _wall_gex else None
-                    ), unsafe_allow_html=True)
+                with _ovw_col:
+                    # ── TODAY OVERVIEW panel ──
+                    st.markdown('<div style="color:#FF6600;font-weight:700;font-size:12px;letter-spacing:1px;'
+                                'margin-bottom:8px;font-family:monospace">📋 TODAY OVERVIEW</div>', unsafe_allow_html=True)
+                    _ovw_spot = _spot_for_chart or (_spx["spot"] if _spx else None)
+                    _ovw_vwap = _spx["vwap"] if _spx else None
+                    _ovw_high = _spx["high"] if _spx else None
+                    _ovw_low = _spx["low"] if _spx else None
+                    _ovw_em = round(_ovw_high - _ovw_low, 1) if _ovw_high and _ovw_low else None
+                    _ovw_vix = _vix_data[0] if _vix_data else None
+                    _ovw_pcr = compute_pcr(_0dte_chain) if _0dte_chain else None
+                    if _ovw_pcr is None and _use_cboe:
+                        _ovw_pcr = compute_cboe_pcr(_cboe_opts)
+                    _ovw_total_gex = _total_gex_bn
+                    _ovw_gf_spx = _gf_spy * 10 if _gf_spy else None
+                    _ovw_mp_spx = _mp_spy * 10 if _mp_spy else None
+
+                    # Gamma regime
+                    if _ovw_spot and _ovw_gf_spx:
+                        _gamma_regime = "POSITIVE γ" if _ovw_spot > _ovw_gf_spx else "NEGATIVE γ"
+                        _gamma_color = "#00CC44" if _ovw_spot > _ovw_gf_spx else "#FF4444"
+                        _gamma_desc = "Dealer dampening" if _ovw_spot > _ovw_gf_spx else "Dealer amplifying"
+                    else:
+                        _gamma_regime, _gamma_color, _gamma_desc = "—", "#888", ""
+
+                    def _ovw_row(label, value, color="#CCC", sub=""):
+                        sub_html = f'<span style="color:#555;font-size:9px;margin-left:6px">{sub}</span>' if sub else ""
+                        return (f'<div style="display:flex;justify-content:space-between;align-items:center;'
+                                f'padding:5px 8px;border-bottom:1px solid #111;font-family:monospace;font-size:11px">'
+                                f'<span style="color:#888">{label}</span>'
+                                f'<span style="color:{color};font-weight:600">{value}{sub_html}</span></div>')
+
+                    _ovw_html = '<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #FF6600;padding:2px 0">'
+                    _ovw_html += _ovw_row("SPX SPOT", f"${_ovw_spot:,.2f}" if _ovw_spot else "—", "#FFF")
+                    _ovw_html += _ovw_row("VWAP", f"${_ovw_vwap:,.2f}" if _ovw_vwap else "—",
+                                          "#00CC44" if _ovw_spot and _ovw_vwap and _ovw_spot > _ovw_vwap else "#FF4444")
+                    _ovw_html += _ovw_row("HIGH / LOW",
+                                          f"${_ovw_high:,.2f} / ${_ovw_low:,.2f}" if _ovw_high and _ovw_low else "—",
+                                          "#CCC")
+                    _ovw_html += _ovw_row("DAY RANGE", f"±{_ovw_em:.1f} pts" if _ovw_em else "—", "#FF8C00")
+                    _ovw_html += _ovw_row("VIX", f"{_ovw_vix:.2f}" if _ovw_vix else "—",
+                                          "#FF4444" if _ovw_vix and _ovw_vix > 25 else "#FF8C00" if _ovw_vix and _ovw_vix > 18 else "#00CC44")
+                    _ovw_html += _ovw_row("PCR", f"{_ovw_pcr:.2f}" if _ovw_pcr else "—",
+                                          "#FF4444" if _ovw_pcr and _ovw_pcr > 1.0 else "#00CC44" if _ovw_pcr and _ovw_pcr < 0.7 else "#FF8C00")
+                    _ovw_html += _ovw_row("NET GEX",
+                                          f"${_ovw_total_gex:+.2f}Bn" if _ovw_total_gex is not None else "—",
+                                          "#00CC44" if _ovw_total_gex and _ovw_total_gex >= 0 else "#FF4444")
+                    _ovw_html += _ovw_row("γ FLIP", f"${_ovw_gf_spx:,.0f}" if _ovw_gf_spx else "—", "#FFCC00")
+                    _ovw_html += _ovw_row("MAX PAIN", f"${_ovw_mp_spx:,.0f}" if _ovw_mp_spx else "—", "#AA44FF")
+                    _ovw_html += _ovw_row("γ REGIME", _gamma_regime, _gamma_color, _gamma_desc)
+                    _ovw_html += '</div>'
+                    st.markdown(_ovw_html, unsafe_allow_html=True)
+
+                # ── GEX DECODER (full width below) ──
+                _wall_strike, _wall_gex = None, 0
+                for _wk, _wv in _gex.items():
+                    if abs(_wv) > abs(_wall_gex):
+                        _wall_gex, _wall_strike = _wv, _wk
+                _wall_spx = f"${_wall_strike * 10:,.0f}" if _wall_strike else "—"
+                _wall_dir = "Call Wall" if _wall_gex >= 0 else "Put Wall"
+                st.markdown(render_0dte_gex_decoder(
+                    _gf_spy, _mp_spy, _wall_spx, _wall_dir,
+                    spot_spx=_spot_for_chart,
+                    wall_gex_m=abs(_wall_gex) if _wall_gex else None
+                ), unsafe_allow_html=True)
             else:
                 st.markdown('<div style="color:#555;font-family:monospace;font-size:11px;padding:20px;text-align:center">'
                             '📊 GEX Profile unavailable — CBOE could not be fetched and no 0DTE chain loaded.</div>',

@@ -1141,7 +1141,8 @@ def build_brief_context():
         "OR central bank OR interest rate OR oil OR tariff OR embargo "
         "OR Israel OR Iran OR Hamas OR Hezbollah OR Ukraine OR Russia "
         "OR Taiwan OR China OR Red Sea OR Houthi OR Gaza OR nuclear "
-        "OR missile OR airstrike OR invasion OR ceasefire"
+        "OR missile OR airstrike OR invasion OR ceasefire OR blockade "
+        "OR naval OR strait hormuz OR Persian Gulf OR Sudan OR India Pakistan"
     )
 
     def _fetch_geo(query):
@@ -3077,11 +3078,24 @@ def get_earnings_matrix(ticker):
         except Exception as e:
             logger.debug(f"Error caught: {e}")
         # ────────────────────────────────────────────────
-        # SOURCE 2: quarterly_financials (fills EPS + revenue gaps)
+        # SOURCE 2: quarterly_financials + quarterly_income_stmt (fills EPS + revenue gaps)
         # ────────────────────────────────────────────────
+        _income_sources = []
         try:
-            income = t.quarterly_financials
-            if income is not None and not income.empty:
+            _qf = t.quarterly_financials
+            if _qf is not None and not _qf.empty:
+                _income_sources.append(_qf)
+        except Exception:
+            pass
+        try:
+            _qi = t.quarterly_income_stmt
+            if _qi is not None and not _qi.empty:
+                _income_sources.append(_qi)
+        except Exception:
+            pass
+
+        for income in _income_sources:
+            try:
                 for col in income.columns:
                     dt = pd.to_datetime(col)
                     month, year = dt.month, dt.year
@@ -3090,7 +3104,7 @@ def get_earnings_matrix(ticker):
 
                     # EPS — only if not already filled by earnings_dates
                     if fy not in quarterly or ql not in quarterly.get(fy, {}):
-                        for key in ["Diluted EPS", "Basic EPS"]:
+                        for key in ["Diluted EPS", "Basic EPS", "Basic Continuous Operations"]:
                             if key in income.index:
                                 v = income.loc[key, col]
                                 if v is not None and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
@@ -3099,17 +3113,18 @@ def get_earnings_matrix(ticker):
                                     quarterly[fy][ql] = round(float(v), 2)
                                     break
 
-                    # Revenue
-                    for key in ["Total Revenue", "Revenue"]:
-                        if key in income.index:
-                            v = income.loc[key, col]
-                            if v is not None and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
-                                if fy not in revenue_q:
-                                    revenue_q[fy] = {}
-                                revenue_q[fy][ql] = float(v)
-                                break
-        except Exception as e:
-            logger.debug(f"Error caught: {e}")
+                    # Revenue — try more keys
+                    if fy not in revenue_q or ql not in revenue_q.get(fy, {}):
+                        for key in ["Total Revenue", "Revenue", "Operating Revenue", "Net Revenue"]:
+                            if key in income.index:
+                                v = income.loc[key, col]
+                                if v is not None and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
+                                    if fy not in revenue_q:
+                                        revenue_q[fy] = {}
+                                    revenue_q[fy][ql] = float(v)
+                                    break
+            except Exception as e:
+                logger.debug(f"Error caught: {e}")
         # ────────────────────────────────────────────────
         # SOURCE 3: t.earnings (legacy — fills older years)
         # ────────────────────────────────────────────────
