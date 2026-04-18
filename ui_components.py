@@ -1079,15 +1079,15 @@ def render_0dte_gex_decoder(gf_spy, mp_spy, wall_spx, wall_dir, spot_spx=None, w
 
     if wall_dir == "Call Wall":
         wall_action = (
-            "<b style='color:#00CC44'>Call Wall</b> — Dealers are long gamma here. "
+            "<b style='color:#00CC44'>Call Wall</b> — Positive GEX (call OI concentration). "
             "As price rallies toward this strike, dealers must <b>sell futures/stock</b> to stay delta-neutral, "
-            "creating a natural ceiling. Price tends to <b>stall or pin</b> at this level. "
-            "A confirmed break above it forces dealers to <b>flip long</b> → can trigger a sharp squeeze."
+            "creating a <b>resistance ceiling</b>. Price tends to <b>stall or pin</b> at this level. "
+            "A confirmed break above it can trigger a sharp squeeze as dealers chase."
         )
     elif wall_dir == "Put Wall":
         wall_action = (
-            "<b style='color:#FF4444'>Put Wall</b> — Dealers are short gamma here. "
-            "As price drops toward this strike, dealers must <b>sell more futures/stock</b> to hedge, "
+            "<b style='color:#FF4444'>Put Wall</b> — Negative GEX (put OI concentration). "
+            "As price drops toward this strike, dealers must <b>sell futures/stock</b> to hedge, "
             "which <b>accelerates the decline</b>. Acts as a momentum amplifier, not a floor. "
             "A bounce above it forces dealers to <b>cover shorts</b> → snap-back risk."
         )

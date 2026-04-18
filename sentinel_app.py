@@ -1066,6 +1066,29 @@ with tabs[1]:
                     except Exception:
                         pass
                     
+                    # Fallback: populate from fast_info when .info is empty/blocked
+                    fi = None
+                    if yf_tk:
+                        try:
+                            fi = yf_tk.fast_info
+                        except Exception:
+                            fi = None
+                    
+                    if fi and not info.get('marketCap'):
+                        info.setdefault('marketCap', getattr(fi, 'market_cap', None))
+                    if fi and not info.get('trailingPE'):
+                        # Compute from price & EPS if available
+                        _fi_price = getattr(fi, 'last_price', None)
+                        _fi_eps = getattr(fi, 'earnings_per_share', None) or info.get('trailingEps')
+                        if _fi_price and _fi_eps and _fi_eps != 0:
+                            info.setdefault('trailingPE', round(_fi_price / _fi_eps, 2))
+                    if fi:
+                        info.setdefault('fiftyTwoWeekHigh', getattr(fi, 'year_high', None))
+                        info.setdefault('fiftyTwoWeekLow', getattr(fi, 'year_low', None))
+                        info.setdefault('averageVolume', getattr(fi, 'three_month_average_volume', None))
+                        info.setdefault('currentPrice', getattr(fi, 'last_price', None))
+                        info.setdefault('previousClose', getattr(fi, 'previous_close', None))
+                    
                     _mc = info.get('marketCap') or _q.get('cap')
                     _mc_str = (f"${_mc/1e12:.2f}T" if _mc and _mc >= 1e12 else f"${_mc/1e9:.2f}B" if _mc and _mc > 0 else "N/A")
                     

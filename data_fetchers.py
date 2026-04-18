@@ -116,12 +116,12 @@ def _safe_float(v, default=0.0):
     except:
         return default
 
-def _safe_int(v):
+def _safe_int(v, default=0):
     try:
-        f = float(v) if v is not None else 0.0
-        return 0 if (math.isnan(f) or math.isinf(f)) else int(f)
+        f = float(v) if v is not None else float(default)
+        return default if (math.isnan(f) or math.isinf(f)) else int(f)
     except:
-        return 0
+        return default
 
 def _esc(t):
     return str(t).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;") if t else ""
@@ -905,6 +905,8 @@ def stat_arb_screener(pairs=None):
     for t1, t2 in pairs:
         try:
             if isinstance(bulk_data, pd.DataFrame):
+                if t1 not in bulk_data.columns or t2 not in bulk_data.columns:
+                    continue
                 stk1 = bulk_data[t1].dropna()
                 stk2 = bulk_data[t2].dropna()
             else:
@@ -1743,7 +1745,9 @@ def compute_gex_profile(chain, spot):
         if not required.issubset(df.columns):
             return {}
         
-        # Dealer sign convention: calls = dealer short gamma (+1), puts = dealer long gamma (-1)
+        # GEX sign convention (SpotGamma standard):
+        # Call OI → +1 → positive GEX = resistance ceiling (dealers sell into rallies)
+        # Put OI  → -1 → negative GEX = acceleration zone (dealers sell into drops)
         sign = np.where(df["type"] == "call", 1.0, -1.0)
         
         # Bid/ask volume imbalance weight (improves signal quality)
@@ -2207,7 +2211,7 @@ def compute_cboe_gex_profile(spot, option_df, expiry_limit_days=365, strike_pct=
     cutoff = pd.Timestamp("today") + pd.Timedelta(days=expiry_limit_days)
     lo, hi = spot * (1 - strike_pct), spot * (1 + strike_pct)
 
-    df = df[(df["expiration"] <= cutoff) & (df["strike"] >= lo) & (df["strike"] <= hi) & (df["gamma"] > 0) & (df["open_interest"] > 0)]
+    df = df[(df["expiration"] <= cutoff) & (df["strike"] >= lo) & (df["strike"] <= hi) & (df["gamma"] > 0) & (df["open_interest"] > 0)].copy()
     if df.empty: return {}
 
     df["gex"] = spot * df["gamma"] * df["open_interest"] * 100 * spot * 0.01
@@ -4005,7 +4009,7 @@ def fetch_btc_etf_flows_fallback():
                 if hist is None or hist.empty or len(hist) < 2: continue
                 prev_close = hist["Close"].shift(1)
                 vwap = (hist["High"] + hist["Low"] + hist["Close"]) / 3.0
-                direction = (hist["Close"] - prev_close).apply(lambda x: 1.0 if x >= 0 else -1.0)
+                direction = np.where((hist["Close"] - prev_close) >= 0, 1.0, -1.0)
                 # FIX-13: Removed arbitrary 0.10 multiplier; express in billions
                 all_data[ticker] = ((hist["Volume"] * vwap * direction) / 1e9).iloc[1:]
             except Exception as e:
@@ -4509,6 +4513,11 @@ def get_iv_term_structure(ticker="SPY"):
         # Helper defined once outside loop — avoids redefining on every expiry iteration
         def _interp_atm_iv(df_side, spot):
             df_side = df_side.copy()
+            # Filter out rows with NaN or zero IV before finding nearest strikes
+            if "impliedVolatility" in df_side.columns:
+                df_side = df_side[df_side["impliedVolatility"].notna() & (df_side["impliedVolatility"] > 0)]
+            if df_side.empty:
+                return None
             df_side["_dist"] = (df_side["strike"] - spot).abs()
             nearest = df_side.nsmallest(2, "_dist")
             if len(nearest) == 0: return None
