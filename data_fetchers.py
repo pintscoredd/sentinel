@@ -5377,3 +5377,541 @@ def get_risk_neutral_density(ticker="SPY", expiry=None):
     except Exception as e:
         logger.error("RND fetch failed", extra={"error": str(e)})
         return None
+
+
+# ════════════════════════════════════════════════════════════════════
+# SOVEREIGN 10Y YIELDS BY COUNTRY
+# ════════════════════════════════════════════════════════════════════
+@st.cache_data(ttl=300)
+def get_sovereign_10y_yields():
+    """Fetch 10-year sovereign bond yields for major countries via Yahoo Finance."""
+    SOVEREIGN_10Y = [
+        ("^TNX",   "United States",  "🇺🇸"),
+        ("^TYX",   "US 30Y (ref)",   "🇺🇸"),  # used internally; we relabel
+        # European
+        ("DE10Y.F",   "Germany",     "🇩🇪"),
+        ("FR10Y.F",   "France",      "🇫🇷"),
+        ("IT10Y.F",   "Italy",       "🇮🇹"),
+        ("ES10Y.F",   "Spain",       "🇪🇸"),
+        ("GB10Y.F",   "UK",          "🇬🇧"),
+        ("PT10Y.F",   "Portugal",    "🇵🇹"),
+        ("GR10Y.F",   "Greece",      "🇬🇷"),
+        # Asia-Pacific
+        ("JP10Y.F",   "Japan",       "🇯🇵"),
+        ("AU10Y.F",   "Australia",   "🇦🇺"),
+        ("IN10Y.F",   "India",       "🇮🇳"),
+        ("CN10Y.F",   "China",       "🇨🇳"),
+        # Americas
+        ("BR10Y.F",   "Brazil",      "🇧🇷"),
+        ("MX10Y.F",   "Mexico",      "🇲🇽"),
+    ]
+    results = []
+    for ticker, country, flag in SOVEREIGN_10Y:
+        if "30Y" in country:
+            continue  # skip 30Y ref
+        try:
+            tk = get_yf_ticker(ticker)
+            if tk is None:
+                continue
+            h = tk.history(period="5d")
+            if h.empty:
+                continue
+            current = float(h["Close"].iloc[-1])
+            prev = float(h["Close"].iloc[-2]) if len(h) > 1 else current
+            chg = current - prev
+            results.append({
+                "country": country,
+                "flag": flag,
+                "yield_pct": round(current, 3),
+                "change": round(chg, 3),
+                "ticker": ticker,
+            })
+        except Exception:
+            continue
+    # Sort by yield descending (highest first)
+    results.sort(key=lambda x: x["yield_pct"], reverse=True)
+    return results
+
+
+# ════════════════════════════════════════════════════════════════════
+# SOVEREIGN CDS RISK — PROXY VIA ETFs & SPREADS
+# ════════════════════════════════════════════════════════════════════
+@st.cache_data(ttl=600)
+def get_sovereign_cds_proxy():
+    """Approximate sovereign credit risk using spread proxies.
+    
+    Since real-time CDS data requires Bloomberg/Refinitiv, we proxy using:
+    - EM bond ETF spreads (EMB, LEMB)
+    - Individual country ETF performance (inverse = stress)
+    - FRED series for credit spreads where available
+    """
+    # High-risk sovereign proxies — ETFs that track sovereign bonds
+    SOVEREIGN_RISK = [
+        ("EMB",    "EM Sov. Bonds (USD)",  "🌍"),
+        ("LEMB",   "EM Local Currency",     "🌍"),
+        ("TUR",    "Turkey",                "🇹🇷"),
+        ("EWZ",    "Brazil",                "🇧🇷"),
+        ("RSX",    "Russia (frozen)",       "🇷🇺"),
+        ("EWW",    "Mexico",                "🇲🇽"),
+        ("INDA",   "India",                 "🇮🇳"),
+        ("GXC",    "China",                 "🇨🇳"),
+        ("EZA",    "South Africa",          "🇿🇦"),
+        ("EWI",    "Italy",                 "🇮🇹"),
+        ("GREK",   "Greece",               "🇬🇷"),
+        ("ARGT",   "Argentina",            "🇦🇷"),
+    ]
+    results = []
+    for ticker, label, flag in SOVEREIGN_RISK:
+        try:
+            q = yahoo_quote(ticker)
+            if q:
+                # Negative performance = higher risk
+                risk_signal = "HIGH" if q["pct"] < -1.5 else ("ELEVATED" if q["pct"] < -0.5 else ("MODERATE" if q["pct"] < 0 else "LOW"))
+                risk_color = "#FF4444" if risk_signal == "HIGH" else "#FF8C00" if risk_signal == "ELEVATED" else "#FFCC00" if risk_signal == "MODERATE" else "#00CC44"
+                results.append({
+                    "label": label,
+                    "flag": flag,
+                    "ticker": ticker,
+                    "price": q["price"],
+                    "pct": q["pct"],
+                    "risk_signal": risk_signal,
+                    "risk_color": risk_color,
+                })
+        except Exception:
+            continue
+    # Sort by pct ascending (worst performers = highest risk first)
+    results.sort(key=lambda x: x["pct"])
+    return results
+
+
+# ════════════════════════════════════════════════════════════════════
+# CENTRAL BANK POLICY RATES
+# ════════════════════════════════════════════════════════════════════
+@st.cache_data(ttl=3600)
+def get_central_bank_rates(fred_key=None):
+    """Fetch central bank policy rates from FRED and other sources."""
+    # FRED series for central bank rates
+    RATES = [
+        ("Federal Reserve (US)",    "🇺🇸", "FEDFUNDS",      fred_key),
+        ("ECB (Eurozone)",          "🇪🇺", "ECBDFR",        fred_key),
+        ("Bank of England (UK)",    "🇬🇧", "BOERUKM",       fred_key),
+        ("Bank of Japan",           "🇯🇵", "IRSTCB01JPM156N", fred_key),
+        ("Bank of Canada",          "🇨🇦", "IRSTCB01CAM156N", fred_key),
+        ("Reserve Bank (AU)",       "🇦🇺", "IRSTCB01AUM156N", fred_key),
+        ("Swiss National Bank",     "🇨🇭", "IRSTCB01CHM156N", fred_key),
+    ]
+    # Hardcoded fallback rates (updated as of early 2026) for when FRED key is missing
+    FALLBACK = {
+        "Federal Reserve (US)":  5.25,
+        "ECB (Eurozone)":        3.75,
+        "Bank of England (UK)":  5.00,
+        "Bank of Japan":         0.25,
+        "Bank of Canada":        4.50,
+        "Reserve Bank (AU)":     4.10,
+        "Swiss National Bank":   1.50,
+    }
+    results = []
+    for name, flag, series_id, key in RATES:
+        rate = None
+        prev_rate = None
+        if key:
+            try:
+                df = fred_series(series_id, key, 6)
+                if df is not None and not df.empty:
+                    rate = round(float(df["value"].iloc[-1]), 2)
+                    prev_rate = round(float(df["value"].iloc[-2]), 2) if len(df) > 1 else rate
+            except Exception:
+                pass
+        if rate is None:
+            rate = FALLBACK.get(name, 0.0)
+            prev_rate = rate
+        chg = round(rate - (prev_rate or rate), 2)
+        stance = "HAWKISH" if rate > 3.0 else ("NEUTRAL" if rate > 1.0 else "DOVISH")
+        stance_color = "#FF4444" if stance == "HAWKISH" else "#FF8C00" if stance == "NEUTRAL" else "#00CC44"
+        results.append({
+            "name": name, "flag": flag, "rate": rate,
+            "change": chg, "stance": stance, "stance_color": stance_color,
+        })
+    # Sort by rate descending
+    results.sort(key=lambda x: x["rate"], reverse=True)
+    return results
+
+
+# ════════════════════════════════════════════════════════════════════
+# YIELD CURVE INVERSIONS MONITOR
+# ════════════════════════════════════════════════════════════════════
+@st.cache_data(ttl=300)
+def get_yield_curve_inversions(fred_key=None):
+    """Check key yield curve spreads for inversions."""
+    SPREADS = [
+        ("10Y - 2Y",  "DGS10", "DGS2",  "Classic recession predictor"),
+        ("10Y - 3M",  "DGS10", "DTB3",  "Fed model — strongest recession signal"),
+        ("30Y - 10Y", "DGS30", "DGS10", "Long-end steepening/flattening"),
+        ("5Y - 2Y",   "DGS5",  "DGS2",  "Mid-curve tension"),
+        ("10Y - 1Y",  "DGS10", "DGS1",  "Near-term vs long-term outlook"),
+        ("30Y - 2Y",  "DGS30", "DGS2",  "Full curve slope"),
+    ]
+    results = []
+    for label, long_series, short_series, desc in SPREADS:
+        long_val, short_val = None, None
+        if fred_key:
+            try:
+                df_l = fred_series(long_series, fred_key, 5)
+                df_s = fred_series(short_series, fred_key, 5)
+                if df_l is not None and not df_l.empty:
+                    long_val = float(df_l["value"].iloc[-1])
+                if df_s is not None and not df_s.empty:
+                    short_val = float(df_s["value"].iloc[-1])
+            except Exception:
+                pass
+        if long_val is not None and short_val is not None:
+            spread = round(long_val - short_val, 3)
+            inverted = spread < 0
+            status = "INVERTED ⚠️" if inverted else ("FLAT" if abs(spread) < 0.10 else "NORMAL ✅")
+            status_color = "#FF4444" if inverted else ("#FF8C00" if abs(spread) < 0.10 else "#00CC44")
+            results.append({
+                "label": label,
+                "long_rate": round(long_val, 3),
+                "short_rate": round(short_val, 3),
+                "spread": spread,
+                "inverted": inverted,
+                "status": status,
+                "status_color": status_color,
+                "description": desc,
+            })
+    return results
+
+
+# ════════════════════════════════════════════════════════════════════
+# STOCK PROFITABILITY & BALANCE SHEET METRICS
+# ════════════════════════════════════════════════════════════════════
+@st.cache_data(ttl=600)
+def get_profitability_metrics(ticker):
+    """Fetch profitability ratios: gross margin, operating margin, EBITDA margin, net margin, ROA, ROE."""
+    try:
+        tk = get_yf_ticker(ticker)
+        if tk is None:
+            return None
+        info = {}
+        try:
+            info = tk.info
+            if not isinstance(info, dict):
+                info = {}
+        except Exception:
+            pass
+
+        # Try from info dict first
+        gross_margin = info.get("grossMargins")
+        op_margin = info.get("operatingMargins")
+        ebitda_margin = info.get("ebitdaMargins")
+        net_margin = info.get("profitMargins")
+        roa = info.get("returnOnAssets")
+        roe = info.get("returnOnEquity")
+
+        # Fallback: compute from financials if info blocked
+        if gross_margin is None or op_margin is None:
+            try:
+                inc = None
+                for attr in ["quarterly_income_stmt", "quarterly_financials"]:
+                    val = getattr(tk, attr, None)
+                    if val is not None and not val.empty:
+                        inc = val
+                        break
+                if inc is not None and not inc.empty:
+                    q = inc.columns[0]  # most recent quarter
+                    rev = None
+                    for k in ["Total Revenue", "Revenue"]:
+                        if k in inc.index:
+                            rev = float(inc.loc[k, q])
+                            break
+                    if rev and rev > 0:
+                        if gross_margin is None:
+                            for k in ["Gross Profit"]:
+                                if k in inc.index:
+                                    v = float(inc.loc[k, q])
+                                    gross_margin = v / rev
+                                    break
+                        if op_margin is None:
+                            for k in ["Operating Income", "EBIT"]:
+                                if k in inc.index:
+                                    v = float(inc.loc[k, q])
+                                    op_margin = v / rev
+                                    break
+                        if ebitda_margin is None:
+                            for k in ["EBITDA", "Normalized EBITDA", "Reconciled Ebitda"]:
+                                if k in inc.index:
+                                    v = float(inc.loc[k, q])
+                                    ebitda_margin = v / rev
+                                    break
+                        if net_margin is None:
+                            for k in ["Net Income", "Net Income Common Stockholders"]:
+                                if k in inc.index:
+                                    v = float(inc.loc[k, q])
+                                    net_margin = v / rev
+                                    break
+            except Exception:
+                pass
+
+        # Compute ROA/ROE from balance sheet if needed
+        if roa is None or roe is None:
+            try:
+                bs = None
+                for attr in ["quarterly_balance_sheet", "quarterly_balancesheet"]:
+                    val = getattr(tk, attr, None)
+                    if val is not None and not val.empty:
+                        bs = val
+                        break
+                inc2 = None
+                for attr in ["quarterly_income_stmt", "quarterly_financials"]:
+                    val = getattr(tk, attr, None)
+                    if val is not None and not val.empty:
+                        inc2 = val
+                        break
+                if bs is not None and inc2 is not None:
+                    q = bs.columns[0]
+                    net_inc = None
+                    for k in ["Net Income", "Net Income Common Stockholders"]:
+                        if k in inc2.index and q in inc2.columns:
+                            net_inc = float(inc2.loc[k, q])
+                            break
+                    if net_inc is not None:
+                        if roa is None:
+                            for k in ["Total Assets"]:
+                                if k in bs.index:
+                                    ta = float(bs.loc[k, q])
+                                    if ta > 0:
+                                        roa = (net_inc * 4) / ta  # annualize
+                                    break
+                        if roe is None:
+                            for k in ["Total Stockholders Equity", "Stockholders Equity", "Total Equity Gross Minority Interest"]:
+                                if k in bs.index:
+                                    eq = float(bs.loc[k, q])
+                                    if eq > 0:
+                                        roe = (net_inc * 4) / eq  # annualize
+                                    break
+            except Exception:
+                pass
+
+        return {
+            "gross_margin": gross_margin,
+            "op_margin": op_margin,
+            "ebitda_margin": ebitda_margin,
+            "net_margin": net_margin,
+            "roa": roa,
+            "roe": roe,
+        }
+    except Exception as e:
+        logger.debug(f"get_profitability_metrics error: {e}")
+        return None
+
+
+@st.cache_data(ttl=600)
+def get_balance_sheet_metrics(ticker):
+    """Fetch balance sheet metrics: total cash, total debt, net cash/debt, D/E, current ratio, quick ratio."""
+    try:
+        tk = get_yf_ticker(ticker)
+        if tk is None:
+            return None
+        info = {}
+        try:
+            info = tk.info
+            if not isinstance(info, dict):
+                info = {}
+        except Exception:
+            pass
+
+        total_cash = info.get("totalCash")
+        total_debt = info.get("totalDebt")
+        de_ratio = info.get("debtToEquity")
+        current_ratio = info.get("currentRatio")
+        quick_ratio = info.get("quickRatio")
+
+        # Fallback: compute from balance sheet
+        if total_cash is None or total_debt is None:
+            try:
+                bs = None
+                for attr in ["quarterly_balance_sheet", "quarterly_balancesheet"]:
+                    val = getattr(tk, attr, None)
+                    if val is not None and not val.empty:
+                        bs = val
+                        break
+                if bs is not None and not bs.empty:
+                    q = bs.columns[0]
+                    if total_cash is None:
+                        for k in ["Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments", "Cash And Short Term Investments"]:
+                            if k in bs.index:
+                                total_cash = float(bs.loc[k, q])
+                                break
+                    if total_debt is None:
+                        for k in ["Total Debt", "Long Term Debt And Capital Lease Obligation", "Long Term Debt"]:
+                            if k in bs.index:
+                                total_debt = float(bs.loc[k, q])
+                                break
+                    if de_ratio is None:
+                        equity = None
+                        for k in ["Total Stockholders Equity", "Stockholders Equity"]:
+                            if k in bs.index:
+                                equity = float(bs.loc[k, q])
+                                break
+                        if equity and equity > 0 and total_debt:
+                            de_ratio = round(total_debt / equity * 100, 2)
+                    if current_ratio is None:
+                        ca, cl = None, None
+                        for k in ["Current Assets"]:
+                            if k in bs.index:
+                                ca = float(bs.loc[k, q])
+                                break
+                        for k in ["Current Liabilities"]:
+                            if k in bs.index:
+                                cl = float(bs.loc[k, q])
+                                break
+                        if ca and cl and cl > 0:
+                            current_ratio = round(ca / cl, 2)
+                    if quick_ratio is None and current_ratio is not None:
+                        # Approximate: quick = (current assets - inventory) / current liabilities
+                        inv = None
+                        for k in ["Inventory"]:
+                            if k in bs.index:
+                                inv = float(bs.loc[k, q])
+                                break
+                        if inv is not None and ca and cl and cl > 0:
+                            quick_ratio = round((ca - inv) / cl, 2)
+            except Exception:
+                pass
+
+        net_cash_debt = None
+        if total_cash is not None and total_debt is not None:
+            net_cash_debt = total_cash - total_debt
+
+        return {
+            "total_cash": total_cash,
+            "total_debt": total_debt,
+            "net_cash_debt": net_cash_debt,
+            "de_ratio": de_ratio,
+            "current_ratio": current_ratio,
+            "quick_ratio": quick_ratio,
+        }
+    except Exception as e:
+        logger.debug(f"get_balance_sheet_metrics error: {e}")
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════
+# MARKET-RELEVANT NEWS FILTER
+# ════════════════════════════════════════════════════════════════════
+
+# Keywords that signal market/geopolitical relevance
+_MARKET_KEYWORDS = {
+    # Markets & Finance
+    "market", "stock", "equit", "bond", "treasury", "yield", "rate", "fed ",
+    "federal reserve", "fomc", "monetary", "inflation", "cpi", "pce", "gdp",
+    "recession", "rally", "selloff", "sell-off", "crash", "bull", "bear",
+    "earnings", "revenue", "profit", "dividend", "buyback", "ipo", "spac",
+    "s&p 500", "s&p500", "nasdaq", "dow jones", "russell", "ftse", "dax",
+    "nikkei", "hang seng", "index", "futures", "options", "derivative",
+    "hedge fund", "short sell", "insider", "sec ", "regulat", "investm",
+    "analyst", "upgrade", "downgrade", "target price", "eps",
+    # Macro
+    "central bank", "ecb", "boj", "boe", "rba", "pboc", "rate hike",
+    "rate cut", "taper", "quantitative", "stimulus", "fiscal", "debt",
+    "deficit", "surplus", "trade war", "tariff", "sanction", "embargo",
+    "currency", "dollar", "euro", "yen", "yuan", "forex", "fx ",
+    "commodity", "crude", "oil", "gold", "silver", "copper", "wheat",
+    "natural gas", "opec", "energy", "mining",
+    # Geopolitics that affect markets
+    "geopolitic", "conflict", "war ", "military", "nato", "nuclear",
+    "missile", "sanctions", "blockade", "strait", "strait of hormuz",
+    "shipping", "supply chain", "semiconductor", "chip", "ai ", "tech",
+    "iran", "russia", "china", "taiwan", "ukraine", "middle east",
+    "gaza", "israel", "north korea", "red sea", "houthi", "suez",
+    # Crypto
+    "bitcoin", "crypto", "ethereum", "etf approval", "sec crypto",
+    # Company-level moves
+    "layoff", "restructur", "merger", "acquisition", "antitrust",
+    "bankruptcy", "default", "credit rating", "moody", "fitch",
+    "standard & poor", "downgrad",
+}
+
+# Keywords that signal irrelevant fluff
+_FLUFF_KEYWORDS = {
+    "celebrity", "entertainment", "lifestyle", "recipe", "fashion",
+    "horoscope", "zodiac", "dating", "reality tv", "reality show",
+    "sports score", "game recap", "touchdown", "home run",
+    "viral video", "tiktok", "influencer", "selfie",
+    "weather forecast", "daily weather",
+    "lottery", "sweepstakes", "giveaway",
+    "pet", "puppy", "kitten", "cute animal",
+    "diet", "weight loss", "wellness tip",
+    "best movies", "best shows", "streaming pick", "movie review",
+    "baby name", "wedding", "engagement ring",
+}
+
+
+def is_market_relevant(title, source=""):
+    """Return True if a news headline is relevant to markets/geopolitics/macro.
+    
+    Uses a keyword-based classifier. Market-relevant titles get through;
+    entertainment/lifestyle/sports fluff is filtered out.
+    """
+    if not title:
+        return False
+    t_lower = title.lower()
+
+    # Check for explicit fluff first
+    for kw in _FLUFF_KEYWORDS:
+        if kw in t_lower:
+            return False
+
+    # Check for market relevance
+    for kw in _MARKET_KEYWORDS:
+        if kw in t_lower:
+            return True
+
+    # Check source — financial sources are always relevant
+    _financial_sources = {
+        "reuters", "bloomberg", "cnbc", "marketwatch", "financial times",
+        "ft.com", "wsj", "wall street journal", "barron", "seekingalpha",
+        "investing.com", "zerohedge", "yahoo finance", "benzinga",
+        "thestreet", "morningstar", "tradingview", "forexlive",
+        "coindesk", "cointelegraph", "the block", "decrypt",
+        "defense news", "janes", "jane's", "al jazeera", "bbc",
+        "politico", "foreign policy", "foreign affairs",
+    }
+    s_lower = source.lower()
+    for fs in _financial_sources:
+        if fs in s_lower:
+            return True
+
+    # Default: be inclusive but filter obvious non-market content
+    # Short titles with no market keywords → likely fluff
+    if len(t_lower.split()) < 4:
+        return False
+
+    # If nothing matched, let it through (conservative filter)
+    return True
+
+
+def filter_market_news(articles, key_title="title", key_source="source", max_items=None):
+    """Filter a list of news articles to only market/geopolitics relevant ones.
+    
+    Args:
+        articles: list of dicts with title/source keys
+        key_title: key name for the title field
+        key_source: key name for the source field
+        max_items: optional max number of items to return
+    
+    Returns filtered list.
+    """
+    if not articles:
+        return articles
+    filtered = []
+    for art in articles:
+        title = art.get(key_title, "") or ""
+        source = art.get(key_source, "") or ""
+        if isinstance(source, dict):
+            source = source.get("name", "")
+        if is_market_relevant(title, source):
+            filtered.append(art)
+    if max_items:
+        return filtered[:max_items]
+    return filtered

@@ -54,6 +54,10 @@ from data_fetchers import (
     get_vix_full, get_spy_history, get_tlt_history,
     # ─── FEAT additions ───
     get_iv_skew, get_rv_iv_spread, get_cot_positioning, get_economic_surprise_index,
+    # ─── Macro Sovereign + Stock Fundamentals + News Filter ───
+    get_sovereign_10y_yields, get_sovereign_cds_proxy, get_central_bank_rates,
+    get_yield_curve_inversions, get_profitability_metrics, get_balance_sheet_metrics,
+    filter_market_news, is_market_relevant,
 )
 from ui_components import (
     CHART_LAYOUT, dark_fig, tv_chart, tv_mini, tv_tape,
@@ -979,6 +983,7 @@ with tabs[0]:
             seen_titles = set()
             for art in geo_arts[:8]:
                 t=art.get("title","")[:90]; u=art.get("url","#"); dom=art.get("domain","GDELT"); sd=art.get("seendate","")
+                if not is_market_relevant(t, dom): continue  # filter fluff
                 t_key = t.strip().lower()
                 if t_key in seen_titles: continue
                 seen_titles.add(t_key)
@@ -1163,6 +1168,95 @@ with tabs[1]:
                 except Exception as e:
                     st.markdown('<div style="color:#555;font-size:11px">Financials temporarily unavailable.</div>', unsafe_allow_html=True)
             # --- END: Financials ---
+
+            # ── PROFITABILITY PANEL ─────────────────────────────────────────
+            st.markdown('<div class="bb-ph" style="margin-top:12px">📊 PROFITABILITY</div>', unsafe_allow_html=True)
+            with st.spinner("Loading profitability metrics…"):
+                _prof = get_profitability_metrics(tkr)
+            if _prof:
+                def _fmt_margin(v, label=""):
+                    if v is None:
+                        return '<span style="color:#333">—</span>'
+                    pct = v * 100
+                    c = "#00CC44" if pct > 0 else "#FF4444"
+                    return f'<span style="color:{c};font-weight:700">{pct:.1f}%</span>'
+
+                _prof_html = (
+                    '<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #00AAFF;'
+                    'padding:14px 16px;margin:4px 0;font-family:monospace">'
+                    '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;text-align:center">'
+                )
+                _prof_items = [
+                    ("GROSS MARGIN",    _prof.get("gross_margin")),
+                    ("OPERATING MARGIN", _prof.get("op_margin")),
+                    ("EBITDA MARGIN",   _prof.get("ebitda_margin")),
+                    ("NET MARGIN",      _prof.get("net_margin")),
+                    ("ROA",             _prof.get("roa")),
+                    ("ROE",             _prof.get("roe")),
+                ]
+                for plbl, pval in _prof_items:
+                    _prof_html += (
+                        f'<div>'
+                        f'<div style="color:#555;font-size:8px;letter-spacing:1px;margin-bottom:6px">{plbl}</div>'
+                        f'<div style="font-size:16px;font-weight:700">{_fmt_margin(pval)}</div>'
+                        f'</div>'
+                    )
+                _prof_html += '</div></div>'
+                st.markdown(_prof_html, unsafe_allow_html=True)
+            else:
+                st.markdown('<div style="color:#555;font-size:11px;font-family:monospace">Profitability data unavailable.</div>', unsafe_allow_html=True)
+
+            # ── BALANCE SHEET PANEL ─────────────────────────────────────────
+            st.markdown('<div class="bb-ph" style="margin-top:12px">🏦 BALANCE SHEET</div>', unsafe_allow_html=True)
+            with st.spinner("Loading balance sheet…"):
+                _bs = get_balance_sheet_metrics(tkr)
+            if _bs:
+                def _fmt_bs_val(v, label=""):
+                    if v is None:
+                        return '<span style="color:#333">—</span>'
+                    if label in ("CURRENT RATIO", "QUICK RATIO"):
+                        c = "#00CC44" if v >= 1.5 else "#FF8C00" if v >= 1.0 else "#FF4444"
+                        return f'<span style="color:{c};font-weight:700">{v:.2f}x</span>'
+                    if label == "DEBT/EQUITY":
+                        c = "#00CC44" if v < 100 else "#FF8C00" if v < 200 else "#FF4444"
+                        return f'<span style="color:{c};font-weight:700">{v:.1f}%</span>'
+                    # Money values
+                    abs_v = abs(v)
+                    if abs_v >= 1e12:
+                        s = f"${v/1e12:.2f}T"
+                    elif abs_v >= 1e9:
+                        s = f"${v/1e9:.2f}B"
+                    elif abs_v >= 1e6:
+                        s = f"${v/1e6:.0f}M"
+                    else:
+                        s = f"${v:,.0f}"
+                    c = "#00CC44" if v >= 0 else "#FF4444"
+                    return f'<span style="color:{c};font-weight:700">{s}</span>'
+
+                _bs_html = (
+                    '<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #FF8C00;'
+                    'padding:14px 16px;margin:4px 0;font-family:monospace">'
+                    '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;text-align:center">'
+                )
+                _bs_items = [
+                    ("TOTAL CASH",    _bs.get("total_cash"),    "TOTAL CASH"),
+                    ("TOTAL DEBT",    _bs.get("total_debt"),    "TOTAL DEBT"),
+                    ("NET CASH/DEBT", _bs.get("net_cash_debt"), "NET CASH/DEBT"),
+                    ("DEBT/EQUITY",   _bs.get("de_ratio"),      "DEBT/EQUITY"),
+                    ("CURRENT RATIO", _bs.get("current_ratio"), "CURRENT RATIO"),
+                    ("QUICK RATIO",   _bs.get("quick_ratio"),   "QUICK RATIO"),
+                ]
+                for blbl, bval, bkey in _bs_items:
+                    _bs_html += (
+                        f'<div>'
+                        f'<div style="color:#555;font-size:8px;letter-spacing:1px;margin-bottom:6px">{blbl}</div>'
+                        f'<div style="font-size:16px;font-weight:700">{_fmt_bs_val(bval, bkey)}</div>'
+                        f'</div>'
+                    )
+                _bs_html += '</div></div>'
+                st.markdown(_bs_html, unsafe_allow_html=True)
+            else:
+                st.markdown('<div style="color:#555;font-size:11px;font-family:monospace">Balance sheet data unavailable.</div>', unsafe_allow_html=True)
 
             # ── QUARTERLY FINANCIALS (Markets Tab) ─────────────────────────
             st.markdown('<div class="bb-ph" style="margin-top:12px">📊 QUARTERLY FINANCIALS</div>', unsafe_allow_html=True)
@@ -2146,8 +2240,9 @@ with tabs[1]:
         st.markdown('<div class="bb-ph">📰 MARKET NEWS — FINNHUB LIVE</div>', unsafe_allow_html=True)
         with st.spinner("Loading news…"):
             fn = finnhub_news(st.session_state.finnhub_key.get_secret_value())
-        for art in fn[:8]:
+        for art in fn[:12]:  # scan more to compensate for filter
             title=art.get("headline","")[:100]; url=art.get("url","#"); src=art.get("source","")
+            if not is_market_relevant(title, src): continue  # filter fluff
             ts=art.get("datetime",0)
             d=datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else ""
             st.markdown(render_news_card(title,url,src,d,"bb-news bb-news-macro"), unsafe_allow_html=True)
@@ -2717,7 +2812,7 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                     _ovw_high = _spx["high"] if _spx else None
                     _ovw_low = _spx["low"] if _spx else None
                     _ovw_em = round(_ovw_high - _ovw_low, 1) if _ovw_high and _ovw_low else None
-                    _ovw_vix = _vix_data[0] if _vix_data else None
+                    _ovw_vix = _vix_data.get("vix") if _vix_data else None
                     _ovw_pcr = compute_pcr(_0dte_chain) if _0dte_chain else None
                     if _ovw_pcr is None and _use_cboe:
                         _ovw_pcr = compute_cboe_pcr(_cboe_opts)
@@ -2971,6 +3066,154 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
                         f'<div style="color:{dxy_c};font-size:14px;font-weight:600;margin-top:2px">{dxy_q["pct"]:+.2f}% ({dxy_q["change"]:+.2f})</div></div>', unsafe_allow_html=True)
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">DXY data unavailable</p>', unsafe_allow_html=True)
+
+        # ════════════════════════════════════════════════════════════════════
+        # SOVEREIGN 10Y BOND YIELDS BY COUNTRY
+        # ════════════════════════════════════════════════════════════════════
+        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+        _sov_left, _sov_right = st.columns([1, 1])
+
+        with _sov_left:
+            st.markdown('<div class="bb-ph">🏛️ GLOBAL SOVEREIGN 10Y YIELDS — HIGHEST FIRST</div>', unsafe_allow_html=True)
+            with st.spinner("Loading sovereign yields…"):
+                _sov_yields = get_sovereign_10y_yields()
+            if _sov_yields:
+                # Header
+                st.markdown(
+                    '<div style="display:grid;grid-template-columns:30px 1fr 80px 70px;gap:8px;'
+                    'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
+                    'font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
+                    '<span></span><span>COUNTRY</span><span>YIELD</span><span>CHG</span></div>',
+                    unsafe_allow_html=True)
+                for sy in _sov_yields:
+                    _yld_c = "#FF4444" if sy["yield_pct"] > 5.0 else "#FF8C00" if sy["yield_pct"] > 3.5 else "#FFCC00" if sy["yield_pct"] > 2.0 else "#00CC44"
+                    _chg_c = "#00CC44" if sy["change"] <= 0 else "#FF4444"
+                    _chg_sign = "+" if sy["change"] > 0 else ""
+                    st.markdown(
+                        f'<div style="display:grid;grid-template-columns:30px 1fr 80px 70px;gap:8px;'
+                        f'padding:5px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:12px">'
+                        f'<span style="font-size:16px">{sy["flag"]}</span>'
+                        f'<span style="color:#FFF;font-weight:600">{sy["country"]}</span>'
+                        f'<span style="color:{_yld_c};font-weight:700">{sy["yield_pct"]:.3f}%</span>'
+                        f'<span style="color:{_chg_c}">{_chg_sign}{sy["change"]:.3f}</span></div>',
+                        unsafe_allow_html=True)
+            else:
+                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Sovereign yield data loading…</p>', unsafe_allow_html=True)
+
+        with _sov_right:
+            st.markdown('<div class="bb-ph">⚠️ SOVEREIGN CREDIT RISK — ETF PROXY</div>', unsafe_allow_html=True)
+            with st.spinner("Loading sovereign CDS…"):
+                _sov_cds = get_sovereign_cds_proxy()
+            if _sov_cds:
+                # Header
+                st.markdown(
+                    '<div style="display:grid;grid-template-columns:30px 1fr 70px 70px 80px;gap:8px;'
+                    'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
+                    'font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
+                    '<span></span><span>COUNTRY/ETF</span><span>PRICE</span><span>%CHG</span><span>RISK</span></div>',
+                    unsafe_allow_html=True)
+                for sc in _sov_cds:
+                    _pct_c = "#00CC44" if sc["pct"] >= 0 else "#FF4444"
+                    _pct_sign = "+" if sc["pct"] >= 0 else ""
+                    st.markdown(
+                        f'<div style="display:grid;grid-template-columns:30px 1fr 70px 70px 80px;gap:8px;'
+                        f'padding:5px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px;'
+                        f'border-left:3px solid {sc["risk_color"]}">'
+                        f'<span style="font-size:14px">{sc["flag"]}</span>'
+                        f'<span style="color:#CCC;font-weight:600">{sc["label"]}</span>'
+                        f'<span style="color:#888">${sc["price"]:.2f}</span>'
+                        f'<span style="color:{_pct_c};font-weight:600">{_pct_sign}{sc["pct"]:.2f}%</span>'
+                        f'<span style="color:{sc["risk_color"]};font-weight:700;font-size:9px">{sc["risk_signal"]}</span></div>',
+                        unsafe_allow_html=True)
+                st.markdown(
+                    '<div style="color:#444;font-size:8px;font-family:monospace;margin-top:4px">'
+                    'Proxy: ETF performance as CDS proxy. Negative returns signal higher sovereign stress. '
+                    'Real CDS spreads require Bloomberg terminal.</div>', unsafe_allow_html=True)
+            else:
+                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Sovereign CDS proxy data loading…</p>', unsafe_allow_html=True)
+
+        # ════════════════════════════════════════════════════════════════════
+        # CENTRAL BANK RATES + YIELD CURVE INVERSIONS
+        # ════════════════════════════════════════════════════════════════════
+        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+        _cb_left, _cb_right = st.columns([1, 1])
+
+        with _cb_left:
+            st.markdown('<div class="bb-ph">🏦 CENTRAL BANK POLICY RATES — GLOBAL</div>', unsafe_allow_html=True)
+            with st.spinner("Loading central bank rates…"):
+                _cb_rates = get_central_bank_rates(st.session_state.fred_key.get_secret_value())
+            if _cb_rates:
+                # Header
+                st.markdown(
+                    '<div style="display:grid;grid-template-columns:30px 1fr 70px 60px 80px;gap:8px;'
+                    'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
+                    'font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
+                    '<span></span><span>CENTRAL BANK</span><span>RATE</span><span>CHG</span><span>STANCE</span></div>',
+                    unsafe_allow_html=True)
+                for cb in _cb_rates:
+                    _rate_c = "#FF4444" if cb["rate"] > 4.0 else "#FF8C00" if cb["rate"] > 2.0 else "#00CC44"
+                    _chg_c = "#FF4444" if cb["change"] > 0 else "#00CC44" if cb["change"] < 0 else "#888"
+                    _chg_sign = "+" if cb["change"] > 0 else ""
+                    st.markdown(
+                        f'<div style="display:grid;grid-template-columns:30px 1fr 70px 60px 80px;gap:8px;'
+                        f'padding:6px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:12px;'
+                        f'border-left:3px solid {cb["stance_color"]}">'
+                        f'<span style="font-size:16px">{cb["flag"]}</span>'
+                        f'<span style="color:#FFF;font-weight:600;font-size:11px">{cb["name"]}</span>'
+                        f'<span style="color:{_rate_c};font-weight:700">{cb["rate"]:.2f}%</span>'
+                        f'<span style="color:{_chg_c};font-size:10px">{_chg_sign}{cb["change"]:.2f}</span>'
+                        f'<span style="color:{cb["stance_color"]};font-weight:700;font-size:9px">{cb["stance"]}</span></div>',
+                        unsafe_allow_html=True)
+            else:
+                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Central bank rate data unavailable.</p>', unsafe_allow_html=True)
+
+        with _cb_right:
+            st.markdown('<div class="bb-ph">📐 YIELD CURVE INVERSIONS MONITOR</div>', unsafe_allow_html=True)
+            _fk = st.session_state.fred_key.get_secret_value()
+            if _fk:
+                with st.spinner("Checking yield curve inversions…"):
+                    _yc_inv = get_yield_curve_inversions(_fk)
+                if _yc_inv:
+                    # Count inversions
+                    _n_inv = sum(1 for y in _yc_inv if y["inverted"])
+                    _inv_banner_c = "#FF4444" if _n_inv >= 2 else "#FF8C00" if _n_inv >= 1 else "#00CC44"
+                    _inv_label = f"⚠️ {_n_inv} INVERSION{'S' if _n_inv != 1 else ''} DETECTED" if _n_inv > 0 else "✅ NO INVERSIONS — CURVE NORMAL"
+                    st.markdown(
+                        f'<div style="background:#0A0A0A;border:1px solid {_inv_banner_c};border-left:4px solid {_inv_banner_c};'
+                        f'padding:8px 14px;margin-bottom:8px;font-family:monospace;font-size:12px;color:{_inv_banner_c};font-weight:700">'
+                        f'{_inv_label}</div>', unsafe_allow_html=True)
+                    # Header
+                    st.markdown(
+                        '<div style="display:grid;grid-template-columns:90px 70px 70px 70px 90px;gap:6px;'
+                        'padding:4px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
+                        'font-size:8px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
+                        '<span>SPREAD</span><span>LONG</span><span>SHORT</span><span>DIFF</span><span>STATUS</span></div>',
+                        unsafe_allow_html=True)
+                    for yi in _yc_inv:
+                        _sp_c = "#FF4444" if yi["inverted"] else ("#FF8C00" if abs(yi["spread"]) < 0.10 else "#00CC44")
+                        _sp_sign = "+" if yi["spread"] > 0 else ""
+                        _row_bg = "background:rgba(255,68,68,0.06);" if yi["inverted"] else ""
+                        st.markdown(
+                            f'<div style="display:grid;grid-template-columns:90px 70px 70px 70px 90px;gap:6px;'
+                            f'padding:5px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px;{_row_bg}'
+                            f'border-left:3px solid {_sp_c}">'
+                            f'<span style="color:#FFF;font-weight:600">{yi["label"]}</span>'
+                            f'<span style="color:#888">{yi["long_rate"]:.3f}%</span>'
+                            f'<span style="color:#888">{yi["short_rate"]:.3f}%</span>'
+                            f'<span style="color:{_sp_c};font-weight:700">{_sp_sign}{yi["spread"]:.3f}</span>'
+                            f'<span style="color:{yi["status_color"]};font-weight:700;font-size:9px">{yi["status"]}</span></div>',
+                            unsafe_allow_html=True)
+                    # Descriptions
+                    with st.expander("Spread Descriptions", expanded=False):
+                        for yi in _yc_inv:
+                            st.markdown(
+                                f'<div style="font-family:monospace;font-size:9px;color:#888;padding:2px 0">'
+                                f'<span style="color:#FF8C00">{yi["label"]}</span> — {yi["description"]}</div>',
+                                unsafe_allow_html=True)
+                else:
+                    st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Yield curve inversion data requires FRED API key.</p>', unsafe_allow_html=True)
+            else:
+                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Add FRED API key to monitor yield curve inversions.</p>', unsafe_allow_html=True)
 
         # ════════════════════════════════════════════════════════════════════
         # NET LIQUIDITY INDICATOR (Feature 2)
@@ -4393,6 +4636,7 @@ with tabs[7]:
                     newsapi_key=st.session_state.get("newsapi_key"),
                 )
             if stock_news:
+                stock_news = filter_market_news(stock_news, key_title="title", key_source="source")
                 for art in stock_news:
                     st.markdown(render_news_card(art["title"], art["url"], art["source"], art["date"], "bb-news"), unsafe_allow_html=True)
             else:
