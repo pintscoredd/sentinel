@@ -1544,8 +1544,7 @@ def render_geo_tab():
             globe_html = globe_html.replace('<head>', '<head>\n' + _inject_script, 1)
         else:
             globe_html = _inject_script + globe_html
-        _components.html(globe_html, height=850, scrolling=False,
-                         key="globe_main")
+        _components.html(globe_html, height=850, scrolling=False)
     except FileNotFoundError:
         st.error("⚠️ globe.html not found — place it in the same directory as ui_components.py.")
 
