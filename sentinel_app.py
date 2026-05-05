@@ -5,42 +5,39 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 try:
-    import yfinance as yf
+    import yfinance as yf  # noqa: F401 — used indirectly via data_fetchers ticker objects
 except ImportError:
     st.error("Missing: yfinance — check requirements.txt"); st.stop()
 
 try:
     import plotly.graph_objects as go
-    import plotly.express as px
 except ImportError:
     st.error("Missing: plotly"); st.stop()
 
-import requests, pandas as pd, json, pathlib, math, re
+import requests, pandas as pd, json, pathlib, re
 import numpy as np
 from scipy.stats import norm as _norm_dist
 from datetime import datetime, timedelta
 import pytz
 
 from data_fetchers import (
-    _safe_float, _safe_int, _esc, fmt_p, fmt_pct, pct_color, _is_english,
+    _safe_float, _safe_int, _esc, fmt_p, pct_color, _is_english,
     yahoo_quote, get_futures, get_heatmap_data, multi_quotes,
     fred_series, polymarket_events, polymarket_markets,
     fear_greed_crypto, calc_stock_fear_greed,
     crypto_markets, crypto_global,
-    gdelt_news, newsapi_headlines, finnhub_news, finnhub_insider, finnhub_officers, get_yf_ticker,
+    gdelt_news, finnhub_news, finnhub_insider, finnhub_officers, get_yf_ticker,
     options_chain, options_expiries, sector_etfs, top_movers,
-    detect_unusual_poly, market_snapshot_str, _parse_poly_field,
+    market_snapshot_str, _parse_poly_field,
     score_options_chain, score_poly_mispricing,
     get_earnings_calendar, is_market_open,
     get_macro_overview, get_macro_calendar, get_ticker_exchange,
     get_full_financials, get_stock_news, get_earnings_matrix,
     is_0dte_market_open, get_stock_snapshot, get_spx_metrics,
     fetch_0dte_chain, compute_gex_profile, compute_max_pain, compute_pcr,
-    find_gamma_flip, fetch_vix_data, find_target_strike, compute_spx_direction,
-    parse_trade_input, generate_recommendation,
+    find_gamma_flip, fetch_vix_data, compute_spx_direction,
+    generate_recommendation,
     fetch_cboe_gex, compute_cboe_gex_profile, compute_cboe_total_gex, compute_cboe_pcr,
-    get_whale_trades, get_exchange_netflow, get_funding_rates,
-    get_open_interest, get_liquidations,
     build_brief_context,
     fetch_btc_etf_flows, fetch_btc_etf_flows_fallback, _ETF_TICKERS,
     stat_arb_screener, get_finra_short_volume, bs_greeks_engine,
@@ -49,9 +46,9 @@ from data_fetchers import (
     get_global_indices, get_net_liquidity, get_yield_curve_history,
     get_cross_asset_volatility, get_macro_correlation_matrix,
     get_sector_rrg, get_iv_term_structure, get_gamma_squeeze_scanner,
-    get_finnhub_earnings_calendar, get_expected_move,
+    get_expected_move,
     get_ai_earnings_summary, get_margin_chart_data,
-    get_vix_full, get_spy_history, get_tlt_history,
+    get_vix_full, get_spy_history,
     # ─── FEAT additions ───
     get_iv_skew, get_rv_iv_spread, get_cot_positioning, get_economic_surprise_index,
     # ─── Macro Sovereign + Stock Fundamentals + News Filter ───
@@ -60,13 +57,13 @@ from data_fetchers import (
     filter_market_news, is_market_relevant,
 )
 from ui_components import (
-    CHART_LAYOUT, dark_fig, tv_chart, tv_mini, tv_tape,
+    CHART_LAYOUT, dark_fig, tv_chart,
     yield_curve_chart, yield_history_chart, cpi_vs_rates_chart,
-    render_news_card, render_wl_row, render_options_table,
+    render_news_card, render_options_table,
     render_scored_options, render_unusual_trade,
-    render_insider_cards, poly_url, poly_status, unusual_side,
+    render_insider_cards, poly_url, poly_status,
     render_poly_card, render_crypto_etf_chart,
-    SENTINEL_PROMPT, GEMINI_MODELS, list_gemini_models, gemini_response, format_gemini_msg,
+    list_gemini_models, gemini_response, format_gemini_msg,
     render_0dte_gex_chart, render_0dte_gex_decoder, render_0dte_recommendation, render_0dte_trade_log,
     render_geo_tab, render_stat_arb_cards,
     metric_card, metric_card_with_delta, sentinel_grid,
@@ -798,7 +795,6 @@ with st.sidebar:
         @st.fragment(run_every="30s")
         def _run_alert_monitor():
             import time as _alert_time
-            _now = _alert_time.time()
             _cooldown_secs = 300  # 5-minute cooldown
 
             def _can_fire(alert_key):
@@ -2951,7 +2947,16 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                                                 spot_spx=_spot_for_chart,
                                                 display_pct=_chart_pct)
                     if _fig:
-                        st.plotly_chart(_fig, use_container_width=True, config={'displayModeBar': False})
+                        st.plotly_chart(_fig, use_container_width=True, config={
+                            'scrollZoom': True,          # scroll wheel zooms (stretches) the y-axis
+                            'displayModeBar': True,      # show modebar so user has zoom/pan/reset
+                            'modeBarButtonsToRemove': [  # strip noisy buttons, keep essentials
+                                'toImage', 'sendDataToCloud', 'autoScale2d',
+                                'hoverClosestCartesian', 'hoverCompareCartesian',
+                                'toggleSpikelines', 'select2d', 'lasso2d',
+                            ],
+                            'displaylogo': False,
+                        })
                     else:
                         st.markdown('<div style="color:#555;font-family:monospace;font-size:11px">GEX data unavailable.</div>', unsafe_allow_html=True)
                 with _ovw_col:

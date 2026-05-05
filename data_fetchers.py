@@ -15,9 +15,8 @@ import re
 import logging
 from datetime import datetime, timedelta, time as dtime
 import pytz
-from collections import defaultdict, OrderedDict
-from functools import lru_cache
-from skyfield.api import Topos
+from collections import OrderedDict
+# skyfield.Topos removed — not used anywhere in this module
 
 # ── Newly Integrated Libraries ──
 import pandas_market_calendars as mcal
@@ -345,8 +344,14 @@ def pct_color(v) -> str:
     return "#00CC44" if v >= 0 else "#FF4444"
 
 def _is_english(text: str) -> bool:
+    """Heuristic: reject text where >15% of characters are non-ASCII.
+
+    Raising the threshold to 0.85 filters accented-heavy European text
+    (French, Spanish, Portuguese) and non-Latin scripts (CJK, Arabic,
+    Cyrillic) that can slip through GDELT's sourcelang:english filter.
+    """
     if not text: return False
-    return sum(1 for c in text if ord(c) < 128) / max(len(text), 1) > 0.72
+    return sum(1 for c in text if ord(c) < 128) / max(len(text), 1) > 0.85
 
 
 def _should_retry_http_error(exc):
@@ -1709,17 +1714,22 @@ def crypto_global():
 
 @st.cache_data(ttl=600)
 def gdelt_news(query, max_rec=15):
+    # Both endpoints enforce sourcelang:english at the API level.
+    # The 168h fallback widens the time window (not the language) when
+    # the 72h primary returns too few results.
     endpoints = [
         {"url": "https://api.gdeltproject.org/api/v2/doc/doc",
          "params": {"query": query + " sourcelang:english", "mode": "artlist", "maxrecords": max_rec, "format": "json", "timespan": "72h"}},
         {"url": "https://api.gdeltproject.org/api/v2/doc/doc",
-         "params": {"query": query, "mode": "artlist", "maxrecords": max_rec, "format": "json", "timespan": "168h"}},
+         "params": {"query": query + " sourcelang:english", "mode": "artlist", "maxrecords": max_rec, "format": "json", "timespan": "168h"}},
     ]
     for ep in endpoints:
         try:
             data = _fetch_robust_json(ep["url"], params=ep["params"], timeout=8)
             arts = data.get("articles", [])
             if arts:
+                # Secondary client-side filter catches edge cases where the
+                # API returns non-English despite the sourcelang constraint.
                 filtered = [a for a in arts if _is_english(a.get("title", ""))][:max_rec]
                 if filtered: return filtered
         except Exception:
@@ -2272,7 +2282,7 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
         below_gex = sum(v for k, v in gex_profile.items() if k * 10 < spot)
         total_abs = abs(above_gex) + abs(below_gex)
         if total_abs > 0:
-            tilt_ratio = (above_gex - below_gex) / total_abs
+
             # Positive tilt = more call gamma above = cap/resistance = slightly bearish for breakout
             # But if we're below gamma flip, net puts dominate = bearish
             if spot > gamma_flip:
@@ -2890,7 +2900,7 @@ def generate_recommendation(chain, spx_metrics, vix_data):
     else:                  confidence = "LOW"
 
     target_pts = abs(int(hedge_wall - strike_spx)) if hedge_wall else max(int(daily_em * 0.5), 5)
-    stop_pts = max(int(mid * 0.5 / 10), 5)   # Stop at 50% of premium paid, in SPX pts
+
 
     target_desc = f"Target {int(hedge_wall)} GEX Wall (+{target_pts}pts)" if hedge_wall else f"Target +{target_pts}pts (0.5× daily EM)"
     stop_desc = f"Stop at 50% premium loss (−${mid/2:.2f} on the option)"

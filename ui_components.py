@@ -17,7 +17,7 @@ except ImportError:
     px = None
 
 from data_fetchers import (
-    _safe_float, _safe_int, _esc, fmt_p, fmt_pct, pct_color,
+    _safe_float, _safe_int, _esc, fmt_p, pct_color,
     fred_series, _parse_poly_field,
     multi_quotes, market_snapshot_str,
     GEO_FINANCIAL_NETWORKS, GEO_WEBCAM_FEEDS,
@@ -26,7 +26,6 @@ from data_fetchers import (
     fetch_conflict_events_json, fetch_military_aircraft_json,
     fetch_satellite_positions_json, fetch_ais_vessels,
     fetch_ai_hotspots_json,
-    fetch_btc_etf_flows, fetch_btc_etf_flows_fallback,
     _ETF_TICKERS, _ETF_COLORS,
 )
 
@@ -1110,9 +1109,8 @@ def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
             annotation_position="top left"
         )
 
-    # Compute a fixed y-axis range BEFORE layout so the chart never
-    # auto-shifts when users interact (zoom, hover, expand).  Setting
-    # autorange=False + an explicit range prevents the "jumping" bug.
+    # Initial y-axis framing: show ±display_pct around spot price so
+    # GEX levels far from the current price don't zoom the chart out.
     y_lo, y_hi = None, None
     if spot_spx and spot_spx > 0:
         y_lo = spot_spx * (1 - display_pct)
@@ -1120,6 +1118,11 @@ def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
 
     fig.update_layout(**CHART_LAYOUT)
     fig.update_layout(
+        # uirevision: stable key so Streamlit re-renders (fragment refresh)
+        # do NOT reset the user's zoom/pan state.  This is the correct fix
+        # for the old "jumping" bug — previously solved (incorrectly) by
+        # locking autorange, which caused scroll/drag to PAN instead of ZOOM.
+        uirevision="0dte_gex_chart",
         xaxis_rangeslider_visible=False,
         height=500,
         margin=dict(l=10, r=60, t=30, b=10),
@@ -1127,15 +1130,18 @@ def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
             text="SPX 0DTE - Gamma Levels & Price Action",
             font=dict(color="#FF6600", size=14)
         ),
-        xaxis=dict(showgrid=False, color="#555"),
+        xaxis=dict(showgrid=False, color="#555", uirevision="0dte_gex_chart"),
         yaxis=dict(
             showgrid=True, gridcolor="#111", color="#555",
             side="right", tickformat=".0f",
-            # FIX: Disable autorange and lock the range so the y-axis
-            # doesn't jump when the user tries to expand the chart.
-            autorange=False,
+            # fixedrange=False: allow user to zoom/scale the y-axis.
+            # Do NOT set autorange=False here — that causes Plotly to treat
+            # y-axis scroll/drag as PAN (moves the viewport) instead of
+            # ZOOM (stretches the scale).  uirevision above preserves the
+            # user's chosen range across Streamlit re-renders.
             fixedrange=False,
             range=[y_lo, y_hi] if y_lo is not None else None,
+            uirevision="0dte_gex_chart",
         ),
     )
 
@@ -1539,7 +1545,7 @@ def render_geo_tab():
         else:
             globe_html = _inject_script + globe_html
         _components.html(globe_html, height=850, scrolling=False,
-                         key=f"globe_{hash(globe_html)}")
+                         key="globe_main")
     except FileNotFoundError:
         st.error("⚠️ globe.html not found — place it in the same directory as ui_components.py.")
 
