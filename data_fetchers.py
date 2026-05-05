@@ -179,7 +179,7 @@ def get_yf_ticker(ticker):
                 return cached
             elapsed = _time.time() - _yf_last_request
             need_sleep = max(0, _YF_MIN_GAP - elapsed)
-            _yf_last_request = _time.time() + need_sleep  # reserve our slot
+            _yf_last_request = _time.time()  # record NOW, not future
 
         # Issue #2: Sleep OUTSIDE the gap lock so other threads can
         # still check the cache and reserve their own slots.
@@ -365,10 +365,9 @@ def _should_retry_http_error(exc):
         return True
     return False
 
-# Issue #3 fix: Use stop_after_attempt(1) so the circuit breaker sees
-# each real HTTP failure individually. The circuit breaker itself
-# handles the "how many retries" logic at the outer layer.
-@retry(stop=stop_after_attempt(1), wait=wait_exponential(multiplier=1, min=2, max=10), retry=retry_if_exception(_should_retry_http_error))
+# Issue #3 fix: The circuit breaker in _fetch_robust_json handles
+# retry/backoff logic. This inner function is called once per attempt —
+# no need for a tenacity @retry wrapper here.
 def _do_fetch_robust_json(url, params=None, headers=None, timeout=10):
     """Low-level fetch with connection pooling (Feature #18) and metrics (Feature #14)."""
     session = _get_http_session()
@@ -706,7 +705,14 @@ def multi_quotes(tickers):
     Issue #5 fix: Uses the async batcher instead of sequential yahoo_quote().
     Issue #14 fix: TTL aligned to 60s to match yahoo_quote's TTL.
     """
-    tickers = tuple(sorted(set(tickers)))
+    # Deduplicate while preserving caller's insertion order (e.g. watchlist)
+    seen = set()
+    unique = []
+    for t in tickers:
+        if t not in seen:
+            seen.add(t)
+            unique.append(t)
+    tickers = tuple(unique)
     try:
         results = run_async(_fetch_yahoo_quotes_async(tickers))
         return [q for q in results if isinstance(q, dict) and q]
@@ -1205,7 +1211,7 @@ def get_finra_short_volume(ticker):
     """Free Short Volume Data via FINRA/yfinance fallback."""
     try:
         t = get_yf_ticker(ticker)
-        if t is None: return []
+        if t is None: return None
         i = t.fast_info
         # Use fast_info (if available in newer yf) or info as fallback
         s_pct = getattr(i, "shares_short_prior_month", 0) / getattr(i, "shares_outstanding", 1)
@@ -3960,8 +3966,8 @@ def score_poly_mispricing(markets, base_rate_fn=None):
             pp = _parse_poly_field(m.get("outcomePrices", []))
             if not pp or len(pp) < 2: continue
 
-            raw_yes = _safe_float(pp[0])
-            raw_no  = _safe_float(pp[1]) if len(pp) > 1 else (1 - raw_yes)
+            raw_yes = _safe_float(pp[0], default=0)
+            raw_no  = _safe_float(pp[1], default=0) if len(pp) > 1 else (1 - raw_yes)
 
             if raw_yes <= 0 or raw_yes >= 1: continue
             if abs(raw_yes + raw_no - 1.0) > 0.15: continue
@@ -5446,7 +5452,7 @@ def get_gamma_squeeze_scanner():
                 if tk is None:
                     continue
                 info = tk.info or {}
-                short_pct = _safe_float(info.get("shortPercentOfFloat", 0)) * 100
+                short_pct = _safe_float(info.get("shortPercentOfFloat", 0), default=0) * 100
                 short_ratio = _safe_float(info.get("shortRatio", 0))
 
                 # Score: combine short interest + volume surge

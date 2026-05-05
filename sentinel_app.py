@@ -915,12 +915,16 @@ with tabs[0]:
         ref_col, mkt_col = st.columns([1, 1])
         with ref_col:
             if st.button("↺ REFRESH ALL DATA"):
-                try: multi_quotes.clear()
-                except Exception: pass
-                try: get_vix_full.clear()
-                except Exception: pass
-                try: get_futures.clear()
-                except Exception: pass
+                # Clear all critical data caches so the next render cycle
+                # fetches fresh data from APIs instead of stale cached values.
+                for _cache_fn in [
+                    multi_quotes, get_vix_full, get_futures,
+                    yahoo_quote, sector_etfs, calc_stock_fear_greed,
+                    gdelt_news, polymarket_events,
+                    get_spy_history, get_heatmap_data,
+                ]:
+                    try: _cache_fn.clear()
+                    except Exception: pass
                 st.rerun()
             st.markdown(f'<div style="color:#888;font-size:10px;margin-top:4px">Last updated: {now_pst()}</div>', unsafe_allow_html=True)
         with mkt_col:
@@ -996,7 +1000,7 @@ with tabs[0]:
                 sfg_c = "#00CC44" if sfg_val>=55 else ("#FF4444" if sfg_val<35 else "#FF8C00")
                 st.markdown(f'<div class="fg-gauge"><div class="fg-num" style="color:{sfg_c}">{sfg_val}</div><div class="fg-lbl" style="color:{sfg_c}">{sfg_lbl}</div><div style="color:#555;font-size:8px;margin-top:2px">STOCK MARKET F&G</div></div>', unsafe_allow_html=True)
         with s3:
-            vix_val, vix_pct, posture = vix_info if vix_info else (None, None, None)
+            vix_val, vix_pct, posture = vix_info if (vix_info and vix_info[0] is not None) else (None, None, None)
             if vix_val:
                 pc = {"RISK-ON": "#00CC44", "NEUTRAL": "#FF8C00", "RISK-OFF": "#FF4444"}.get(posture[:8] if posture else "NEUTRAL", "#FF8C00")
                 st.markdown(
