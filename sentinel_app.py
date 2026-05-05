@@ -69,6 +69,7 @@ from ui_components import (
     SENTINEL_PROMPT, GEMINI_MODELS, list_gemini_models, gemini_response, format_gemini_msg,
     render_0dte_gex_chart, render_0dte_gex_decoder, render_0dte_recommendation, render_0dte_trade_log,
     render_geo_tab, render_stat_arb_cards,
+    metric_card, metric_card_with_delta, sentinel_grid,
 )
 
 st.set_page_config(page_title="SENTINEL", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
@@ -244,12 +245,13 @@ padding-top: 0 !important;
 @keyframes sentinelFadeOut {
 0%   { opacity: 1; max-height: 120px; margin-bottom: 8px; }
 70%  { opacity: 1; max-height: 120px; margin-bottom: 8px; }
-100% { opacity: 0; max-height: 0; margin-bottom: 0; padding: 0; overflow: hidden; }
+100% { opacity: 0; max-height: 0; margin-bottom: 0; padding: 0; overflow: hidden; display: none; }
 }
 .sentinel-alert-dismiss {
 animation: sentinelFadeOut 3s ease-out forwards;
 overflow: hidden;
 }
+
 
 /* ─── BLOOMBERG COMPONENT STYLES ─── */
 .bb-bar {
@@ -461,6 +463,26 @@ gap: 12px; align-items: center; font-family: var(--mono); font-size: 11px;
 small, .stCaption { color: var(--muted) !important; font-size: 10px !important; }
 .stMarkdown p { font-family: var(--mono) !important; }
 h1,h2,h3,h4 { color: var(--org) !important; font-family: var(--mono) !important; text-transform: uppercase; letter-spacing: 2px; }
+
+/* ── REUSABLE METRIC CARD (replaces inline styles in metric_card helper) ── */
+.s-metric {
+  background: var(--bg1); border: 1px solid var(--ghost);
+  border-top: 2px solid var(--org); padding: 10px 12px;
+  font-family: var(--mono); text-align: center;
+}
+.s-metric-label { color: var(--dim); font-size: 9px; letter-spacing: 1px; margin-bottom: 4px; }
+.s-metric-value { font-size: 18px; font-weight: 700; }
+
+/* ── PANEL CONTAINER (replaces repeated background:#080808;border:... blocks) ── */
+.s-panel {
+  background: var(--bg1); border: 1px solid var(--ghost);
+  border-top: 2px solid var(--org); padding: 14px 16px;
+  margin: 4px 0; font-family: var(--mono);
+}
+.s-panel-blue  { border-top-color: var(--blu); }
+.s-panel-amber { border-top-color: var(--org2); }
+.s-panel-green { border-top-color: var(--grn); }
+.s-panel-red   { border-top-color: var(--red); }
 </style>""", unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════
@@ -493,10 +515,28 @@ def _get_secret(name, default=""):
     return SecretStr(default) if default else SecretStr("")
 
 def _load_watchlist():
+    """Load watchlist from persistent JSON file, falling back to defaults."""
+    import json as _json
+    _wl_path = pathlib.Path(__file__).parent / ".sentinel_watchlist.json"
+    try:
+        if _wl_path.exists():
+            with open(_wl_path, "r") as f:
+                wl = _json.load(f)
+            if isinstance(wl, list) and wl:
+                return wl
+    except Exception:
+        pass
     return ["SPY","QQQ","NVDA","AAPL","GLD","TLT","BTC-USD"]
 
 def _save_watchlist(wl):
-    pass
+    """Persist watchlist to a JSON file so changes survive page refreshes."""
+    import json as _json
+    _wl_path = pathlib.Path(__file__).parent / ".sentinel_watchlist.json"
+    try:
+        with open(_wl_path, "w") as f:
+            _json.dump(wl, f)
+    except Exception:
+        pass
 
 DEFAULTS = {
     "gemini_key": _get_secret("GEMINI_API_KEY"),
@@ -515,16 +555,30 @@ for k,v in DEFAULTS.items():
 
 def warm_caches_on_startup(watchlist):
     """Fire-and-forget background cache warming — NOT cached since it spawns threads.
-    Uses a module-level guard to ensure it only runs once per process."""
+    Uses a module-level guard to ensure it only runs once per process.
+
+    Issue #16 fix: Uses ThreadPoolExecutor to parallelize independent
+    cache warming calls instead of running them sequentially."""
     import threading
+    import concurrent.futures
     def _warm():
         try:
-            get_vix_full()
-            sector_etfs()
-            get_futures()
-            polymarket_events(30)
-            multi_quotes(watchlist)
-            stat_arb_screener()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+                # All 6 operations are independent — run in parallel
+                futures = [
+                    pool.submit(get_vix_full),
+                    pool.submit(sector_etfs),
+                    pool.submit(get_futures),
+                    pool.submit(polymarket_events, 30),
+                    pool.submit(multi_quotes, watchlist),
+                    pool.submit(stat_arb_screener),
+                ]
+                # Wait for all to complete, ignore individual failures
+                for f in concurrent.futures.as_completed(futures):
+                    try:
+                        f.result()
+                    except Exception:
+                        pass
         except Exception:
             pass
     threading.Thread(target=_warm, daemon=True).start()
@@ -533,6 +587,50 @@ def warm_caches_on_startup(watchlist):
 if "_caches_warmed" not in st.session_state:
     warm_caches_on_startup(st.session_state.watchlist)
     st.session_state._caches_warmed = True
+
+# ── Per-render-cycle data cache ──
+# Avoids duplicate API calls within the same Streamlit rerun.
+# get_vix_full() is called from brief header, F&G, posture, and 0DTE —
+# this ensures it's fetched at most once per render.
+#
+# Issue #1 fix: id(st.session_state) returns the same memory address
+# across reruns (Streamlit reuses the dict object). Use a monotonic
+# counter so the cache is invalidated on every rerun.
+_render_cycle_id = time.monotonic()  # always unique per rerun
+if st.session_state.get("_render_id") != _render_cycle_id:
+    st.session_state._render_id = _render_cycle_id
+    st.session_state._vix_cache = None
+    st.session_state._spy_hist_cache = None
+
+# Issue #18 fix: Lock to protect session_state mutations from concurrent
+# @st.fragment executions (alert monitor at 30s, brief header at 60s).
+# Stored in session_state so each Streamlit session gets its own lock,
+# avoiding cross-worker interference when multiple users share a process.
+import threading
+if "_session_state_lock" not in st.session_state:
+    st.session_state._session_state_lock = threading.Lock()
+
+def _get_session_lock():
+    """Return the per-session lock for protecting session_state mutations."""
+    return st.session_state._session_state_lock
+
+def get_vix_cached():
+    """Return VIX data, fetching at most once per render cycle.
+    Thread-safe: uses per-session lock to prevent concurrent fragment corruption."""
+    lock = _get_session_lock()
+    with lock:
+        if st.session_state._vix_cache is None:
+            st.session_state._vix_cache = get_vix_full()
+        return st.session_state._vix_cache
+
+def get_spy_history_cached():
+    """Return SPY history, fetching at most once per render cycle.
+    Thread-safe: uses per-session lock to prevent concurrent fragment corruption."""
+    lock = _get_session_lock()
+    with lock:
+        if st.session_state._spy_hist_cache is None:
+            st.session_state._spy_hist_cache = get_spy_history()
+        return st.session_state._spy_hist_cache
 
 # ════════════════════════════════════════════════════════════════════
 # SIDEBAR
@@ -662,6 +760,40 @@ with st.sidebar:
                 unsafe_allow_html=True)
 
     # ── Alert Fragment (runs in background every 30s) ──
+    # Feature #17: Alert History Logging — persistent, timestamped log file
+    # for audit trails and threshold backtesting.
+    import logging as _alert_logging
+    from logging.handlers import RotatingFileHandler as _RotatingFileHandler
+
+    _alert_log_path = pathlib.Path(__file__).parent / "sentinel_alerts.log"
+    _alert_logger = _alert_logging.getLogger("sentinel.alerts")
+    _alert_logger.setLevel(_alert_logging.INFO)
+    # Avoid duplicate handlers on Streamlit hot-reload
+    if not _alert_logger.handlers:
+        _alert_fh = _RotatingFileHandler(
+            str(_alert_log_path), maxBytes=5 * 1024 * 1024,  # 5 MB max
+            backupCount=3, encoding="utf-8",
+        )
+        _alert_fh.setFormatter(_alert_logging.Formatter(
+            "%(asctime)s | %(levelname)s | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        ))
+        _alert_logger.addHandler(_alert_fh)
+
+    def _log_alert(alert_type, message, threshold=None, actual_value=None):
+        """Log an alert event to sentinel_alerts.log for audit/backtesting.
+
+        Args:
+            alert_type: Category string (e.g. 'VIX', 'PCR', 'TICKER_AAPL')
+            message: Human-readable alert message
+            threshold: The threshold that was exceeded
+            actual_value: The actual value that triggered the alert
+        """
+        extra_info = ""
+        if threshold is not None and actual_value is not None:
+            extra_info = f" | threshold={threshold} | actual={actual_value}"
+        _alert_logger.info(f"[{alert_type}] {message}{extra_info}")
+
     if st.session_state.get("alerts_enabled", False):
         @st.fragment(run_every="30s")
         def _run_alert_monitor():
@@ -682,8 +814,12 @@ with st.sidebar:
                     try:
                         import requests
                         import logging
-                        if url.startswith("http://"):
-                            logging.getLogger("sentinel.app").warning("Webhook URL is non-HTTPS. Transmitting payload in clear text.")
+                        # Issue #20: Block non-HTTPS webhooks entirely
+                        if not url.startswith("https://"):
+                            logging.getLogger("sentinel.app").error(
+                                "Webhook URL rejected: must use HTTPS. "
+                                "Payload not sent to prevent cleartext transmission.")
+                            return
                         requests.post(url, json={"text": msg, "source": "Sentinel Terminal"}, timeout=5)
                     except Exception:
                         pass
@@ -692,7 +828,7 @@ with st.sidebar:
 
             # VIX check
             try:
-                _v = get_vix_full()
+                _v = get_vix_cached()
                 if _v and _v[0] and _v[0] > st.session_state.alert_vix_threshold:
                     if _can_fire("vix"):
                         _msg = f"🚨 VIX ALERT: {_v[0]:.2f} > {st.session_state.alert_vix_threshold:.1f}"
@@ -700,10 +836,17 @@ with st.sidebar:
                         _send_webhook(_msg)
                         _mark_fired("vix")
                         _alerts_fired.append(_msg)
+                        # Feature #17: Log to persistent alert history
+                        _log_alert("VIX", _msg,
+                                   threshold=st.session_state.alert_vix_threshold,
+                                   actual_value=_v[0])
             except Exception:
                 pass
 
-            # PCR check
+            # PCR check — Issue #9 fix: Reuse the 0DTE chain data from
+            # st.cache_data rather than fetching a fresh options chain.
+            # The fetch functions already have @st.cache_data(ttl=120)
+            # which prevents redundant API calls.
             try:
                 _0c, _ = fetch_0dte_chain("SPY") if bool(_get_secret("ALPACA_API_KEY")) else (None, None)
                 _pcr_val = compute_pcr(_0c) if _0c else None
@@ -717,6 +860,10 @@ with st.sidebar:
                         _send_webhook(_msg)
                         _mark_fired("pcr")
                         _alerts_fired.append(_msg)
+                        # Feature #17: Log to persistent alert history
+                        _log_alert("PCR", _msg,
+                                   threshold=st.session_state.alert_pcr_threshold,
+                                   actual_value=_pcr_val)
             except Exception:
                 pass
 
@@ -737,6 +884,10 @@ with st.sidebar:
                             _send_webhook(_msg)
                             _mark_fired(_ak)
                             _alerts_fired.append(_msg)
+                            # Feature #17: Log to persistent alert history
+                            _log_alert(f"TICKER_{t}", _msg,
+                                       threshold=_thresh,
+                                       actual_value=_q["price"])
                 except Exception:
                     continue
 
@@ -769,11 +920,11 @@ with tabs[0]:
         with ref_col:
             if st.button("↺ REFRESH ALL DATA"):
                 try: multi_quotes.clear()
-                except: pass
+                except Exception: pass
                 try: get_vix_full.clear()
-                except: pass
+                except Exception: pass
                 try: get_futures.clear()
-                except: pass
+                except Exception: pass
                 st.rerun()
             st.markdown(f'<div style="color:#888;font-size:10px;margin-top:4px">Last updated: {now_pst()}</div>', unsafe_allow_html=True)
         with mkt_col:
@@ -813,12 +964,12 @@ with tabs[0]:
                 _sign = "+" if _up else ""
                 with col:
                     st.markdown(
-                        f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #FF6600;'
-                        f'padding:10px 10px 8px 10px;font-family:monospace;min-height:85px">'
-                        f'<div style="color:#888;font-size:9px;letter-spacing:1px;margin-bottom:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{lbl_s}</div>'
-                        f'<div style="color:#FFF;font-size:16px;font-weight:700;white-space:nowrap">{fmt_p(q["price"])}</div>'
-                        f'<div style="color:{_c};font-size:10px;font-weight:600;margin-top:4px">'
-                        f'{_arr} {_sign}{_pct:.2f}% ({_sign}{_chg:.2f})</div></div>',
+                        metric_card_with_delta(
+                            lbl_s,
+                            fmt_p(q["price"]),
+                            f'{_arr} {_sign}{_pct:.2f}% ({_sign}{_chg:.2f})',
+                            _c,
+                        ),
                         unsafe_allow_html=True)
         else:
             st.markdown('<div style="color:#FF4444;font-size:11px;font-family:monospace">Quotes unavailable. Rate limits or network error.</div>', unsafe_allow_html=True)
@@ -832,7 +983,7 @@ with tabs[0]:
         st.markdown('<div class="bb-ph">⚡ MARKET SENTIMENT</div>', unsafe_allow_html=True)
         s1,s2,s3 = st.columns(3)
         
-        vix_info = get_vix_full()
+        vix_info = get_vix_cached()
         v = vix_info[0] if vix_info else None
         
         vix_q = yahoo_quote("^VIX")
@@ -1011,9 +1162,13 @@ with tabs[1]:
             "⚡ TICKER LOOKUP",
             placeholder="NVDA, AAPL, TSLA, SPY, GLD…", key="flash_main_ticker",
             on_change=_on_flash_change,
-            help="Type a ticker symbol to see price, chart, options, insider trades, and short data. This ticker persists across tabs.")
+            help="Type a ticker symbol and press Enter. Heavy data loads only run once the full symbol is committed.")
 
-    if flash_ticker:
+    # Debounce: only run heavy fetches when the committed ticker matches input.
+    # This prevents partial symbol lookups ("N", "NV", "NVD") from triggering
+    # get_full_financials, options_chain, and get_earnings_matrix on every keystroke.
+    _committed_ticker = st.session_state.get("master_ticker", "")
+    if flash_ticker and flash_ticker.upper().strip() == _committed_ticker:
         tkr = flash_ticker.upper().strip()
         q = yahoo_quote(tkr)
         if q:
@@ -1031,15 +1186,9 @@ with tabs[1]:
                 f'<span style="color:{_c};font-size:16px;font-weight:600;font-family:monospace">{_sign}{_pct:.2f}%</span>'
                 f'</div>', unsafe_allow_html=True)
             m2, m3, m4 = st.columns(3)
-            _card = lambda label, val, color: (
-                f'<div style="background:#0A0A0A;border:1px solid #1A1A1A;border-top:2px solid {color};'
-                f'padding:10px 14px;font-family:monospace">'
-                f'<div style="color:#666;font-size:10px;letter-spacing:1px;margin-bottom:4px">{label}</div>'
-                f'<div style="color:{color};font-size:16px;font-weight:700">{val}</div></div>'
-            )
-            m2.markdown(_card("CHANGE", f"{_sign}{_chg:.2f}", _c), unsafe_allow_html=True)
-            m3.markdown(_card("VOLUME", f"{_vol:,}", _vol_c), unsafe_allow_html=True)
-            m4.markdown(_card("1D CHG%", f"{_sign}{_pct:.2f}%", _c), unsafe_allow_html=True)
+            m2.markdown(metric_card("CHANGE", f"{_sign}{_chg:.2f}", _c, "16px"), unsafe_allow_html=True)
+            m3.markdown(metric_card("VOLUME", f"{_vol:,}", _vol_c, "16px"), unsafe_allow_html=True)
+            m4.markdown(metric_card("1D CHG%", f"{_sign}{_pct:.2f}%", _c, "16px"), unsafe_allow_html=True)
 
             TV_MAP = {"SPY":"AMEX:SPY","QQQ":"NASDAQ:QQQ","NVDA":"NASDAQ:NVDA","AAPL":"NASDAQ:AAPL",
                     "TSLA":"NASDAQ:TSLA","MSFT":"NASDAQ:MSFT","GOOGL":"NASDAQ:GOOGL","AMZN":"NASDAQ:AMZN",
@@ -1181,11 +1330,6 @@ with tabs[1]:
                     c = "#00CC44" if pct > 0 else "#FF4444"
                     return f'<span style="color:{c};font-weight:700">{pct:.1f}%</span>'
 
-                _prof_html = (
-                    '<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #00AAFF;'
-                    'padding:14px 16px;margin:4px 0;font-family:monospace">'
-                    '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;text-align:center">'
-                )
                 _prof_items = [
                     ("GROSS MARGIN",    _prof.get("gross_margin")),
                     ("OPERATING MARGIN", _prof.get("op_margin")),
@@ -1194,14 +1338,20 @@ with tabs[1]:
                     ("ROA",             _prof.get("roa")),
                     ("ROE",             _prof.get("roe")),
                 ]
+                _grid_items = ""
                 for plbl, pval in _prof_items:
-                    _prof_html += (
+                    _grid_items += (
                         f'<div>'
                         f'<div style="color:#555;font-size:8px;letter-spacing:1px;margin-bottom:6px">{plbl}</div>'
                         f'<div style="font-size:16px;font-weight:700">{_fmt_margin(pval)}</div>'
                         f'</div>'
                     )
-                _prof_html += '</div></div>'
+                _prof_html = (
+                    '<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #00AAFF;'
+                    'padding:14px 16px;margin:4px 0;font-family:monospace">'
+                    + sentinel_grid("repeat(6,1fr)", _grid_items, "12px", "text-align:center")
+                    + '</div>'
+                )
                 st.markdown(_prof_html, unsafe_allow_html=True)
             else:
                 st.markdown('<div style="color:#555;font-size:11px;font-family:monospace">Profitability data unavailable.</div>', unsafe_allow_html=True)
@@ -1233,11 +1383,6 @@ with tabs[1]:
                     c = "#00CC44" if v >= 0 else "#FF4444"
                     return f'<span style="color:{c};font-weight:700">{s}</span>'
 
-                _bs_html = (
-                    '<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #FF8C00;'
-                    'padding:14px 16px;margin:4px 0;font-family:monospace">'
-                    '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;text-align:center">'
-                )
                 _bs_items = [
                     ("TOTAL CASH",    _bs.get("total_cash"),    "TOTAL CASH"),
                     ("TOTAL DEBT",    _bs.get("total_debt"),    "TOTAL DEBT"),
@@ -1246,14 +1391,20 @@ with tabs[1]:
                     ("CURRENT RATIO", _bs.get("current_ratio"), "CURRENT RATIO"),
                     ("QUICK RATIO",   _bs.get("quick_ratio"),   "QUICK RATIO"),
                 ]
+                _bs_grid = ""
                 for blbl, bval, bkey in _bs_items:
-                    _bs_html += (
+                    _bs_grid += (
                         f'<div>'
                         f'<div style="color:#555;font-size:8px;letter-spacing:1px;margin-bottom:6px">{blbl}</div>'
                         f'<div style="font-size:16px;font-weight:700">{_fmt_bs_val(bval, bkey)}</div>'
                         f'</div>'
                     )
-                _bs_html += '</div></div>'
+                _bs_html = (
+                    '<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #FF8C00;'
+                    'padding:14px 16px;margin:4px 0;font-family:monospace">'
+                    + sentinel_grid("repeat(6,1fr)", _bs_grid, "12px", "text-align:center")
+                    + '</div>'
+                )
                 st.markdown(_bs_html, unsafe_allow_html=True)
             else:
                 st.markdown('<div style="color:#555;font-size:11px;font-family:monospace">Balance sheet data unavailable.</div>', unsafe_allow_html=True)
@@ -1464,7 +1615,7 @@ with tabs[1]:
                             try:
                                 v = float(v_str.replace("x",""))
                                 return "#00CC44" if v < 15 else ("#FF8C00" if v < 25 else "#FF6600")
-                            except: return "#888"
+                            except Exception: return "#888"
                         _lq = _mp.get("Last 4Q","—"); _fw = _mp.get("Forward","—")
                         _me_val_html += f'<tr><td>{_mn}</td><td style="color:{_vc(_lq)}">{_lq}</td><td style="color:{_vc(_fw)}">{_fw}</td></tr>'
                     _me_val_html += "</tbody></table>"
@@ -2290,7 +2441,7 @@ with tabs[2]:
             else:
                 def _of_fmt(d):
                     try: return datetime.strptime(str(d), "%Y-%m-%d").strftime("%B %-d, %Y")
-                    except: return str(d)
+                    except Exception: return str(d)
                 _opt_sel_exp = st.selectbox("EXPIRY DATE", _opt_expiries, index=0, key=f"opt_exp_{_ot}", format_func=_of_fmt)
 
             with st.spinner("Loading options…"):
@@ -2301,13 +2452,13 @@ with tabs[2]:
                 try:
                     _oexp_dt = datetime.strptime(str(_oe), "%Y-%m-%d")
                     _oexp_fmt = _oexp_dt.strftime("%B %-d, %Y")
-                except:
+                except Exception:
                     _oexp_fmt = str(_oe)
 
                 try:
-                    _ov_info = get_vix_full()
+                    _ov_info = get_vix_cached()
                     _o_vix = _ov_info[0] if _ov_info else 20.0
-                except:
+                except Exception:
                     _o_vix = 20.0
 
 
@@ -2404,7 +2555,7 @@ with tabs[2]:
                     try:
                         _d1=(np.log(_lv_spot/_lv_be[0])+0.5*_lv_sigma**2*_lv_T)/(_lv_sigma*np.sqrt(_lv_T))
                         _lv_pop=float(_norm_dist.cdf(_d1) if _lv_total[-1]>0 else _norm_dist.cdf(-_d1))*100
-                    except: pass
+                    except Exception: pass
                 _lv_nd_lbl="NET DEBIT" if _lv_net_debit>=0 else "NET CREDIT"
                 _lv_ml_s=f"${abs(_lv_net_debit):,.0f}" if abs(_lv_net_debit)<1e7 else "Unlimited"
                 _lv_mp_s=f"${_lv_mp:,.0f}" if _lv_mp<1e7 else "Infinite"
@@ -2437,14 +2588,14 @@ with tabs[2]:
                     yaxis=dict(showgrid=True,gridcolor="#0D0D0D",zeroline=False,color="#888",tickprefix="$",tickfont=dict(size=9,family="IBM Plex Mono")),hovermode="x unified")
                 st.plotly_chart(_lv_fig,use_container_width=True,config={"displayModeBar":False})
                 _lv_gc=st.columns(4)
-                _lv_gc[0].markdown(f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #AA44FF;padding:8px;font-family:monospace;text-align:center"><div style="color:#555;font-size:8px">DELTA</div><div style="color:#BB88FF;font-size:14px;font-weight:700">{_lv_nd:+.2f}</div></div>',unsafe_allow_html=True)
-                _lv_gc[1].markdown(f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #FF8C00;padding:8px;font-family:monospace;text-align:center"><div style="color:#555;font-size:8px">THETA</div><div style="color:#FF8C00;font-size:14px;font-weight:700">{_lv_nt:+.4f}</div></div>',unsafe_allow_html=True)
-                _lv_gc[2].markdown(f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #00CC44;padding:8px;font-family:monospace;text-align:center"><div style="color:#555;font-size:8px">GAMMA</div><div style="color:#00CC44;font-size:14px;font-weight:700">{_lv_ng:+.5f}</div></div>',unsafe_allow_html=True)
-                _lv_gc[3].markdown(f'<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #00AAFF;padding:8px;font-family:monospace;text-align:center"><div style="color:#555;font-size:8px">VEGA</div><div style="color:#00AAFF;font-size:14px;font-weight:700">{_lv_nv:+.4f}</div></div>',unsafe_allow_html=True)
+                _lv_gc[0].markdown(metric_card("DELTA", f"{_lv_nd:+.2f}", "#BB88FF", "14px", "#AA44FF"), unsafe_allow_html=True)
+                _lv_gc[1].markdown(metric_card("THETA", f"{_lv_nt:+.4f}", "#FF8C00", "14px"), unsafe_allow_html=True)
+                _lv_gc[2].markdown(metric_card("GAMMA", f"{_lv_ng:+.5f}", "#00CC44", "14px"), unsafe_allow_html=True)
+                _lv_gc[3].markdown(metric_card("VEGA", f"{_lv_nv:+.4f}", "#00AAFF", "14px"), unsafe_allow_html=True)
                 st.markdown(f'<div style="color:#555;font-size:9px;font-family:monospace;margin-top:4px">DTE: {_lv_dte_override}d &nbsp;|&nbsp; IV: {_lv_iv_override:.1f}% &nbsp;|&nbsp; SPOT: ${_lv_spot:,.2f} &nbsp;|&nbsp; {_lv_strat}</div>',unsafe_allow_html=True)
                 st.markdown('<hr class="bb-divider">',unsafe_allow_html=True)
                 # ── END PAYOFF BUILDER ──
-                _oscored = score_options_chain(_oc, _op, _oq["price"], vix=_o_vix, expiry_date=_opt_sel_exp)
+                _oscored = score_options_chain(_oc, _op, _oq["price"], vix=_o_vix, expiry_date=_opt_sel_exp, fred_key=st.session_state.get("fred_key"))
 
                 _ovix_str = f"{_o_vix:.1f}" if _o_vix else "N/A"
                 if _o_vix and _o_vix > 25:
@@ -2517,7 +2668,7 @@ padding:16px;font-family:monospace;font-size:12px;color:#FF8C00">
 <a href="https://app.alpaca.markets/signup" target="_blank" style="color:#FF6600">
 Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html=True)
     else:
-        @st.fragment(run_every="10s")
+        @st.fragment(run_every="30s")
         def render_0dte_fragment():
             _0dte_open, _0dte_msg = is_0dte_market_open()
 
@@ -3645,7 +3796,7 @@ with tabs[5]:
                 try:
                     ed = datetime.fromisoformat(end.replace("Z","+00:00"))
                     if ed < _now_utc: return False
-                except: pass
+                except Exception: pass
             return True
 
         def is_recently_closed(e):
@@ -3656,7 +3807,7 @@ with tabs[5]:
                 try:
                     ed = datetime.fromisoformat(end.replace("Z","+00:00"))
                     return ed >= _two_months_ago
-                except: pass
+                except Exception: pass
             return False
 
         active_events = [e for e in all_poly if is_active(e)]
@@ -4414,7 +4565,7 @@ with tabs[7]:
                                     if v < 15: return "#00CC44"
                                     elif v < 25: return "#FF8C00"
                                     else: return "#FF6600"
-                                except:
+                                except Exception:
                                     return "#888"
                             l_color = _val_color(last4q)
                             f_color = _val_color(fwd)
@@ -4707,7 +4858,7 @@ Try: <span style="color:#FF6600">/brief</span> &nbsp;
                     st.session_state.chat_history.append({"role":"user","content":cmd})
                     # Use enriched context (with geo headlines + macro rates) for /brief and /geo
                     _is_brief_geo = cmd.startswith("/brief") or cmd.startswith("/geo")
-                    _ctx = build_brief_context() if _is_brief_geo else market_snapshot_str()
+                    _ctx = build_brief_context(geo_watch=st.session_state.get("geo_watch", "")) if _is_brief_geo else market_snapshot_str()
                     placeholder = st.empty()
                     resp_text = ""
                     for chunk in gemini_response(cmd, st.session_state.chat_history[:-1], _ctx):
@@ -4724,7 +4875,7 @@ Try: <span style="color:#FF6600">/brief</span> &nbsp;
             # Use enriched context (geo headlines + macro rates) for /brief and /geo commands
             _ui_lower = user_input.strip().lower()
             _is_brief_geo = _ui_lower.startswith("/brief") or _ui_lower.startswith("/geo")
-            _ctx = build_brief_context() if _is_brief_geo else market_snapshot_str()
+            _ctx = build_brief_context(geo_watch=st.session_state.get("geo_watch", "")) if _is_brief_geo else market_snapshot_str()
             placeholder = st.empty()
             resp_text = ""
             for chunk in gemini_response(user_input, st.session_state.chat_history[:-1], _ctx):

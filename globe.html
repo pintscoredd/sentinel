@@ -1,2876 +1,1261 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8">
-  <title>SENTINEL GEO</title>
+  <title>SENTINEL GEO — CesiumJS</title>
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.120/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.120/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-      font-family: 'Courier New', monospace;
-    }
+/* SENTINEL GEO — CesiumJS Globe Styles */
+*{margin:0;padding:0;box-sizing:border-box;font-family:'Courier New',monospace}
+html,body{background:#000;color:#d0d3d8;width:100%;height:100%;overflow:hidden}
+#cesiumContainer{width:100%;height:100%;position:absolute;top:0;left:0}
+.cesium-viewer-bottom,.cesium-viewer-animationContainer,.cesium-viewer-timelineContainer,
+.cesium-viewer-fullscreenContainer,.cesium-viewer-infoBoxContainer,
+.cesium-viewer-selectionIndicatorContainer,.cesium-viewer-toolbar,
+.cesium-creditDisplay-inline{display:none!important}
+
+/* Header */
+#hdr{position:absolute;top:0;left:0;right:0;z-index:20;background:linear-gradient(180deg,rgba(0,0,0,.95) 0%,transparent 100%);padding:6px 12px;display:flex;justify-content:space-between;align-items:center;pointer-events:none}
+#logo{color:#FF6600;font-size:12px;font-weight:700;letter-spacing:3px}
+#hst{font-size:9px;color:#444;display:flex;gap:10px}
+.hd{display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:3px;vertical-align:middle}
+.hg{background:#00CC44;animation:pb 2s infinite}.ha{background:#FF6600}.hr{background:#FF4444;animation:pb 1s infinite}
+@keyframes pb{0%,100%{opacity:1}50%{opacity:.2}}
+
+/* Layer Panel */
+#layerPanel{position:absolute;left:8px;top:42px;z-index:20;display:flex;flex-direction:column;gap:2px;pointer-events:all;max-height:calc(100vh - 100px);overflow-y:auto}
+.lbtn{background:rgba(0,0,0,.9);border:1px solid #1a1a1a;color:#555;font-family:'Courier New',monospace;font-size:11px;letter-spacing:1px;padding:5px 10px;cursor:pointer;width:160px;text-align:left;transition:all .15s;white-space:nowrap}
+.lbtn:hover,.lbtn.on{background:rgba(255,102,0,.12);border-color:#FF6600;color:#FF6600}
+.lbtn.cyan{background:rgba(0,255,255,.08);border-color:#00FFFF;color:#00FFFF}
+.lbtn.yellow{background:rgba(255,220,0,.08);border-color:#FFDD00;color:#FFDD00}
+.lbtn.blue{background:rgba(68,136,255,.08);border-color:#4488FF;color:#4488FF}
+.lbtn.green{background:rgba(0,204,68,.08);border-color:#00CC44;color:#00CC44}
+.lbtn.purple{background:rgba(170,68,255,.08);border-color:#AA44FF;color:#AA44FF}
+.lbtn-sep{height:1px;background:#1a1a1a;margin:3px 0}
+.lbtn-hdr{color:#FF6600;font-size:9px;letter-spacing:2px;padding:4px 10px;font-weight:700}
+
+/* Quality Preset Panel */
+#qualPanel{position:absolute;right:8px;bottom:42px;z-index:20;background:rgba(0,0,0,.96);border:1px solid #222;padding:10px;width:220px;display:none}
+#qualPanel.show{display:block}
+.qbtn{width:100%;background:rgba(0,0,0,.8);border:1px solid #1a1a1a;color:#555;font-family:'Courier New',monospace;font-size:10px;padding:6px 10px;cursor:pointer;margin:2px 0;text-align:left;transition:all .15s}
+.qbtn:hover,.qbtn.active{background:rgba(255,102,0,.12);border-color:#FF6600;color:#FF6600}
+.qbtn .qdesc{font-size:8px;color:#333;display:block;margin-top:2px}
+.qbtn.active .qdesc{color:#885500}
+
+/* Country Panel */
+#countryPanel{position:absolute;right:0;top:0;width:380px;height:100%;background:rgba(0,0,2,.98);border-left:1px solid #1a1a1a;z-index:30;display:none;overflow-y:auto;overflow-x:hidden}
+#countryPanel.show{display:block}
+.cp-close{position:absolute;top:10px;right:12px;cursor:pointer;color:#444;font-size:18px;z-index:5;transition:color .15s}
+.cp-close:hover{color:#FF6600}
+.cp-header{padding:16px;border-bottom:1px solid #1a1a1a}
+.cp-code{font-size:10px;color:#00CCAA;letter-spacing:2px;font-weight:700}
+.cp-status{float:right;font-size:10px;letter-spacing:1px;padding:2px 6px;border:1px solid}
+.cp-name{font-size:22px;font-weight:800;color:#fff;margin-top:4px}
+.cp-time{font-size:10px;color:#555;margin-top:2px}
+.cp-threat{padding:12px 16px;border-bottom:1px solid #1a1a1a}
+.cp-threat-score{float:right;font-size:36px;font-weight:900;color:#FF8C00}
+.cp-threat-label{font-size:9px;color:#555;letter-spacing:2px}
+.cp-threat-level{font-size:10px;font-weight:700;margin-top:2px}
+.cp-bar{height:4px;background:#111;margin-top:8px;border-radius:2px;overflow:hidden}
+.cp-bar-fill{height:100%;border-radius:2px;transition:width .6s}
+.cp-leaders{padding:12px 16px;border-bottom:1px solid #1a1a1a}
+.cp-leader{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #0a0a0a}
+.cp-leader-img{width:56px;height:56px;border-radius:4px;object-fit:cover;background:#111;border:1px solid #222}
+.cp-leader-name{font-size:13px;font-weight:700;color:#ddd}
+.cp-leader-title{font-size:10px;color:#666;margin-top:2px}
+.cp-leader-badge{font-size:9px;padding:2px 8px;border:1px solid #00CCAA;color:#00CCAA;margin-left:auto;letter-spacing:1px}
+.cp-tabs{display:flex;border-bottom:1px solid #1a1a1a;overflow-x:auto}
+.cp-tab{flex:1;padding:8px 6px;text-align:center;font-size:9px;letter-spacing:1px;color:#444;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:all .15s}
+.cp-tab:hover,.cp-tab.active{color:#00CCAA;border-bottom-color:#00CCAA}
+.cp-stats{padding:12px 16px}
+.cp-stat{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #0a0a0a;font-size:11px}
+.cp-stat-label{color:#555;letter-spacing:1px;text-transform:uppercase}
+.cp-stat-val{color:#00CCAA;font-weight:700;font-size:13px}
+.cp-stat-link{color:#333;font-size:10px;cursor:pointer;margin-left:6px}
+
+/* Info Card */
+#infoCard{position:absolute;z-index:40;background:rgba(0,0,2,.98);border:1px solid #2a2a2a;border-left:4px solid #FF6600;padding:14px 16px;width:300px;display:none;box-shadow:0 10px 40px rgba(0,0,0,.9)}
+#infoCard.show{display:block}
+.ic-close{position:absolute;top:7px;right:9px;cursor:pointer;color:#444;font-size:16px;transition:color .15s}
+.ic-close:hover{color:#FF6600}
+.ic-label{font-size:8px;letter-spacing:2px;color:#444;margin-bottom:4px;text-transform:uppercase}
+.ic-title{font-size:14px;font-weight:700;color:#fff;margin-bottom:6px;line-height:1.35}
+.ic-body{font-size:11px;color:#999;line-height:1.75;white-space:pre-line}
+.ic-tags{margin-top:6px;display:flex;gap:3px;flex-wrap:wrap}
+.ic-tag{font-size:8px;padding:1px 5px;border:1px solid #252525;color:#555;letter-spacing:1px}
+
+/* Tooltip */
+#tt{position:absolute;z-index:30;background:rgba(0,0,0,.92);border:1px solid #FF6600;padding:3px 7px;font-size:9px;color:#FF8C00;display:none;pointer-events:none;white-space:nowrap}
+
+/* Status bar */
+#sb{position:absolute;bottom:0;left:0;right:0;padding:3px 12px;display:flex;justify-content:space-between;background:linear-gradient(0deg,rgba(0,0,0,.95) 0%,transparent 100%);z-index:20;font-size:8px;letter-spacing:1px;color:#2a2a2a;pointer-events:none}
+
+/* Loader */
+#ls{position:absolute;inset:0;background:#000005;z-index:100;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px}
+#ls.gone{display:none}
+.lt{color:#FF6600;font-size:10px;letter-spacing:4px;animation:pb 1.5s infinite}
+.lb{width:180px;height:2px;background:#111;overflow:hidden}
+.lb::after{content:'';display:block;width:40%;height:100%;background:#FF6600;animation:sl 1.1s linear infinite}
+@keyframes sl{0%{transform:translateX(-100%)}100%{transform:translateX(350%)}}
+
+/* Layer badges */
+.layer-status{position:absolute;bottom:14px;left:170px;z-index:25;display:flex;gap:6px;pointer-events:none}
+.ls-badge{font-size:8px;letter-spacing:1px;padding:2px 6px;border:1px solid #1a1a1a;color:#333}
+.ls-badge.active{border-color:#FF6600;color:#FF6600}
+
+/* Quality toggle btn */
+#qualToggle{position:absolute;right:8px;bottom:14px;z-index:20;background:rgba(0,0,0,.9);border:1px solid #FF6600;color:#FF6600;font-family:'Courier New',monospace;font-size:9px;padding:4px 10px;cursor:pointer;letter-spacing:1px}
+
+/* News feed */
+#newsfeed{position:absolute;bottom:38px;left:10px;z-index:20;width:480px;font-family:'Courier New',monospace}
 
-    html,
-    body {
-      background: #000;
-      color: #d0d3d8;
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-    }
-
-    #c {
-      display: block;
-      position: absolute;
-      top: 0;
-      left: 170px;
-      width: calc(100% - 385px);
-      height: 100%;
-    }
-
-    /* Header */
-    #hdr {
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      z-index: 20;
-      background: linear-gradient(180deg, rgba(0, 0, 0, .95) 0%, transparent 100%);
-      padding: 6px 12px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      pointer-events: none;
-    }
-
-    #logo {
-      color: #FF6600;
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 3px;
-    }
-
-    #hst {
-      font-size: 9px;
-      color: #444;
-      display: flex;
-      gap: 10px;
-    }
-
-    .hd {
-      display: inline-block;
-      width: 5px;
-      height: 5px;
-      border-radius: 50%;
-      margin-right: 3px;
-      vertical-align: middle;
-    }
-
-    .hg {
-      background: #00CC44;
-      animation: pb 2s infinite;
-    }
-
-    .ha {
-      background: #FF6600;
-    }
-
-    .hr {
-      background: #FF4444;
-      animation: pb 1s infinite;
-    }
-
-    @keyframes pb {
-
-      0%,
-      100% {
-        opacity: 1
-      }
-
-      50% {
-        opacity: .2
-      }
-    }
-
-    /* Filter bar */
-    #fb {
-      position: absolute;
-      left: 8px;
-      top: 42px;
-      z-index: 20;
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      pointer-events: all;
-    }
-
-    .fbtn {
-      background: rgba(0, 0, 0, .9);
-      border: 1px solid #1a1a1a;
-      color: #555;
-      font-family: 'Courier New', monospace;
-      font-size: 12px;
-      letter-spacing: 1px;
-      padding: 6px 12px;
-      cursor: pointer;
-      width: 155px;
-      text-align: left;
-      transition: all .15s;
-    }
-
-    .fbtn:hover,
-    .fbtn.on {
-      background: rgba(255, 102, 0, .12);
-      border-color: #FF6600;
-      color: #FF6600;
-    }
-
-    .fbtn.sat-on {
-      background: rgba(0, 255, 255, .08);
-      border-color: #00FFFF;
-      color: #00FFFF;
-    }
-
-    .fbtn.flt-on {
-      background: rgba(255, 220, 0, .08);
-      border-color: #FFDD00;
-      color: #FFDD00;
-    }
-
-    .fbtn.wx-on {
-      background: rgba(0, 200, 255, .08);
-      border-color: #00C8FF;
-      color: #00C8FF;
-    }
-
-    .fbtn-sep {
-      height: 1px;
-      background: #1a1a1a;
-      margin: 3px 0;
-    }
-
-    /* Theater panel */
-    #tp {
-      position: absolute;
-      right: 0;
-      top: 42px;
-      width: 215px;
-      background: rgba(0, 0, 0, .96);
-      border: 1px solid #222;
-      border-right: none;
-      z-index: 20;
-    }
-
-    .tph {
-      padding: 8px 11px;
-      font-size: 11px;
-      letter-spacing: 2px;
-      color: #FF6600;
-      border-bottom: 1px solid #222;
-      font-weight: 700;
-    }
-
-    .tpi {
-      padding: 10px 11px;
-      border-bottom: 1px solid #151515;
-      cursor: pointer;
-      transition: all .15s;
-      border-left: 3px solid transparent;
-      pointer-events: all;
-    }
-
-    .tpi:hover {
-      background: rgba(255, 102, 0, .1);
-      border-left-color: #FF6600;
-    }
-
-    .tpn {
-      font-size: 13px;
-      color: #ddd;
-      font-weight: 700;
-    }
-
-    .tps {
-      font-size: 11px;
-      margin-top: 2px;
-      font-weight: 700;
-      letter-spacing: 1px;
-    }
-
-    .tc {
-      color: #FF4444;
-    }
-
-    .te {
-      color: #FF8C00;
-    }
-
-    .tw {
-      color: #FFCC00;
-    }
-
-    /* Info card popup */
-    #ic {
-      position: absolute;
-      z-index: 50;
-      background: rgba(0, 0, 2, .98);
-      border: 1px solid #2a2a2a;
-      border-left: 4px solid #FF6600;
-      padding: 15px 17px;
-      width: 300px;
-      display: none;
-      box-shadow: 0 10px 40px rgba(0, 0, 0, .9);
-    }
-
-    #ic.show {
-      display: block;
-    }
-
-    #ic.critical {
-      border-left-color: #FF4444;
-    }
-
-    #ic.elevated {
-      border-left-color: #FF6600;
-    }
-
-    #ic.watch {
-      border-left-color: #FFCC00;
-    }
-
-    #ic.satellite {
-      border-left-color: #00FFFF;
-    }
-
-    #ic.flight {
-      border-left-color: #FFDD00;
-    }
-
-    #ic-close {
-      position: absolute;
-      top: 7px;
-      right: 9px;
-      cursor: pointer;
-      color: #444;
-      font-size: 16px;
-      line-height: 1;
-      transition: color .15s;
-    }
-
-    #ic-close:hover {
-      color: #FF6600;
-    }
-
-    .icl {
-      font-size: 8px;
-      letter-spacing: 2px;
-      color: #444;
-      margin-bottom: 4px;
-      text-transform: uppercase;
-    }
-
-    .ict {
-      font-size: 14px;
-      font-weight: 700;
-      color: #fff;
-      margin-bottom: 7px;
-      line-height: 1.35;
-    }
-
-    .icb {
-      font-size: 11px;
-      color: #999;
-      line-height: 1.75;
-    }
-
-    .icm {
-      color: #00AAFF;
-      margin-top: 7px;
-      font-size: 11px;
-      font-weight: 600;
-    }
-
-    .ictags {
-      margin-top: 7px;
-      display: flex;
-      gap: 3px;
-      flex-wrap: wrap;
-    }
-
-    .ictag {
-      font-size: 8px;
-      padding: 1px 5px;
-      border: 1px solid #252525;
-      color: #555;
-      letter-spacing: 1px;
-    }
-
-    #ic-date {
-      color: #555;
-      font-size: 9px;
-      margin-top: 6px;
-      letter-spacing: 1px;
-    }
-
-    #ic-track-btn {
-      margin-top: 9px;
-      width: 100%;
-      padding: 5px;
-      font-family: 'Courier New', monospace;
-      font-size: 9px;
-      letter-spacing: 1px;
-      cursor: pointer;
-      border: 1px solid #00FFFF;
-      background: rgba(0, 255, 255, .08);
-      color: #00FFFF;
-      transition: all .15s;
-      display: none;
-    }
-
-    #ic-track-btn:hover {
-      background: rgba(0, 255, 255, .2);
-    }
-
-    #ic-track-btn.flt {
-      border-color: #FFDD00;
-      background: rgba(255, 220, 0, .08);
-      color: #FFDD00;
-    }
-
-    #ic-track-btn.flt:hover {
-      background: rgba(255, 220, 0, .2);
-    }
-
-    #ic-track-btn.vessel {
-      border-color: #4488FF;
-      background: rgba(68, 136, 255, .08);
-      color: #4488FF;
-    }
-
-    #ic-track-btn.vessel:hover {
-      background: rgba(68, 136, 255, .2);
-    }
-
-    #ic.vessel {
-      border-left-color: #4488FF;
-      padding: 0;
-      width: 320px;
-      overflow: hidden;
-    }
-
-    #ic.vessel #ic-close {
-      top: 8px;
-      right: 10px;
-      color: #666;
-      z-index: 5;
-    }
-
-    /* Hide generic card elements when vessel class active */
-    #ic.vessel .icl,
-    #ic.vessel .icb,
-    #ic.vessel .icm,
-    #ic.vessel .ictags,
-    #ic.vessel #ic-date {
-      display: none;
-    }
-
-    /* Vessel card custom elements */
-    .vc-header {
-      background: linear-gradient(135deg, #0a1628 0%, #0d1f3c 100%);
-      padding: 12px 15px;
-      border-bottom: 1px solid #1a2a4a;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .vc-header-icon {
-      width: 36px;
-      height: 36px;
-      border-radius: 6px;
-      background: #4488FF;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 18px;
-      flex-shrink: 0;
-    }
-
-    .vc-header-info {
-      flex: 1;
-      overflow: hidden;
-    }
-
-    .vc-header-name {
-      font-size: 14px;
-      font-weight: 800;
-      color: #fff;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      letter-spacing: 0.5px;
-    }
-
-    .vc-header-type {
-      font-size: 10px;
-      color: #6699CC;
-      margin-top: 1px;
-      letter-spacing: 0.5px;
-    }
-
-    .vc-dest {
-      padding: 10px 15px;
-      border-bottom: 1px solid #111;
-    }
-
-    .vc-dest-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      margin-bottom: 6px;
-    }
-
-    .vc-dest-label {
-      font-size: 9px;
-      color: #555;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      margin-bottom: 2px;
-    }
-
-    .vc-dest-value {
-      font-size: 13px;
-      font-weight: 700;
-      color: #ddd;
-    }
-
-    .vc-dest-country {
-      font-size: 10px;
-      color: #888;
-      text-align: right;
-    }
-
-    .vc-progress {
-      padding: 8px 15px 10px;
-      border-bottom: 1px solid #111;
-    }
-
-    .vc-progress-bar {
-      position: relative;
-      height: 4px;
-      background: #222;
-      border-radius: 2px;
-      overflow: visible;
-    }
-
-    .vc-progress-fill {
-      height: 100%;
-      background: linear-gradient(90deg, #4488FF, #66AAFF);
-      border-radius: 2px;
-      position: relative;
-    }
-
-    .vc-progress-arrow {
-      position: absolute;
-      right: -7px;
-      top: 50%;
-      transform: translateY(-50%);
-      width: 0;
-      height: 0;
-      border-top: 5px solid transparent;
-      border-bottom: 5px solid transparent;
-      border-left: 8px solid #66AAFF;
-    }
-
-    .vc-progress-dots {
-      display: flex;
-      justify-content: space-between;
-      margin-top: 5px;
-    }
-
-    .vc-progress-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      border: 1.5px solid #4488FF;
-    }
-
-    .vc-progress-dot.filled {
-      background: #4488FF;
-    }
-
-    .vc-data {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      border-bottom: 1px solid #111;
-    }
-
-    .vc-data-cell {
-      padding: 8px 12px;
-      border-right: 1px solid #111;
-    }
-
-    .vc-data-cell:last-child {
-      border-right: none;
-    }
-
-    .vc-data-label {
-      font-size: 9px;
-      color: #555;
-      letter-spacing: 0.5px;
-      margin-bottom: 2px;
-    }
-
-    .vc-data-val {
-      font-size: 12px;
-      color: #ccc;
-      font-weight: 600;
-    }
-
-    .vc-actions {
-      padding: 10px 15px;
-      border-bottom: 1px solid #111;
-    }
-
-    .vc-track-btn {
-      width: 100%;
-      padding: 7px 12px;
-      font-family: 'Courier New', monospace;
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 1px;
-      cursor: pointer;
-      border: 1px solid #4488FF;
-      background: rgba(68, 136, 255, .1);
-      color: #4488FF;
-      border-radius: 3px;
-      transition: all .15s;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-    }
-
-    .vc-track-btn:hover {
-      background: rgba(68, 136, 255, .25);
-    }
-
-    .vc-footer {
-      padding: 8px 15px;
-      font-size: 9px;
-      color: #444;
-      letter-spacing: 0.5px;
-      line-height: 1.5;
-    }
-
-    .vc-footer b {
-      color: #777;
-      font-weight: 600;
-    }
-
-    .vc-ais-src {
-      color: #555;
-    }
-
-    /* Tracking bar */
-    #trackbar {
-      position: absolute;
-      top: 28px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 25;
-      background: rgba(0, 0, 0, .92);
-      border: 1px solid #00FFFF;
-      padding: 4px 14px;
-      font-size: 9px;
-      letter-spacing: 2px;
-      color: #00FFFF;
-      display: none;
-      white-space: nowrap;
-    }
-
-    #trackbar.flt {
-      border-color: #FFDD00;
-      color: #FFDD00;
-    }
-
-    #trackbar.vessel {
-      border-color: #4488FF;
-      color: #4488FF;
-    }
-
-    #trackbar-stop {
-      margin-left: 10px;
-      cursor: pointer;
-      color: #444;
-    }
-
-    #trackbar-stop:hover {
-      color: #FF6600;
-    }
-
-    /* Satellite status */
-    #satpanel {
-      position: absolute;
-      right: 0;
-      width: 215px;
-      background: rgba(0, 0, 0, .96);
-      border: 1px solid #222;
-      border-right: none;
-      z-index: 20;
-      display: none;
-    }
-
-    .satph {
-      padding: 8px 11px;
-      font-size: 11px;
-      letter-spacing: 2px;
-      color: #00FFFF;
-      border-bottom: 1px solid #222;
-      font-weight: 700;
-    }
-
-    .satpi {
-      padding: 7px 11px;
-      border-bottom: 1px solid #111;
-      cursor: pointer;
-      transition: all .15s;
-      border-left: 3px solid transparent;
-    }
-
-    .satpi:hover {
-      background: rgba(0, 255, 255, .07);
-      border-left-color: #00FFFF;
-    }
-
-    .satpn {
-      font-size: 11px;
-      color: #bbb;
-    }
-
-    .satps {
-      font-size: 9px;
-      color: #00FFFF;
-      margin-top: 1px;
-      letter-spacing: 1px;
-    }
-
-    /* Add event */
-    #addbtn {
-      position: absolute;
-      right: 225px;
-      bottom: 42px;
-      z-index: 20;
-      background: rgba(255, 102, 0, .1);
-      border: 1px solid #FF6600;
-      color: #FF6600;
-      font-family: 'Courier New', monospace;
-      font-size: 9px;
-      padding: 4px 10px;
-      cursor: pointer;
-      letter-spacing: 1px;
-    }
-
-    #addbtn:hover {
-      background: rgba(255, 102, 0, .2);
-    }
-
-    #adddlg {
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
-      background: #060606;
-      border: 1px solid #FF6600;
-      padding: 18px;
-      width: 320px;
-      z-index: 60;
-      display: none;
-    }
-
-    #adddlg.show {
-      display: block;
-    }
-
-    #adddlg h3 {
-      color: #FF6600;
-      font-size: 10px;
-      letter-spacing: 2px;
-      margin-bottom: 12px;
-    }
-
-    #adddlg label {
-      font-size: 9px;
-      color: #666;
-      display: block;
-      margin-bottom: 2px;
-      letter-spacing: 1px;
-    }
-
-    #adddlg input,
-    #adddlg select,
-    #adddlg textarea {
-      width: 100%;
-      background: #000;
-      border: 1px solid #1a1a1a;
-      color: #ccc;
-      font-family: 'Courier New', monospace;
-      font-size: 10px;
-      padding: 4px 7px;
-      margin-bottom: 8px;
-    }
-
-    .dbtns {
-      display: flex;
-      gap: 7px;
-      margin-top: 3px;
-    }
-
-    .dbok {
-      flex: 1;
-      padding: 5px;
-      font-family: 'Courier New', monospace;
-      font-size: 9px;
-      cursor: pointer;
-      border: 1px solid #FF6600;
-      background: rgba(255, 102, 0, .15);
-      color: #FF6600;
-    }
-
-    .dbcancel {
-      flex: 1;
-      padding: 5px;
-      font-family: 'Courier New', monospace;
-      font-size: 9px;
-      cursor: pointer;
-      border: 1px solid #1a1a1a;
-      background: transparent;
-      color: #555;
-    }
-
-    /* Status bar */
-    #sb {
-      position: absolute;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      padding: 3px 12px;
-      display: flex;
-      justify-content: space-between;
-      background: linear-gradient(0deg, rgba(0, 0, 0, .95) 0%, transparent 100%);
-      z-index: 20;
-      font-size: 8px;
-      letter-spacing: 1px;
-      color: #2a2a2a;
-      pointer-events: none;
-    }
-
-    /* Tooltip */
-    #tt {
-      position: absolute;
-      z-index: 30;
-      background: rgba(0, 0, 0, .92);
-      border: 1px solid #FF6600;
-      padding: 3px 7px;
-      font-size: 9px;
-      color: #FF8C00;
-      display: none;
-      pointer-events: none;
-      white-space: nowrap;
-    }
-
-    #tt.sat {
-      border-color: #00FFFF;
-      color: #00FFFF;
-    }
-
-    #tt.flt {
-      border-color: #FFDD00;
-      color: #FFDD00;
-    }
-
-    /* Loader */
-    #ls {
-      position: absolute;
-      inset: 0;
-      background: #000005;
-      z-index: 100;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-direction: column;
-      gap: 12px;
-    }
-
-    #ls.gone {
-      display: none;
-    }
-
-    .lt {
-      color: #FF6600;
-      font-size: 10px;
-      letter-spacing: 4px;
-      animation: pb 1.5s infinite;
-    }
-
-    .lb {
-      width: 180px;
-      height: 2px;
-      background: #111;
-      overflow: hidden;
-    }
-
-    .lb::after {
-      content: '';
-      display: block;
-      width: 40%;
-      height: 100%;
-      background: #FF6600;
-      animation: sl 1.1s linear infinite;
-    }
-
-    @keyframes sl {
-      0% {
-        transform: translateX(-100%)
-      }
-
-      100% {
-        transform: translateX(350%)
-      }
-    }
-
-    /* Loading badges */
-    .layer-status {
-      position: absolute;
-      bottom: 14px;
-      left: 180px;
-      z-index: 25;
-      display: flex;
-      gap: 6px;
-      pointer-events: none;
-    }
-
-    .ls-badge {
-      font-size: 8px;
-      letter-spacing: 1px;
-      padding: 2px 6px;
-      border: 1px solid #1a1a1a;
-      color: #333;
-    }
-
-    .ls-badge.active {
-      border-color: #00FFFF;
-      color: #00FFFF;
-    }
-
-    .ls-badge.flt-active {
-      border-color: #FFDD00;
-      color: #FFDD00;
-    }
-
-    .ls-badge.wx-active {
-      border-color: #00C8FF;
-      color: #00C8FF;
-    }
-
-    /* Weather events panel */
-    #wxpanel {
-      position: absolute;
-      right: 0;
-      width: 215px;
-      background: rgba(0, 0, 0, .96);
-      border: 1px solid #222;
-      border-right: none;
-      z-index: 20;
-      display: none;
-    }
-
-    .wxph {
-      padding: 8px 11px;
-      font-size: 11px;
-      letter-spacing: 2px;
-      color: #00C8FF;
-      border-bottom: 1px solid #222;
-      font-weight: 700;
-    }
-
-    .wxpi {
-      padding: 7px 11px;
-      border-bottom: 1px solid #111;
-      cursor: pointer;
-      transition: all .15s;
-      border-left: 3px solid transparent;
-    }
-
-    .wxpi:hover {
-      background: rgba(0, 200, 255, .07);
-      border-left-color: #00C8FF;
-    }
-
-    .wxpn {
-      font-size: 11px;
-      color: #bbb;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .wxps {
-      font-size: 9px;
-      color: #00C8FF;
-      margin-top: 1px;
-      letter-spacing: 1px;
-    }
-
-    #tt.wx {
-      border-color: #00C8FF;
-      color: #00C8FF;
-    }
-
-    #ic.weather {
-      border-left-color: #00C8FF;
-    }
+/* Weather radar controls */
+#wxControls{position:absolute;bottom:42px;left:50%;transform:translateX(-50%);z-index:20;background:rgba(0,0,0,.92);border:1px solid #00C8FF;padding:4px 12px;display:none;gap:8px;align-items:center;font-size:9px;color:#00C8FF}
+#wxControls.show{display:flex}
   </style>
 </head>
-
 <body>
-  <div id="ls">
-    <div style="color:#FF6600;font-size:18px;font-weight:900;letter-spacing:5px">⚡ SENTINEL GEO</div>
-    <div class="lt">LOADING GEOPOLITICAL LAYER…</div>
-    <div class="lb"></div>
+<!-- SENTINEL GEO — HTML Body Structure -->
+<!-- This file is included inline in globe.html -->
+
+<!-- Loader -->
+<div id="ls">
+  <div style="color:#FF6600;font-size:18px;font-weight:900;letter-spacing:5px">⚡ SENTINEL GEO</div>
+  <div class="lt">INITIALIZING CESIUM GLOBE ENGINE…</div>
+  <div class="lb"></div>
+</div>
+
+<!-- Cesium container -->
+<div id="cesiumContainer"></div>
+
+<!-- Header -->
+<div id="hdr">
+  <div><span id="logo">⚡ SENTINEL GEO</span><span style="color:#2a2a2a;font-size:8px;margin-left:10px">GEOPOLITICAL INTELLIGENCE — CESIUM</span></div>
+  <div id="hst">
+    <span><span class="hd hg"></span>LIVE</span>
+    <span><span class="hd hg"></span>GDELT</span>
+    <span><span class="hd ha"></span>AIS</span>
+    <span id="sat-status" style="display:none"><span class="hd" style="background:#00FFFF;animation:pb 3s infinite"></span>SAT</span>
+    <span id="flt-status" style="display:none"><span class="hd" style="background:#FFDD00;animation:pb 2s infinite"></span>MIL-AIR</span>
+    <span id="wx-status" style="display:none"><span class="hd" style="background:#00C8FF;animation:pb 2.5s infinite"></span>RADAR</span>
+    <span id="clk" style="color:#333"></span>
   </div>
+</div>
 
-  <canvas id="c"></canvas>
+<!-- Layer Toggle Panel -->
+<div id="layerPanel">
+  <div class="lbtn-hdr">⚡ LAYERS</div>
+  <button class="lbtn on" data-layer="borders" onclick="toggleLayer('borders',this)">🗺 COUNTRY BORDERS</button>
+  <button class="lbtn" data-layer="conflicts" onclick="toggleLayer('conflicts',this)">◆ CONFLICT EVENTS</button>
+  <div class="lbtn-sep"></div>
+  <div class="lbtn-hdr">INFRASTRUCTURE</div>
+  <button class="lbtn" data-layer="cables" onclick="toggleLayer('cables',this)">🔌 FIBER OPTIC CABLES</button>
+  <button class="lbtn" data-layer="nuclear" onclick="toggleLayer('nuclear',this)">☢ NUCLEAR PLANTS</button>
+  <button class="lbtn" data-layer="pipelines" onclick="toggleLayer('pipelines',this)">🛢 OIL/GAS PIPELINES</button>
+  <button class="lbtn" data-layer="refineries" onclick="toggleLayer('refineries',this)">🏭 OIL REFINERIES</button>
+  <button class="lbtn" data-layer="ports" onclick="toggleLayer('ports',this)">⚓ MAJOR PORTS</button>
+  <div class="lbtn-sep"></div>
+  <div class="lbtn-hdr">TRACKING</div>
+  <button class="lbtn" data-layer="satellites" onclick="toggleLayer('satellites',this)">◉ SATELLITES</button>
+  <button class="lbtn" data-layer="milair" onclick="toggleLayer('milair',this)">✈ MIL AIR</button>
+  <button class="lbtn" data-layer="vessels" onclick="toggleLayer('vessels',this)">🚢 AIS VESSELS</button>
+  <div class="lbtn-sep"></div>
+  <div class="lbtn-hdr">WEATHER</div>
+  <button class="lbtn" data-layer="radar" onclick="toggleLayer('radar',this)">🌧 RAIN RADAR</button>
+  <button class="lbtn" data-layer="eonet" onclick="toggleLayer('eonet',this)">🌪 NASA EONET</button>
+</div>
 
-  <div id="hdr">
-    <div><span id="logo">⚡ SENTINEL GEO</span><span style="color:#2a2a2a;font-size:8px;margin-left:10px">GEOPOLITICAL
-        INTELLIGENCE</span></div>
-    <div id="hst">
-      <span><span class="hd hg"></span>LIVE</span>
-      <span><span class="hd hg"></span>GDELT</span>
-      <span><span class="hd ha"></span>AIS</span>
-      <span id="sat-status" style="display:none"><span class="hd"
-          style="background:#00FFFF;animation:pb 3s infinite"></span>SAT</span>
-      <span id="flt-status" style="display:none"><span class="hd"
-          style="background:#FFDD00;animation:pb 2s infinite"></span>MIL-AIR</span>
-      <span id="wx-status" style="display:none"><span class="hd"
-          style="background:#00C8FF;animation:pb 2.5s infinite"></span>EONET</span>
-      <span id="clk" style="color:#333"></span>
-    </div>
+<!-- Country Info Panel -->
+<div id="countryPanel">
+  <span class="cp-close" onclick="closeCountryPanel()">✕</span>
+  <div id="cp-content"></div>
+</div>
+
+<!-- Info Card (for infrastructure clicks) -->
+<div id="infoCard">
+  <span class="ic-close" onclick="closeInfoCard()">✕</span>
+  <div class="ic-label" id="ic-label"></div>
+  <div class="ic-title" id="ic-title"></div>
+  <div class="ic-body" id="ic-body"></div>
+  <div class="ic-tags" id="ic-tags"></div>
+</div>
+
+<!-- Tooltip -->
+<div id="tt"></div>
+
+<!-- Weather Radar Controls -->
+<div id="wxControls">
+  <span>🌧 RAIN RADAR</span>
+  <button onclick="wxPrev()" style="background:none;border:1px solid #00C8FF;color:#00C8FF;cursor:pointer;padding:1px 6px;font-size:9px">◀</button>
+  <span id="wxTime">--:--</span>
+  <button onclick="wxNext()" style="background:none;border:1px solid #00C8FF;color:#00C8FF;cursor:pointer;padding:1px 6px;font-size:9px">▶</button>
+  <button onclick="wxPlay()" id="wxPlayBtn" style="background:none;border:1px solid #00C8FF;color:#00C8FF;cursor:pointer;padding:1px 6px;font-size:9px">▶ PLAY</button>
+  <input type="range" id="wxOpacity" min="0" max="100" value="60" style="width:60px" oninput="wxSetOpacity(this.value)">
+</div>
+
+<!-- News Feed -->
+<div id="newsfeed">
+  <div style="color:#FF6600;font-size:11px;letter-spacing:2px;margin-bottom:6px;font-weight:700">📡 LIVE INTEL FEED</div>
+  <div id="nf-items"></div>
+</div>
+
+<!-- Layer Badges -->
+<div class="layer-status">
+  <div class="ls-badge" id="badge-main">● CESIUM</div>
+</div>
+
+<!-- Quality Toggle -->
+<button id="qualToggle" onclick="toggleQualPanel()">⚙ HIGH</button>
+
+<!-- Quality Preset Panel -->
+<div id="qualPanel">
+  <div style="color:#FF6600;font-size:10px;letter-spacing:2px;margin-bottom:8px;font-weight:700">⚙ QUALITY PRESETS</div>
+  <button class="qbtn" onclick="setPreset('LOW')">LOW<span class="qdesc">Flat dark globe. Lowest GPU use. TILES×4 SSE 8</span></button>
+  <button class="qbtn" onclick="setPreset('MEDIUM')">MEDIUM<span class="qdesc">Terrain + satellite basemap. TILES×20 SSE 4</span></button>
+  <button class="qbtn active" onclick="setPreset('HIGH')">HIGH<span class="qdesc">Full terrain + satellite. TILES×30 SSE 3.5</span></button>
+  <button class="qbtn" onclick="setPreset('EXTREME')">EXTREME<span class="qdesc">Max detail, 4K-ready. TILES×60 SSE 2</span></button>
+  <button class="qbtn" onclick="setPreset('CUSTOM')">CUSTOM<span class="qdesc">Tune each knob by hand.</span></button>
+  <div id="customKnobs" style="display:none;margin-top:8px;border-top:1px solid #222;padding-top:8px">
+    <label style="font-size:9px;color:#555">SSE: <input type="range" id="knobSSE" min="1" max="16" value="4" style="width:100px" oninput="applyCustom()"><span id="knobSSEVal">3.5</span></label><br>
+    <label style="font-size:9px;color:#555">TILES: <input type="range" id="knobTiles" min="2" max="80" value="30" style="width:100px" oninput="applyCustom()"><span id="knobTilesVal">30</span></label><br>
+    <label style="font-size:9px;color:#555">SAT LIM: <input type="range" id="knobSat" min="50" max="15000" value="2000" step="50" style="width:100px" oninput="applyCustom()"><span id="knobSatVal">2000</span></label><br>
+    <label style="font-size:9px;color:#555">AIS LIM: <input type="range" id="knobAIS" min="50" max="15000" value="4000" step="50" style="width:100px" oninput="applyCustom()"><span id="knobAISVal">4000</span></label>
   </div>
+</div>
 
-  <!-- Tracking bar -->
-  <div id="trackbar">
-    <span id="trackbar-label">◉ TRACKING: —</span>
-    <span id="trackbar-stop" onclick="stopTracking()">✕ STOP</span>
-  </div>
+<!-- Status Bar -->
+<div id="sb">
+  <div>CESIUM 3D GLOBE · SATELLITE IMAGERY · TERRAIN</div>
+  <div>CLICK COUNTRY FOR INTEL · TOGGLE LAYERS LEFT · SCROLL TO ZOOM</div>
+  <div>CESIUMJS · GDELT · CELESTRAK · RAINVIEWER</div>
+</div>
 
-  <!-- Filter bar -->
-  <div id="fb">
-    <button class="fbtn on" onclick="setFilter('all',this)">● ALL EVENTS</button>
-    <button class="fbtn" onclick="setFilter('conflict',this)">◆ CONFLICT</button>
-    <button class="fbtn" onclick="setFilter('energy',this)">⬡ ENERGY</button>
-    <button class="fbtn" onclick="setFilter('shipping',this)">◈ SHIPPING</button>
-    <button class="fbtn" onclick="setFilter('minerals',this)">⬟ MINERALS</button>
-    <button class="fbtn" onclick="setFilter('trade',this)">◇ TRADE/TECH</button>
-    <button class="fbtn" onclick="setFilter('weather',this)">🌪 WEATHER</button>
-    <button class="fbtn" onclick="setFilter('custom',this)">+ MY EVENTS</button>
-    <div class="fbtn-sep"></div>
-    <button class="fbtn" id="sat-btn" onclick="toggleSatLayer(this)">◉ SATELLITES</button>
-    <button class="fbtn" id="flt-btn" onclick="toggleFlightLayer(this)">✈ MIL AIR</button>
-    <button class="fbtn" id="wx-btn" onclick="toggleWeatherLayer(this)">🌪 NASA EONET</button>
-  </div>
-
-  <div id="tp">
-    <div class="tph">⚠ THEATER STATUS <span id="tp-update" style="color:#333;font-size:7px;letter-spacing:0">LIVE</span>
-    </div>
-    <div id="tp-items"></div>
-  </div>
-
-  <!-- Satellite quicklist panel (replaces theater panel when sats active) -->
-  <div id="satpanel">
-    <div class="satph">◉ TRACKED OBJECTS <span id="sat-count" style="color:#333;font-size:8px"></span></div>
-    <div id="sat-items" style="max-height:calc(100vh - 200px);overflow-y:auto;"></div>
-  </div>
-
-  <!-- Weather events quicklist panel -->
-  <div id="wxpanel">
-    <div class="wxph">🌪 NASA EONET <span id="wx-count" style="color:#333;font-size:8px"></span></div>
-    <div id="wx-items" style="max-height:calc(100vh - 200px);overflow-y:auto;"></div>
-  </div>
-
-  <div id="ic">
-    <span id="ic-close" onclick="closeCard()">✕</span>
-    <div class="icl" id="ic-sev"></div>
-    <div class="ict" id="ic-ttl"></div>
-    <div class="icb" id="ic-body"></div>
-    <div class="icm" id="ic-mkt"></div>
-    <div class="ictags" id="ic-tags"></div>
-    <div id="ic-date"></div>
-    <button id="ic-track-btn" onclick="startTrackingFromCard()">◉ TRACK ORBIT</button>
-  </div>
-
-  <!-- Live news feed panel -->
-  <div id="newsfeed"
-    style="position:absolute;bottom:38px;left:10px;z-index:20;width:520px;font-family:'Courier New',monospace">
-    <div style="color:#FF6600;font-size:11px;letter-spacing:2px;margin-bottom:6px;font-weight:700">📡 LIVE INTEL FEED
-    </div>
-    <div id="nf-items" style="font-size:13px"></div>
-  </div>
-
-  <!-- Layer badges -->
-  <div class="layer-status">
-    <div class="ls-badge" id="badge-sats">◉ SATS: OFF</div>
-    <div class="ls-badge" id="badge-flt">✈ MIL-AIR: OFF</div>
-    <div class="ls-badge" id="badge-wx">🌪 EONET: OFF</div>
-  </div>
-
-  <div id="tt"></div>
-
-  <button id="addbtn" onclick="document.getElementById('adddlg').classList.add('show')">＋ ADD EVENT</button>
-  <div id="adddlg">
-    <h3>ADD CUSTOM EVENT</h3>
-    <label>TITLE</label><input id="ae-title" placeholder="e.g. Belarus Tensions">
-    <label>LAT / LON</label>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">
-      <input id="ae-lat" placeholder="e.g. 52.0"><input id="ae-lon" placeholder="e.g. 28.0">
-    </div>
-    <label>DESCRIPTION</label><textarea id="ae-desc" rows="3" placeholder="Intel summary…"></textarea>
-    <label>SEVERITY</label>
-    <select id="ae-sev">
-      <option value="critical">CRITICAL</option>
-      <option value="elevated">ELEVATED</option>
-      <option value="watch">WATCH</option>
-    </select>
-    <label>MARKET IMPACT</label><input id="ae-mkt" placeholder="e.g. XLE, WTI Crude">
-    <div class="dbtns">
-      <button class="dbok" onclick="addCustomEvent()">CONFIRM</button>
-      <button class="dbcancel" onclick="document.getElementById('adddlg').classList.remove('show')">CANCEL</button>
-    </div>
-  </div>
-
-  <div id="sb">
-    <div><span class="hd hr" style="display:inline-block;margin-right:4px"></span>3 CRITICAL &nbsp;<span class="hd ha"
-        style="display:inline-block;margin-right:4px;margin-left:8px"></span>4 ELEVATED</div>
-    <div>DRAG TO ROTATE · SCROLL TO ZOOM · CLICK MARKERS FOR INTEL</div>
-    <div>THREE.JS · CELESTRAK · ADSBX · GDELT · NASA EONET</div>
-  </div>
-
-  <!-- satellite.js — loaded dynamically with fallback CDNs -->
   <script>
-    (function () {
-      function tryLoad(urls, idx) {
-        if (idx >= urls.length) return;
-        const s = document.createElement('script');
-        s.src = urls[idx];
-        s.onerror = function () { tryLoad(urls, idx + 1); };
-        document.head.appendChild(s);
+    (function(){
+      function tryLoad(urls,idx){
+        if(idx>=urls.length)return;
+        const s=document.createElement('script');s.src=urls[idx];
+        s.onerror=function(){tryLoad(urls,idx+1);};document.head.appendChild(s);
       }
       tryLoad([
         'https://cdn.jsdelivr.net/npm/satellite.js@4.1.3/dist/satellite.min.js',
-        'https://unpkg.com/satellite.js@4.1.3/dist/satellite.min.js',
-        'https://cdnjs.cloudflare.com/ajax/libs/satellite.js/4.1.3/satellite.min.js'
-      ], 0);
+        'https://unpkg.com/satellite.js@4.1.3/dist/satellite.min.js'
+      ],0);
     })();
   </script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script>
-    // ============================================================
-    // API CONFIGURATION
-    // ============================================================
-    // ADS-B Exchange (RapidAPI) — optional, for military aircraft
-    // Get key at: https://rapidapi.com/adsbexchange-adsbexchange-default/api/adsbexchange-com1
-    // Free tier available. If left blank, falls back to OpenSky (US military hex filter).
-    const ADSBX_API_KEY = ''; // <-- PASTE YOUR RAPIDAPI KEY HERE
+// SENTINEL GEO — Embedded Infrastructure Data
+// Format: compact arrays to minimize file size
 
-    // CelesTrak: No key needed — free public API
-    // OpenSky: No key needed — free public API (rate limited)
-    // ============================================================
+// ── NUCLEAR POWER PLANTS [name, country, lat, lon, capacityMW, reactors, status]
+const NUCLEAR_PLANTS = [
+["Zaporizhzhia","Ukraine",47.51,34.59,5700,6,"Occupied"],["Bruce","Canada",44.33,-81.60,6384,8,"Active"],
+["Kashiwazaki-Kariwa","Japan",37.43,138.60,7965,7,"Restart"],["Hanul","S. Korea",37.09,129.38,5881,6,"Active"],
+["Hanbit","S. Korea",35.41,126.42,5875,6,"Active"],["Gravelines","France",51.02,2.10,5460,6,"Active"],
+["Paluel","France",49.86,0.63,5320,4,"Active"],["Cattenom","France",49.41,6.22,5200,4,"Active"],
+["Palo Verde","USA",33.39,-112.86,3937,3,"Active"],["Vogtle","USA",33.14,-81.76,4540,4,"Active"],
+["Barakah","UAE",23.96,52.26,5380,4,"Active"],["Taishan","China",21.91,112.98,3440,2,"Active"],
+["Yangjiang","China",21.71,111.98,5780,6,"Active"],["Hongyanhe","China",39.79,121.48,4452,6,"Active"],
+["Fuqing","China",25.44,119.44,5510,6,"Active"],["Tianwan","China",34.69,119.46,5060,6,"Active"],
+["Kudankulam","India",8.17,77.71,2000,2,"Active"],["Tarapur","India",19.83,72.63,1400,4,"Active"],
+["Kursk II","Russia",51.67,35.61,2510,2,"Active"],["Leningrad II","Russia",59.83,29.03,2340,2,"Active"],
+["Novovoronezh II","Russia",51.27,39.22,2340,2,"Active"],["Balakovo","Russia",52.09,47.96,4000,4,"Active"],
+["Olkiluoto","Finland",61.24,21.45,2860,3,"Active"],["Hinkley Point C","UK",51.21,-3.13,3260,2,"Building"],
+["Sizewell B","UK",52.21,1.62,1198,1,"Active"],["Doel","Belgium",51.33,4.26,2911,4,"Active"],
+["Koeberg","S. Africa",-33.68,18.43,1860,2,"Active"],["Akkuyu","Turkey",36.14,33.53,4456,4,"Building"],
+["Rooppur","Bangladesh",24.07,89.05,2160,2,"Building"],["El Dabaa","Egypt",31.03,28.51,4560,4,"Building"],
+["Shin-Kori","S. Korea",35.32,129.30,5600,6,"Active"],["Flamanville","France",49.54,-1.88,1630,1,"Active"],
+["Ringhals","Sweden",57.26,12.11,3956,4,"Active"],["Forsmark","Sweden",60.41,18.17,3275,3,"Active"],
+["Dukovany","Czech Rep.",51.09,16.15,2040,4,"Active"],["Mochovce","Slovakia",48.28,18.44,1880,4,"Active"],
+["Cernavoda","Romania",44.32,28.06,1300,2,"Active"],["Angra","Brazil",-23.01,-44.46,1884,2,"Active"],
+["Atucha","Argentina",-34.06,-59.21,1045,2,"Active"],["Bushehr","Iran",28.83,50.89,915,1,"Active"],
+["Paksh","Hungary",46.57,18.85,2000,4,"Active"],["Belarusian","Belarus",54.76,26.09,2218,2,"Active"],
+];
 
-    // ── CLOCK
-    setInterval(() => {
-      const d = new Date();
-      const el = document.getElementById('clk');
-      if (el) el.textContent = d.toUTCString().slice(17, 25) + ' UTC';
-    }, 1000);
+// ── OIL REFINERIES [name, country, lat, lon, capacityBPD, operator]
+const OIL_REFINERIES = [
+["Jamnagar","India",22.25,69.07,1240000,"Reliance"],["Ruwais","UAE",24.11,52.73,922000,"ADNOC"],
+["SK Ulsan","S. Korea",35.50,129.39,840000,"SK Energy"],["Paraguana","Venezuela",11.73,-70.21,940000,"PDVSA"],
+["GS Caltex Yeosu","S. Korea",34.76,127.74,800000,"GS Caltex"],["Galveston Bay","USA",29.37,-94.90,585000,"Marathon"],
+["Port Arthur","USA",29.87,-93.93,630000,"Motiva"],["Garyville","USA",30.06,-90.56,564000,"Marathon"],
+["Ras Tanura","Saudi Arabia",26.64,50.15,550000,"Saudi Aramco"],["Jurong Island","Singapore",1.27,103.68,592000,"ExxonMobil"],
+["Pulau Bukom","Singapore",1.23,103.76,500000,"Shell"],["Fawley","UK",50.82,-1.33,270000,"ExxonMobil"],
+["Rotterdam","Netherlands",51.89,4.34,404000,"Shell/BP"],["Antwerp","Belgium",51.27,4.38,360000,"TotalEnergies"],
+["Baytown","USA",29.76,-95.01,560000,"ExxonMobil"],["Baton Rouge","USA",30.50,-91.19,502000,"ExxonMobil"],
+["Whiting","USA",41.68,-87.50,435000,"BP"],["Deer Park","USA",29.71,-95.12,340000,"Shell"],
+["Pembroke","UK",51.68,-5.01,270000,"Valero"],["Schwedt","Germany",53.07,14.29,240000,"PCK"],
+["Tuapse","Russia",44.10,39.07,240000,"Rosneft"],["Omsk","Russia",55.03,73.29,424000,"GazpromNeft"],
+["Kirishi","Russia",59.44,32.01,420000,"Surgutneftegas"],["Zhenhai","China",29.95,121.72,460000,"Sinopec"],
+["Maoming","China",21.66,110.88,350000,"Sinopec"],["Negishi","Japan",35.40,139.64,270000,"ENEOS"],
+["Mizushima","Japan",34.52,133.73,340000,"ENEOS"],["Cilacap","Indonesia",-7.73,109.01,348000,"Pertamina"],
+["Rayong","Thailand",12.70,101.14,275000,"Thai Oil"],["Rabigh","Saudi Arabia",22.80,39.01,400000,"Saudi Aramco"],
+];
 
-    // ── CANVAS SIZE — deferred init so iframe layout has settled
-    // Streamlit components.html() runs scripts before layout; offsetWidth=0 at that moment.
-    const canvas = document.getElementById('c');
-    let CW, CH, renderer, scene, camera;
+// ── MAJOR PORTS [name, country, lat, lon, throughputTEU, type]
+const MAJOR_PORTS = [
+["Shanghai","China",31.23,121.47,49000000,"Container"],["Singapore","Singapore",1.26,103.84,39000000,"Container"],
+["Ningbo-Zhoushan","China",29.87,121.88,35000000,"Container"],["Shenzhen","China",22.54,114.05,30000000,"Container"],
+["Guangzhou","China",23.08,113.34,25000000,"Container"],["Busan","S. Korea",35.10,129.04,23000000,"Container"],
+["Qingdao","China",36.07,120.31,25000000,"Container"],["Tianjin","China",38.99,117.75,22000000,"Container"],
+["Hong Kong","China",22.29,114.15,17000000,"Container"],["Rotterdam","Netherlands",51.91,4.49,15000000,"Container"],
+["Dubai/Jebel Ali","UAE",25.01,55.06,14000000,"Container"],["Antwerp","Belgium",51.27,4.42,14000000,"Container"],
+["Port Klang","Malaysia",3.00,101.39,14000000,"Container"],["Xiamen","China",24.45,118.07,12000000,"Container"],
+["Kaohsiung","Taiwan",22.62,120.28,10000000,"Container"],["Hamburg","Germany",53.54,9.97,9000000,"Container"],
+["Los Angeles","USA",33.74,-118.27,9000000,"Container"],["Long Beach","USA",33.75,-118.19,9000000,"Container"],
+["Tanjung Pelepas","Malaysia",1.36,103.55,11000000,"Container"],["Laem Chabang","Thailand",13.08,100.88,9000000,"Container"],
+["Ho Chi Minh City","Vietnam",10.73,106.75,8500000,"Container"],["Colombo","Sri Lanka",6.95,79.85,7000000,"Container"],
+["New York/NJ","USA",40.67,-74.05,9000000,"Container"],["Felixstowe","UK",51.96,1.30,4000000,"Container"],
+["Piraeus","Greece",37.94,23.63,5400000,"Container"],["Valencia","Spain",39.44,-0.32,5600000,"Container"],
+["Algeciras","Spain",36.13,-5.44,5100000,"Container"],["Savannah","USA",32.08,-81.09,5600000,"Container"],
+["Jeddah","Saudi Arabia",21.49,39.17,5000000,"Container"],["Mumbai/JNPT","India",18.95,72.95,5500000,"Container"],
+["Santos","Brazil",-23.96,-46.30,4700000,"Container"],["Mombasa","Kenya",-4.04,39.66,1500000,"Container"],
+["Durban","S. Africa",-29.87,31.03,2900000,"Container"],["Fujairah","UAE",25.12,56.36,0,"Oil Terminal"],
+["Ras Tanura","Saudi Arabia",26.64,50.15,0,"Oil Terminal"],["Kharg Island","Iran",29.23,50.33,0,"Oil Terminal"],
+["Novorossiysk","Russia",44.72,37.79,0,"Oil Terminal"],["Primorsk","Russia",60.35,28.68,0,"Oil Terminal"],
+["Houston","USA",29.76,-95.27,0,"Oil Terminal"],["Corpus Christi","USA",27.81,-97.40,0,"Oil/LNG"],
+["Sabine Pass","USA",29.73,-93.87,0,"LNG Terminal"],["Ras Laffan","Qatar",25.90,51.56,0,"LNG Terminal"],
+["Gladstone","Australia",-23.85,151.27,0,"LNG Terminal"],["Bontang","Indonesia",0.10,117.50,0,"LNG Terminal"],
+];
 
-    function _getDims() {
-      let w = canvas.clientWidth || canvas.offsetWidth;
-      let h = canvas.clientHeight || canvas.offsetHeight;
-      if (w < 10) w = document.documentElement.clientWidth - 385;
-      if (w < 10) w = window.innerWidth - 385;
-      if (w < 50) w = 820;
-      if (h < 10) h = document.documentElement.clientHeight;
-      if (h < 10) h = window.innerHeight;
-      if (h < 50) h = 600;
-      return { w, h };
+// ── SUBMARINE FIBER OPTIC CABLES [name, capacityTbps, length_km, owners, waypoints[[lon,lat],...]]
+const SUBMARINE_CABLES = [
+["SEA-ME-WE 6",126,19200,"Telxius/Meta/Orange",[[103.8,1.3],[95,5],[80,10],[60,15],[50,25],[35,31],[30,31.2],[25,35],[10,36],[-5,36]]],
+["2Africa",180,45000,"Meta",[[2,6],[8,4],[12,-4],[30,-27],[40,-12],[45,12],[50,26],[33,31],[25,35],[12,37],[-5,36],[-17,15],[-5,6]]],
+["PEACE Cable",96,15000,"PEACE Cable",[[120,22],[110,10],[95,5],[80,12],[60,18],[45,12],[33,31],[25,35],[12,36],[-5,36]]],
+["Equiano",144,12000,"Google",[[2,6],[-5,4],[-8,-6],[-10,-23],[1,-34],[12,36],[-5,51]]],
+["Dunant",350,6600,"Google",[[-73,40],[-60,45],[-40,48],[-20,48],[-5,47]]],
+["MAREA",224,6605,"Microsoft/Meta",[[-73,39],[-60,42],[-40,42],[-20,40],[-9,39]]],
+["Grace Hopper",352,6250,"Google",[[-73,40],[-60,45],[-40,50],[-5,51],[4,52]]],
+["AEC-1",100,25000,"Google",[[103.8,1.3],[110,5],[120,15],[130,20],[140,30],[145,35],[180,40],[-160,45],[-140,45],[-120,35]]],
+["Japan-Guam-Australia",36,10500,"Google/NEC",[[140,36],[142,28],[144,13],[152,-25]]],
+["SJC",28,10700,"Google/Meta",[[103.8,1.3],[110,10],[117,15],[120,22],[121,25],[130,33],[140,36]]],
+["Havfrue/AEC-2",108,7860,"Google/Aqua Comms",[[-73,40],[-50,50],[-30,55],[-15,58],[-5,57],[5,55],[10,57],[12,60]]],
+["Africa-1",24,12000,"Vodafone",[[2,6],[5,3],[8,-1],[10,-5],[15,-10],[25,-15],[35,-20],[40,-25],[45,-30]]],
+["EASSy",10,10000,"Multiple",[[33,-29],[35,-23],[40,-12],[42,-6],[44,-2],[45,2],[50,12]]],
+["SEACOM",12,17000,"SEACOM",[[28,-34],[33,-28],[40,-15],[45,-2],[50,12],[55,15],[73,13],[80,8]]],
+["FLAG",10,28000,"Reliance",[[1,51],[0,40],[-5,36],[33,31],[35,30],[45,12],[55,20],[65,24],[72,18],[80,12],[95,5],[103.8,1.3],[120,22],[140,36]]],
+["TAT-14",3.2,15428,"Multiple",[[-73,40],[-50,45],[-30,48],[-10,50],[0,51],[5,53]]],
+["AAE-1",40,25000,"Multiple",[[103.8,1.3],[95,5],[80,10],[68,22],[50,26],[45,13],[33,31],[25,35],[12,37],[5,44],[1,51]]],
+["APRICOT",190,12000,"Meta/Google",[[103.8,1.3],[110,10],[120,15],[121,25],[127,35],[140,36]]],
+["Bifrost",15,15000,"Meta/Keppel",[[-118,34],[180,25],[140,10],[120,5],[103.8,1.3]]],
+["Echo",20,17000,"Meta/Google",[[-118,34],[-150,20],[-180,15],[160,5],[130,0],[103.8,1.3]]],
+];
+
+// ── OIL & GAS PIPELINES [name, type, capacityMBPD, countries, waypoints[[lon,lat],...]]
+const OIL_PIPELINES = [
+["Druzhba","Oil",1.4,"Russia→Europe",[[52,55],[45,54],[38,53],[32,52],[28,51],[24,50],[18,50],[14,50]]],
+["BTC (Baku-Tbilisi-Ceyhan)","Oil",1.2,"Azerbaijan→Turkey",[[50,40],[46,42],[44,41],[42,40],[38,39],[36,37]]],
+["ESPO","Oil",1.6,"Russia→China/Pacific",[[74,57],[85,55],[100,52],[115,50],[130,48],[132,43]]],
+["Keystone XL","Oil",0.83,"Canada→USA",[[-110,50],[-108,48],[-104,44],[-100,40],[-97,36],[-95,30]]],
+["Trans-Alaska","Oil",0.6,"USA",[[-148,70],[-147,65],[-146,63],[-146,61]]],
+["TAPI","Gas",1.0,"Turkmenistan→India",[[60,38],[64,34],[67,30],[68,26],[69,24]]],
+["Nord Stream 1","Gas",0,"Russia→Germany",[[30,60],[24,58],[18,56],[14,55],[12,54]]],
+["Nord Stream 2","Gas",0,"Russia→Germany",[[30,60],[24,58],[18,56],[14,55],[12,54]]],
+["TurkStream","Gas",0.5,"Russia→Turkey",[[38,45],[35,44],[32,43],[30,42],[29,41]]],
+["Trans-Saharan","Gas",0,"Nigeria→Algeria",[[3,6],[4,10],[3,15],[2,20],[1,25],[0,30],[2,35]]],
+["TAP","Gas",0.2,"Greece→Italy",[[25,41],[22,40],[20,40],[18,40],[16,41]]],
+["TANAP","Gas",0.2,"Turkey→Greece",[[42,40],[38,39],[35,39],[30,40],[26,41]]],
+["Dakota Access","Oil",0.75,"USA",[[-104,48],[-101,46],[-98,43],[-95,41],[-92,40]]],
+["East-West Pipeline","Oil",5.0,"Saudi Arabia",[[50,26],[48,26],[45,25],[42,24],[38,23]]],
+["Sumed","Oil",2.5,"Egypt",[[33,30],[32,30],[31,30],[30,31]]],
+["Caspian Pipeline CPC","Oil",1.5,"Kazakhstan→Russia",[[53,43],[50,44],[47,45],[44,45],[38,45]]],
+["Forties","Oil",0.4,"UK North Sea",[[-1,58],[0,57],[1,56],[-2,56]]],
+["Line 5","Oil",0.54,"Canada→USA",[[-84,46],[-83,45],[-82,44],[-80,43]]],
+["Trans Mountain","Oil",0.59,"Canada",[[-115,53],[-118,50],[-120,49],[-123,49]]],
+["Yamal-Europe","Gas",1.0,"Russia→Germany",[[68,66],[60,62],[50,58],[40,55],[30,53],[22,52],[18,52],[14,52]]],
+];
+
+// ── WORLD LEADERS [iso3, headOfState, hosTitle, hosImg, headOfGov, hogTitle, hogImg]
+const WORLD_LEADERS = {
+"USA":["Joe Biden","President","https://upload.wikimedia.org/wikipedia/commons/thumb/6/68/Joe_Biden_presidential_portrait.jpg/220px-Joe_Biden_presidential_portrait.jpg","Kamala Harris","Vice President","https://upload.wikimedia.org/wikipedia/commons/thumb/4/41/Kamala_Harris_Vice_Presidential_Portrait.jpg/220px-Kamala_Harris_Vice_Presidential_Portrait.jpg"],
+"GBR":["Charles III","King","https://upload.wikimedia.org/wikipedia/commons/thumb/b/b9/Charles_III_wearing_Blue_Cross_of_the_Royal_Victorian_Order.jpg/220px-Charles_III_wearing_Blue_Cross_of_the_Royal_Victorian_Order.jpg","Keir Starmer","Prime Minister","https://upload.wikimedia.org/wikipedia/commons/thumb/8/88/Official_portrait_of_Keir_Starmer.jpg/220px-Official_portrait_of_Keir_Starmer.jpg"],
+"FRA":["Emmanuel Macron","President","https://upload.wikimedia.org/wikipedia/commons/thumb/f/f4/Emmanuel_Macron_in_2019.jpg/220px-Emmanuel_Macron_in_2019.jpg","François Bayrou","Prime Minister",""],
+"DEU":["Frank-Walter Steinmeier","President","","Olaf Scholz","Chancellor","https://upload.wikimedia.org/wikipedia/commons/thumb/d/d0/2021-12-08_Olaf_Scholz_Bundeskanzler.jpg/220px-2021-12-08_Olaf_Scholz_Bundeskanzler.jpg"],
+"RUS":["Vladimir Putin","President","https://upload.wikimedia.org/wikipedia/commons/thumb/0/05/Vladimir_Putin_%282024-01-30%29_%28cropped%29.jpg/220px-Vladimir_Putin_%282024-01-30%29_%28cropped%29.jpg","Mikhail Mishustin","Prime Minister",""],
+"CHN":["Xi Jinping","President","https://upload.wikimedia.org/wikipedia/commons/thumb/3/32/Xi_Jinping_2019.jpg/220px-Xi_Jinping_2019.jpg","Li Qiang","Premier",""],
+"IND":["Droupadi Murmu","President","","Narendra Modi","Prime Minister","https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Narendra_Modi_2021.jpg/220px-Narendra_Modi_2021.jpg"],
+"JPN":["Naruhito","Emperor","","Shigeru Ishiba","Prime Minister",""],
+"KOR":["Yoon Suk-yeol","President","","Han Duck-soo","Prime Minister",""],
+"PRK":["Kim Jong Un","Supreme Leader","","Pak Pong-ju","Premier",""],
+"PAK":["Asif Ali Zardari","President","https://upload.wikimedia.org/wikipedia/commons/thumb/8/81/Asif_Ali_Zardari_-_2024.jpg/220px-Asif_Ali_Zardari_-_2024.jpg","Shehbaz Sharif","Prime Minister","https://upload.wikimedia.org/wikipedia/commons/thumb/5/5e/Shehbaz_Sharif_in_2022.jpg/220px-Shehbaz_Sharif_in_2022.jpg"],
+"IRN":["Ali Khamenei","Supreme Leader","","Masoud Pezeshkian","President",""],
+"ISR":["Isaac Herzog","President","","Benjamin Netanyahu","Prime Minister","https://upload.wikimedia.org/wikipedia/commons/thumb/b/b1/Benjamin_Netanyahu_2023.jpg/220px-Benjamin_Netanyahu_2023.jpg"],
+"TUR":["Recep Tayyip Erdogan","President","https://upload.wikimedia.org/wikipedia/commons/thumb/7/70/Recep_Tayyip_Erdo%C4%9Fan_2024.jpg/220px-Recep_Tayyip_Erdo%C4%9Fan_2024.jpg","","",""],
+"SAU":["Mohammed bin Salman","Crown Prince","","","",""],
+"UKR":["Volodymyr Zelensky","President","https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Zelensky_Official_portrait.jpg/220px-Zelensky_Official_portrait.jpg","Denys Shmyhal","Prime Minister",""],
+"BRA":["Lula da Silva","President","https://upload.wikimedia.org/wikipedia/commons/thumb/4/40/Presidente_Lula.jpg/220px-Presidente_Lula.jpg","","",""],
+"MEX":["Claudia Sheinbaum","President","","","",""],
+"CAN":["Charles III","King","","Mark Carney","Prime Minister",""],
+"AUS":["Charles III","King","","Anthony Albanese","Prime Minister",""],
+"EGY":["Abdel Fattah el-Sisi","President","","Mostafa Madbouly","Prime Minister",""],
+"NGA":["Bola Tinubu","President","","","",""],
+"ZAF":["Cyril Ramaphosa","President","","","",""],
+"IDN":["Prabowo Subianto","President","","","",""],
+"PHL":["Ferdinand Marcos Jr","President","","","",""],
+"VNM":["To Lam","President","","Pham Minh Chinh","Prime Minister",""],
+"THA":["Maha Vajiralongkorn","King","","Paetongtarn Shinawatra","Prime Minister",""],
+"MYS":["Abdullah","King","","Anwar Ibrahim","Prime Minister",""],
+"SGP":["Tharman Shanmugaratnam","President","","Lawrence Wong","Prime Minister",""],
+"TWN":["Lai Ching-te","President","","Cho Jung-tai","Premier",""],
+"ARE":["Mohamed bin Zayed","President","","Mohammed bin Rashid","Prime Minister",""],
+"QAT":["Tamim bin Hamad","Emir","","Mohammed bin Abdulrahman","Prime Minister",""],
+"KWT":["Meshal Al-Ahmad","Emir","","Ahmad Al-Sabah","Prime Minister",""],
+"IRQ":["Abdul Latif Rashid","President","","Mohammed Shia al-Sudani","Prime Minister",""],
+"SYR":["Ahmad al-Sharaa","President","","","",""],
+"POL":["Andrzej Duda","President","","Donald Tusk","Prime Minister",""],
+"ITA":["Sergio Mattarella","President","","Giorgia Meloni","Prime Minister",""],
+"ESP":["Felipe VI","King","","Pedro Sánchez","Prime Minister",""],
+"NLD":["Willem-Alexander","King","","Dick Schoof","Prime Minister",""],
+"ARG":["Javier Milei","President","","","",""],
+"COL":["Gustavo Petro","President","","","",""],
+"CHL":["Gabriel Boric","President","","","",""],
+"VEN":["Nicolás Maduro","President","","","",""],
+"CUB":["Miguel Díaz-Canel","President","","Manuel Marrero","Prime Minister",""],
+"NOR":["Harald V","King","","Jonas Gahr Støre","Prime Minister",""],
+"SWE":["Carl XVI Gustaf","King","","Ulf Kristersson","Prime Minister",""],
+"FIN":["Alexander Stubb","President","","Petteri Orpo","Prime Minister",""],
+"DNK":["Frederik X","King","","Mette Frederiksen","Prime Minister",""],
+"CHE":["Karin Keller-Sutter","President","","","",""],
+"AUT":["Alexander Van der Bellen","President","","Karl Nehammer","Chancellor",""],
+"GRC":["Katerina Sakellaropoulou","President","","Kyriakos Mitsotakis","Prime Minister",""],
+"ROU":["Klaus Iohannis","President","","Marcel Ciolacu","Prime Minister",""],
+"HUN":["Tamás Sulyok","President","","Viktor Orbán","Prime Minister",""],
+"CZE":["Petr Pavel","President","","Petr Fiala","Prime Minister",""],
+"BEL":["Philippe","King","","Alexander De Croo","Prime Minister",""],
+"PRT":["Marcelo Rebelo de Sousa","President","","Luís Montenegro","Prime Minister",""],
+"IRL":["Michael D. Higgins","President","","Simon Harris","Taoiseach",""],
+"NZL":["Charles III","King","","Christopher Luxon","Prime Minister",""],
+"KAZ":["Kassym-Jomart Tokayev","President","","Olzhas Bektenov","Prime Minister",""],
+"UZB":["Shavkat Mirziyoyev","President","","Abdulla Aripov","Prime Minister",""],
+"AFG":["Hibatullah Akhundzada","Supreme Leader","","Hassan Akhund","Prime Minister",""],
+"MMR":["Min Aung Hlaing","SAC Chairman","","","",""],
+"BGD":["Mohammed Shahabuddin","President","","Muhammad Yunus","Chief Adviser",""],
+"LKA":["Anura Kumara Dissanayake","President","","Harini Amarasuriya","Prime Minister",""],
+"ETH":["Taye Atske Selassie","President","","Abiy Ahmed","Prime Minister",""],
+"KEN":["William Ruto","President","","","",""],
+"SDN":["Abdel Fattah al-Burhan","Chairman","","","",""],
+"LBY":["Mohamed al-Menfi","Council President","","Abdul Hamid Dbeibeh","Prime Minister",""],
+"DZA":["Abdelmadjid Tebboune","President","","Nadir Larbaoui","Prime Minister",""],
+"MAR":["Mohammed VI","King","","Aziz Akhannouch","Prime Minister",""],
+"GEO":["Salome Zourabichvili","President","","Irakli Kobakhidze","Prime Minister",""],
+"AZE":["Ilham Aliyev","President","","Ali Asadov","Prime Minister",""],
+"ARM":["Vahagn Khachaturyan","President","","Nikol Pashinyan","Prime Minister",""],
+"LBN":["Joseph Aoun","President","","Nawaf Salam","Prime Minister",""],
+"JOR":["Abdullah II","King","","Bisher Al-Khasawneh","Prime Minister",""],
+"YEM":["Rashad al-Alimi","Council President","","Ahmad Awad bin Mubarak","Prime Minister",""],
+};
+
+// ── QUALITY PRESETS
+const PRESETS = {
+  LOW:     { sse:8,   tiles:4,  satLim:200,   aisLim:100,   terrain:false, buildings:false, label:"LOW" },
+  MEDIUM:  { sse:4,   tiles:20, satLim:800,   aisLim:1500,  terrain:true,  buildings:false, label:"MEDIUM" },
+  HIGH:    { sse:3.5, tiles:30, satLim:2000,  aisLim:4000,  terrain:true,  buildings:true,  label:"HIGH" },
+  EXTREME: { sse:2,   tiles:60, satLim:10000, aisLim:10000, terrain:true,  buildings:true,  label:"EXTREME" },
+};
+// SENTINEL GEO — Core CesiumJS Init + Quality + Country System
+const CESIUM_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJiZTE4MWU1YS01OGM1LTQwY2QtOTQ0Ny0yZjg2ZDAzMzY0YmIiLCJpZCI6NDI2ODQ3LCJpc3MiOiJodHRwczovL2lvbi5jZXNpdW0uY29tIiwiYXVkIjoidW5kZWZpbmVkX2RlZmF1bHQiLCJpYXQiOjE3Nzc4NDE0MjB9.8AnVDqEKPMdAfXMhzEe7X4CZLRGizVLIO8vLLMlK2tw';
+
+let viewer, currentPreset = 'HIGH', layerState = {};
+let countryDataSource = null, bordersVisible = true;
+let radarLayers = [], radarIdx = 0, radarPlaying = false, radarInterval = null;
+
+// ── CLOCK
+setInterval(() => { const d = new Date(); const el = document.getElementById('clk'); if (el) el.textContent = d.toUTCString().slice(17,25)+' UTC'; }, 1000);
+
+// ── INIT CESIUM
+async function initCesium() {
+  try {
+  Cesium.Ion.defaultAccessToken = CESIUM_TOKEN;
+  const preset = PRESETS[currentPreset];
+
+  const viewerOpts = {
+    animation: false, timeline: false, fullscreenButton: false,
+    homeButton: false, sceneModePicker: false, baseLayerPicker: false,
+    navigationHelpButton: false, infoBox: false, selectionIndicator: false,
+    geocoder: false, creditContainer: document.createElement('div'),
+    requestRenderMode: false,
+  };
+
+  // Terrain — try new API first, fall back to legacy
+  if (preset.terrain) {
+    try {
+      if (Cesium.createWorldTerrainAsync) {
+        viewerOpts.terrainProvider = await Cesium.createWorldTerrainAsync();
+      } else if (Cesium.createWorldTerrain) {
+        viewerOpts.terrainProvider = Cesium.createWorldTerrain();
+      }
+    } catch(e) { console.warn('Terrain init failed, using ellipsoid', e); }
+  }
+
+  viewer = new Cesium.Viewer('cesiumContainer', viewerOpts);
+
+  // Dark sky — disable default skybox instead of empty sources
+  try { viewer.scene.skyBox.show = false; } catch(e) {}
+  viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#000005');
+  try { viewer.scene.sun.show = false; } catch(e) {}
+  try { viewer.scene.moon.show = false; } catch(e) {}
+  viewer.scene.skyAtmosphere.show = currentPreset !== 'LOW';
+  viewer.scene.fog.enabled = false;
+  viewer.scene.globe.enableLighting = false;
+  viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#030810');
+  viewer.scene.globe.showGroundAtmosphere = currentPreset !== 'LOW';
+  viewer.scene.globe.maximumScreenSpaceError = preset.sse;
+  try { viewer.scene.globe.tileCacheSize = preset.tiles * 3; } catch(e) {}
+
+  // For LOW preset, use dark basemap
+  if (currentPreset === 'LOW') {
+    viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#050a14');
+    viewer.imageryLayers.removeAll();
+  }
+
+  // Concurrent tile loads
+  try { Cesium.RequestScheduler.maximumRequestsPerServer = preset.tiles; } catch(e) {}
+
+  // Buildings at high zoom (HIGH/EXTREME only)
+  if (preset.buildings) {
+    try {
+      const loadTileset = Cesium.Cesium3DTileset.fromIonAssetId || Cesium.createOsmBuildings;
+      if (loadTileset) {
+        Promise.resolve(loadTileset(96188)).then(ts => {
+          if (ts) { viewer.scene.primitives.add(ts); }
+        }).catch(() => {});
+      }
+    } catch(e) {}
+  }
+
+  // Camera start position
+  viewer.camera.setView({
+    destination: Cesium.Cartesian3.fromDegrees(30, 20, 20000000),
+  });
+
+  // Load country borders
+  loadCountryBorders();
+
+  // Click handler
+  const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+  handler.setInputAction(click => onLeftClick(click), Cesium.ScreenSpaceEventType.LEFT_CLICK);
+  handler.setInputAction(move => onMouseMove(move), Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+  // Ingest Sentinel data from Python
+  ingestSentinelData();
+
+  // Start GDELT news feed
+  fetchGDELTNews();
+  setInterval(fetchGDELTNews, 300000);
+
+  document.getElementById('ls').classList.add('gone');
+  } catch(err) {
+    console.error('CesiumJS init error:', err);
+    document.getElementById('ls').innerHTML = '<div style="color:#FF4444;font-size:12px">⚠ Globe engine error: ' + err.message + '</div>';
+    setTimeout(() => document.getElementById('ls').classList.add('gone'), 5000);
+  }
+}
+
+// ── QUALITY PRESETS
+function setPreset(name) {
+  if (name === 'CUSTOM') {
+    document.getElementById('customKnobs').style.display = 'block';
+    document.querySelectorAll('.qbtn').forEach(b => b.classList.remove('active'));
+    document.querySelector('.qbtn:last-child').classList.add('active');
+    document.getElementById('qualToggle').textContent = '⚙ CUSTOM';
+    return;
+  }
+  document.getElementById('customKnobs').style.display = 'none';
+  currentPreset = name;
+  const p = PRESETS[name];
+  document.querySelectorAll('.qbtn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.qbtn').forEach(b => { if(b.textContent.startsWith(name)) b.classList.add('active'); });
+  document.getElementById('qualToggle').textContent = '⚙ ' + name;
+
+  viewer.scene.globe.maximumScreenSpaceError = p.sse;
+  Cesium.RequestScheduler.maximumRequestsPerServer = p.tiles;
+  viewer.scene.globe.tileCacheSize = p.tiles * 3;
+  viewer.scene.skyAtmosphere.show = name !== 'LOW';
+  viewer.scene.globe.showGroundAtmosphere = name !== 'LOW';
+
+  if (name === 'LOW') {
+    viewer.imageryLayers.removeAll();
+    viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#050a14');
+    if (viewer.terrainProvider instanceof Cesium.CesiumTerrainProvider) {
+      viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
     }
-
-    function _waitAndInit() {
-      const { w, h } = _getDims();
-      if (w > 50 && h > 50) { CW = w; CH = h; _initThree(); }
-      else requestAnimationFrame(_waitAndInit);
+  } else {
+    if (viewer.imageryLayers.length === 0) {
+      viewer.imageryLayers.addImageryProvider(Cesium.createWorldImagery());
     }
-    requestAnimationFrame(_waitAndInit);
+    if (p.terrain && !(viewer.terrainProvider instanceof Cesium.CesiumTerrainProvider)) {
+      viewer.terrainProvider = Cesium.createWorldTerrain();
+    }
+  }
+}
 
-    function _initThree() {
+function applyCustom() {
+  const sse = parseFloat(document.getElementById('knobSSE').value);
+  const tiles = parseInt(document.getElementById('knobTiles').value);
+  const satLim = parseInt(document.getElementById('knobSat').value);
+  const aisLim = parseInt(document.getElementById('knobAIS').value);
+  document.getElementById('knobSSEVal').textContent = sse;
+  document.getElementById('knobTilesVal').textContent = tiles;
+  document.getElementById('knobSatVal').textContent = satLim;
+  document.getElementById('knobAISVal').textContent = aisLim;
+  viewer.scene.globe.maximumScreenSpaceError = sse;
+  Cesium.RequestScheduler.maximumRequestsPerServer = tiles;
+}
 
-      renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
-      renderer.setSize(CW, CH);
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      renderer.setClearColor(0x000003);
+function toggleQualPanel() {
+  document.getElementById('qualPanel').classList.toggle('show');
+}
 
-      scene = new THREE.Scene();
-      camera = new THREE.PerspectiveCamera(42, CW / CH, 0.1, 1000);
-      camera.position.set(0, 0, 2.65);
+// ── COUNTRY BORDERS
+async function loadCountryBorders() {
+  try {
+    const url = 'https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson';
+    countryDataSource = await Cesium.GeoJsonDataSource.load(url, {
+      stroke: Cesium.Color.fromCssColorString('#00CCAA').withAlpha(0.5),
+      fill: Cesium.Color.fromCssColorString('#00CCAA').withAlpha(0.03),
+      strokeWidth: 1.5,
+      clampToGround: true
+    });
+    viewer.dataSources.add(countryDataSource);
+    countryDataSource.show = bordersVisible;
 
-      // ── GLOBE SETUP
-      const globeGeo = new THREE.SphereGeometry(1, 64, 64);
-      const loader = new THREE.TextureLoader();
-      let globeMesh = null, earthTex = null;
-
-      function makeFallback() {
-        const cv = document.createElement('canvas'); cv.width = 2048; cv.height = 1024;
-        const ctx = cv.getContext('2d');
-        const og = ctx.createLinearGradient(0, 0, 0, 1024);
-        og.addColorStop(0, '#000308'); og.addColorStop(.4, '#00050c'); og.addColorStop(.6, '#00050c'); og.addColorStop(1, '#000308');
-        ctx.fillStyle = og; ctx.fillRect(0, 0, 2048, 1024);
-        ctx.fillStyle = '#1d3c18';
-        const na = [[290, 190, 175, 130, -.1], [245, 285, 110, 95, .05], [215, 335, 70, 58, 0], [370, 270, 90, 68, -.08], [295, 150, 60, 45, .1], [260, 125, 45, 30, .05]];
-        const sa = [[325, 475, 105, 80, .08], [298, 550, 85, 98, -.04], [308, 618, 68, 75, -.08]];
-        const eu = [[610, 200, 92, 68, .04], [658, 232, 62, 50, -.08], [636, 182, 52, 40, .12], [590, 188, 30, 22, .05], [630, 155, 28, 18, .1], [665, 170, 22, 18, -.05]];
-        const af = [[628, 342, 108, 98, .03], [618, 428, 98, 108, -.04], [608, 508, 78, 88, 0], [600, 582, 58, 54, .08]];
-        const as = [[718, 192, 145, 108, .08], [825, 212, 128, 95, -.04], [882, 252, 108, 82, .04], [925, 292, 92, 74, -.08], [968, 192, 88, 64, .08], [1015, 278, 78, 64, -.08], [845, 172, 65, 54, .18], [870, 148, 48, 35, .1]];
-        const jp = [[982, 228, 16, 42, .18], [992, 255, 11, 28, .18]];
-        const sea = [[922, 375, 72, 58, .04], [962, 418, 58, 44, -.08]];
-        const au = [[908, 508, 98, 65, .04], [928, 562, 74, 54, -.08]];
-        const gr = [[362, 136, 70, 48, .08], [332, 126, 44, 34, .12]];
-        const uk = [[592, 192, 18, 26, .08], [607, 188, 12, 20, .1]];
-        const ma = [[660, 470, 18, 38, .1]];
-        [na, sa, eu, af, as, jp, sea, au, gr, uk, ma].flat().forEach(([x, y, w, h, r = 0]) => {
-          ctx.save(); ctx.translate(x, y); ctx.rotate(r);
-          ctx.beginPath(); ctx.ellipse(0, 0, w, h, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
-        });
-        ctx.fillStyle = '#c0d8e8'; ctx.fillRect(0, 0, 2048, 18); ctx.fillRect(0, 1000, 2048, 24);
-        return new THREE.CanvasTexture(cv);
+    // Style entities
+    countryDataSource.entities.values.forEach(entity => {
+      if (entity.polygon) {
+        entity.polygon.outlineColor = Cesium.Color.fromCssColorString('#00CCAA').withAlpha(0.4);
+        entity.polygon.material = Cesium.Color.fromCssColorString('#00CCAA').withAlpha(0.02);
+        entity.polygon.outlineWidth = 1;
       }
+    });
+  } catch(e) {
+    console.warn('Country borders failed:', e);
+  }
+}
 
-      function buildGlobe() {
-        const mat = new THREE.MeshPhongMaterial({
-          map: earthTex || makeFallback(), color: new THREE.Color(0x8899bb),
-          specular: new THREE.Color(0x334466), shininess: 15,
-          emissive: new THREE.Color(0x020815), emissiveIntensity: 0.08,
-        });
-        if (globeMesh) { scene.remove(globeMesh); if (globeMesh.material.map) globeMesh.material.map.dispose(); globeMesh.material.dispose(); }
-        globeMesh = new THREE.Mesh(globeGeo, mat); scene.add(globeMesh);
-        document.getElementById('ls').classList.add('gone');
+// ── COUNTRY CLICK HANDLER
+function onLeftClick(click) {
+  const picked = viewer.scene.pick(click.position);
+  if (Cesium.defined(picked)) {
+    const entity = picked.id;
+    if (entity) {
+      // Check entity type via custom properties
+      if (entity._sentinelType) {
+        showInfraCard(entity, click.position);
+        return;
       }
-      buildGlobe();
-      loader.load('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg', t => { earthTex = t; buildGlobe(); }, undefined, () => { });
-      setTimeout(() => document.getElementById('ls').classList.add('gone'), 2000);
-
-      // ── ATMOSPHERE
-      scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.02, 32, 32), new THREE.MeshPhongMaterial({ color: 0x000d1f, transparent: true, opacity: 0.10, side: THREE.FrontSide, depthWrite: false, blending: THREE.AdditiveBlending })));
-      scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.001, 24, 12), new THREE.MeshBasicMaterial({ color: 0x000a14, wireframe: true, transparent: true, opacity: 0.025 })));
-
-      // ── LIGHTING
-      scene.add(new THREE.AmbientLight(0x334455, 1.2));
-      const sun = new THREE.DirectionalLight(0xfff8ee, 2.5); sun.position.set(6, 2, 4); scene.add(sun);
-      const fill = new THREE.DirectionalLight(0x2a3a50, 0.8); fill.position.set(-6, -2, -4); scene.add(fill);
-      const rim = new THREE.DirectionalLight(0x2a3545, 0.6); rim.position.set(-2, 1, -5); scene.add(rim);
-
-      // ── STARS
-      const sg = new THREE.BufferGeometry(), sp = [], sc = [];
-      for (let i = 0; i < 2000; i++) {
-        const th = Math.random() * Math.PI * 2, ph = Math.acos(2 * Math.random() - 1), r = 65 + Math.random() * 85;
-        sp.push(r * Math.sin(ph) * Math.cos(th), r * Math.cos(ph), r * Math.sin(ph) * Math.sin(th));
-        const t = Math.random();
-        if (t < .08) sc.push(.6, .6, 1.0); else if (t < .16) sc.push(1.0, .85, .6); else if (t < .20) sc.push(1.0, .6, .5); else sc.push(.4, .45, .55);
+      // Country entity from GeoJSON
+      const props = entity.properties;
+      if (props && props.ADMIN) {
+        const name = props.ADMIN.getValue();
+        const iso3 = props.ISO_A3 ? props.ISO_A3.getValue() : '';
+        showCountryPanel(name, iso3, props);
+        return;
       }
-      sg.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3));
-      sg.setAttribute('color', new THREE.Float32BufferAttribute(sc, 3));
-      scene.add(new THREE.Points(sg, new THREE.PointsMaterial({ size: .11, vertexColors: true })));
+    }
+  }
+  // Clicked empty space
+  closeInfoCard();
+}
 
-      // ── HOTSPOT DATA (auto-updated from GDELT + dynamic theater scan)
-      let HOTSPOTS = [];
-      // Minimal static fallback — only used if ALL dynamic fetches fail
-      const STATIC_FALLBACK_HOTSPOTS = [
-        { lat: 31.5, lon: 34.8, label: 'MIDDLE EAST', sev: 'critical', type: 'conflict', title: 'Middle East — Active Conflict Zone', body: 'Ongoing operations and tensions.', mkt: 'WTI, GLD, XLE, ITA', tags: ['OIL RISK', 'ESCALATION'] },
-        { lat: 49, lon: 31, label: 'UKRAINE', sev: 'critical', type: 'conflict', title: 'Ukraine — Active War Theater', body: 'Frontline active across 1,000km.', mkt: 'NG=F, ZW=F, Defense ETFs', tags: ['NATGAS', 'GRAIN', 'NATO'] },
-      ];
-      // Dynamic hotspot queries — searches GDELT for latest conflict zones
-      const DYNAMIC_HOTSPOT_QUERIES = [
-        { query: 'US Iran conflict blockade military', label: 'US-IRAN', lat: 26.5, lon: 56, type: 'conflict', mkt: 'WTI, XLE, GLD, USO' },
-        { query: 'gaza israel hamas ceasefire war', label: 'GAZA/ISRAEL', lat: 31.5, lon: 34.8, type: 'conflict', mkt: 'WTI, GLD, XLE, ITA' },
-        { query: 'houthi red sea shipping attack', label: 'RED SEA', lat: 14, lon: 43, type: 'shipping', mkt: 'Container ETFs, FDX, UPS' },
-        { query: 'ukraine russia war frontline', label: 'UKRAINE', lat: 49, lon: 31, type: 'conflict', mkt: 'NG=F, ZW=F, Defense ETFs' },
-        { query: 'taiwan china PLA military strait semiconductor', label: 'TAIWAN', lat: 25, lon: 121, type: 'trade', mkt: 'SMH, NVDA, AAPL, TSM' },
-        { query: 'strait hormuz iran tanker blockade', label: 'HORMUZ', lat: 26.5, lon: 56, type: 'energy', mkt: 'WTI, Brent, XLE' },
-        { query: 'sahel mali niger coup military', label: 'SAHEL', lat: 14, lon: 2, type: 'conflict', mkt: 'Uranium, Gold miners' },
-        { query: 'north korea missile nuclear', label: 'N. KOREA', lat: 39, lon: 126, type: 'conflict', mkt: 'Defense ETFs, KRW' },
-        { query: 'south china sea philippines dispute', label: 'S. CHINA SEA', lat: 12, lon: 115, type: 'trade', mkt: 'Shipping, FXI' },
-        { query: 'sudan civil war RSF humanitarian', label: 'SUDAN', lat: 15.6, lon: 32.5, type: 'conflict', mkt: 'Gold miners, Humanitarian' },
-      ];
+function onMouseMove(move) {
+  const tt = document.getElementById('tt');
+  const picked = viewer.scene.pick(move.endPosition);
+  if (Cesium.defined(picked) && picked.id) {
+    const entity = picked.id;
+    const label = entity._sentinelLabel || (entity.properties && entity.properties.ADMIN ? entity.properties.ADMIN.getValue() : null);
+    if (label) {
+      tt.style.display = 'block';
+      tt.style.left = (move.endPosition.x + 14) + 'px';
+      tt.style.top = (move.endPosition.y - 6) + 'px';
+      tt.textContent = label;
+      tt.style.borderColor = entity._sentinelColor || '#00CCAA';
+      tt.style.color = entity._sentinelColor || '#00CCAA';
+      viewer.scene.canvas.style.cursor = 'pointer';
+    }
+  } else {
+    tt.style.display = 'none';
+    viewer.scene.canvas.style.cursor = 'default';
+  }
+}
 
-      async function autoUpdateHotspots() {
-        const newHotspots = [];
-        const promises = DYNAMIC_HOTSPOT_QUERIES.map(async (q) => {
-          try {
-            const ctrl = new AbortController();
-            setTimeout(() => ctrl.abort(), 8000);
-            const url = `https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(q.query)}%20sourcelang:english&mode=ArtList&maxrecords=3&format=json&timespan=48h`;
-            const r = await fetch(url, { signal: ctrl.signal });
-            if (!r.ok) return null;
-            const data = await r.json();
-            const count = (data.articles || []).length;
-            if (count === 0) return null;
-            const sev = count >= 3 ? 'critical' : count >= 1 ? 'elevated' : 'watch';
-            const topArt = (data.articles || [])[0];
-            const body = topArt ? (topArt.title || '').substring(0, 120) : 'Active geopolitical situation';
-            return {
-              lat: q.lat, lon: q.lon, label: q.label, sev, type: q.type,
-              title: q.label + ' — ' + (sev === 'critical' ? 'Active Conflict' : sev === 'elevated' ? 'Elevated Tensions' : 'Monitoring'),
-              body, mkt: q.mkt, tags: ['LIVE', sev.toUpperCase()],
-            };
-          } catch (e) { return null; }
-        });
-        const results = await Promise.allSettled(promises);
-        results.forEach(r => { if (r.status === 'fulfilled' && r.value) newHotspots.push(r.value); });
-        if (newHotspots.length > 0) {
-          HOTSPOTS = newHotspots;
-        } else {
-          HOTSPOTS = STATIC_FALLBACK_HOTSPOTS.slice();
-        }
-        renderMarkers();
+// ── COUNTRY PANEL
+async function showCountryPanel(name, iso3, geoProps) {
+  const panel = document.getElementById('countryPanel');
+  const content = document.getElementById('cp-content');
+  panel.classList.add('show');
+
+  // Start with basic info from GeoJSON
+  let pop = '', area = '', capital = '', currency = '', languages = '', flagUrl = '', gdp = '', region = '', subregion = '';
+  let timezone = '';
+
+  // Fetch from REST Countries API
+  try {
+    const r = await fetch(`https://restcountries.com/v3.1/alpha/${iso3}`);
+    if (r.ok) {
+      const data = (await r.json())[0];
+      pop = data.population ? (data.population / 1e6).toFixed(1) + ' M' : '—';
+      area = data.area ? (data.area / 1000).toFixed(0) + ' k km²' : '—';
+      capital = data.capital ? data.capital[0] : '—';
+      currency = data.currencies ? Object.keys(data.currencies)[0] : '—';
+      const currName = data.currencies ? Object.values(data.currencies)[0].name : '';
+      languages = data.languages ? Object.values(data.languages).slice(0,3).join(' / ') : '—';
+      flagUrl = data.flags ? data.flags.png : '';
+      region = data.region || '';
+      subregion = data.subregion || '';
+      timezone = data.timezones ? data.timezones[0] : '';
+    }
+  } catch(e) {}
+
+  // Fetch GDP from World Bank
+  try {
+    const r = await fetch(`https://api.worldbank.org/v2/country/${iso3.toLowerCase()}/indicator/NY.GDP.MKTP.CD?format=json&date=2023:2024&per_page=2`);
+    if (r.ok) {
+      const data = await r.json();
+      if (data[1] && data[1][0] && data[1][0].value) {
+        gdp = '$' + (data[1][0].value / 1e9).toFixed(2) + ' B';
       }
-      // Auto-update hotspots on load and every 10 minutes
-      autoUpdateHotspots();
-      setInterval(autoUpdateHotspots, 600000);
+    }
+  } catch(e) {}
 
-      const FALLBACK_HOTSPOTS = STATIC_FALLBACK_HOTSPOTS;
+  // Leaders
+  const leaders = WORLD_LEADERS[iso3] || null;
+  
+  // Threat score (computed from name heuristic — in production would use GDELT)
+  const threatZones = {'UKR':85,'RUS':72,'ISR':78,'IRN':75,'PRK':70,'SYR':68,'YEM':65,'SDN':63,'MMR':60,'AFG':62,'IRQ':58,'LBY':55,'PAK':47,'CHN':45,'TWN':50};
+  const threatScore = threatZones[iso3] || Math.floor(Math.random() * 25 + 10);
+  const threatLevel = threatScore >= 70 ? ['CRITICAL','#FF4444'] : threatScore >= 50 ? ['ELEVATED','#FF8C00'] : threatScore >= 30 ? ['WATCH','#FFCC00'] : ['STABLE','#00CC44'];
+  const stability = threatScore >= 70 ? 'CONFLICT' : threatScore >= 50 ? 'UNSTABLE' : 'STABLE';
+  const stabColor = threatScore >= 70 ? '#FF4444' : threatScore >= 50 ? '#FF8C00' : '#00CC44';
 
-      const COLORS = { critical: '#FF4444', elevated: '#FF8C00', watch: '#FFCC00' };
-      let customEvents = [], activeFilter = 'all';
-      let autoRotate = true, dragging = false, isDrag = false, dragDist = 0;
-      let prevX = 0, prevY = 0, rotX = 0, rotY = 0, targetRotX = 0, targetRotY = 0;
-      const markers = [];
+  let leadersHTML = '';
+  if (leaders) {
+    const [hos, hosTitle, hosImg, hog, hogTitle, hogImg] = leaders;
+    if (hos) {
+      leadersHTML += `<div class="cp-leader">
+        <img class="cp-leader-img" src="${hosImg || 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 56 56%22><rect fill=%22%23111%22 width=%2256%22 height=%2256%22/><text x=%2228%22 y=%2236%22 text-anchor=%22middle%22 fill=%22%23333%22 font-size=%2220%22>👤</text></svg>'}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 56 56%22><rect fill=%22%23111%22 width=%2256%22 height=%2256%22/><text x=%2228%22 y=%2236%22 text-anchor=%22middle%22 fill=%22%23333%22 font-size=%2220%22>👤</text></svg>'">
+        <div><div class="cp-leader-name">${hos}</div><div class="cp-leader-title">${hosTitle}</div></div>
+        <span class="cp-leader-badge">STATE</span>
+      </div>`;
+    }
+    if (hog) {
+      leadersHTML += `<div class="cp-leader">
+        <img class="cp-leader-img" src="${hogImg || 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 56 56%22><rect fill=%22%23111%22 width=%2256%22 height=%2256%22/><text x=%2228%22 y=%2236%22 text-anchor=%22middle%22 fill=%22%23333%22 font-size=%2220%22>👤</text></svg>'}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 56 56%22><rect fill=%22%23111%22 width=%2256%22 height=%2256%22/><text x=%2228%22 y=%2236%22 text-anchor=%22middle%22 fill=%22%23333%22 font-size=%2220%22>👤</text></svg>'">
+        <div><div class="cp-leader-name">${hog}</div><div class="cp-leader-title">${hogTitle}</div></div>
+        <span class="cp-leader-badge" style="border-color:#FF6600;color:#FF6600">GOV</span>
+      </div>`;
+    }
+  }
 
-      function latLonToVec3(lat, lon, r = 1.013) {
-        const phi = (90 - lat) * Math.PI / 180;
-        const theta = (lon + 180) * Math.PI / 180;
-        return new THREE.Vector3(-r * Math.sin(phi) * Math.cos(theta), r * Math.cos(phi), r * Math.sin(phi) * Math.sin(theta));
+  content.innerHTML = `
+    <div class="cp-header">
+      <div><span class="cp-code">${iso3}</span> <span class="cp-status" style="border-color:${stabColor};color:${stabColor}">▶ ${stability}</span></div>
+      <div class="cp-name">${name}</div>
+      <div class="cp-time">LOCAL ${new Date().toLocaleTimeString('en-US',{hour12:false})} ${timezone}</div>
+      ${flagUrl ? `<img src="${flagUrl}" style="height:20px;margin-top:6px;border:1px solid #222;border-radius:2px">` : ''}
+    </div>
+    <div class="cp-threat">
+      <div class="cp-threat-score" style="color:${threatLevel[1]}">${threatScore}</div>
+      <div class="cp-threat-label">THREAT SCORE</div>
+      <div class="cp-threat-level" style="color:${threatLevel[1]}">▲ ${threatLevel[0]}</div>
+      <div class="cp-bar"><div class="cp-bar-fill" style="width:${threatScore}%;background:${threatLevel[1]}"></div></div>
+    </div>
+    ${leadersHTML ? `<div class="cp-leaders">${leadersHTML}</div>` : ''}
+    <div class="cp-tabs">
+      <div class="cp-tab active" onclick="cpTab(this,'overview')">✦ OVERVIEW</div>
+      <div class="cp-tab" onclick="cpTab(this,'intel')">⊙ INTEL</div>
+      <div class="cp-tab" onclick="cpTab(this,'military')">◎ MILITARY</div>
+      <div class="cp-tab" onclick="cpTab(this,'relations')">⊕ RELATIONS</div>
+    </div>
+    <div class="cp-stats" id="cp-tab-content">
+      <div class="cp-stat"><span class="cp-stat-label">CAPITAL</span><span class="cp-stat-val">${capital}</span></div>
+      <div class="cp-stat"><span class="cp-stat-label">POPULATION</span><span class="cp-stat-val" style="color:#00CCAA">${pop}</span></div>
+      <div class="cp-stat"><span class="cp-stat-label">LAND AREA</span><span class="cp-stat-val">${area}</span></div>
+      <div class="cp-stat"><span class="cp-stat-label">GDP</span><span class="cp-stat-val">${gdp || '—'}</span></div>
+      <div class="cp-stat"><span class="cp-stat-label">CURRENCY</span><span class="cp-stat-val" style="color:#FF8C00">${currency}</span></div>
+      <div class="cp-stat"><span class="cp-stat-label">LANGUAGES</span><span class="cp-stat-val">${languages}</span></div>
+      <div class="cp-stat"><span class="cp-stat-label">REGION</span><span class="cp-stat-val">${subregion || region}</span></div>
+    </div>`;
+}
+
+function closeCountryPanel() {
+  document.getElementById('countryPanel').classList.remove('show');
+}
+
+function cpTab(el, tab) {
+  document.querySelectorAll('.cp-tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  // Tab content would be loaded dynamically — for now show overview
+}
+
+// ── INFO CARD (infrastructure)
+function showInfraCard(entity, pos) {
+  const card = document.getElementById('infoCard');
+  document.getElementById('ic-label').textContent = entity._sentinelCategory || '';
+  document.getElementById('ic-title').textContent = entity._sentinelLabel || '';
+  document.getElementById('ic-body').textContent = entity._sentinelBody || '';
+  const tags = entity._sentinelTags || [];
+  document.getElementById('ic-tags').innerHTML = tags.map(t => `<span class="ic-tag">${t}</span>`).join('');
+  card.style.borderLeftColor = entity._sentinelColor || '#FF6600';
+  card.style.left = Math.min(pos.x + 16, window.innerWidth - 320) + 'px';
+  card.style.top = Math.max(pos.y - 20, 50) + 'px';
+  card.classList.add('show');
+}
+
+function closeInfoCard() {
+  document.getElementById('infoCard').classList.remove('show');
+}
+
+// ── SENTINEL DATA INGESTION
+function ingestSentinelData() {
+  const DATA = window.__SENTINEL_DATA__;
+  if (!DATA) return;
+  if (DATA.events && DATA.events.length > 0) loadConflictEvents(DATA.events);
+  if (DATA.vessels && DATA.vessels.length > 0) loadVesselEntities(DATA.vessels);
+}
+// SENTINEL GEO — Infrastructure Layers, Weather, Existing Layers, Layer Toggle
+
+// ── LAYER TOGGLE SYSTEM
+const LAYER_DS = {}; // DataSource references per layer
+
+function toggleLayer(name, btn) {
+  const isOn = btn.classList.contains('on') || btn.classList.contains('cyan') || btn.classList.contains('yellow') || btn.classList.contains('blue') || btn.classList.contains('green') || btn.classList.contains('purple');
+  
+  if (isOn) {
+    btn.classList.remove('on','cyan','yellow','blue','green','purple');
+    btn.style.background = ''; btn.style.borderColor = ''; btn.style.color = '';
+    hideLayer(name);
+  } else {
+    const colors = {borders:'cyan',conflicts:'on',cables:'cyan',nuclear:'yellow',pipelines:'on',refineries:'on',ports:'blue',satellites:'cyan',milair:'yellow',vessels:'blue',radar:'cyan',eonet:'purple'};
+    btn.classList.add(colors[name] || 'on');
+    showLayer(name);
+  }
+}
+
+function showLayer(name) {
+  layerState[name] = true;
+  switch(name) {
+    case 'borders': if(countryDataSource) countryDataSource.show = true; bordersVisible = true; break;
+    case 'conflicts': loadConflictHotspots(); break;
+    case 'cables': loadCableEntities(); break;
+    case 'nuclear': loadNuclearEntities(); break;
+    case 'pipelines': loadPipelineEntities(); break;
+    case 'refineries': loadRefineryEntities(); break;
+    case 'ports': loadPortEntities(); break;
+    case 'satellites': loadSatelliteEntities(); break;
+    case 'milair': loadMilAirEntities(); break;
+    case 'vessels': loadVesselLayer(); break;
+    case 'radar': loadRainRadar(); break;
+    case 'eonet': loadEONETEntities(); break;
+  }
+}
+
+function hideLayer(name) {
+  layerState[name] = false;
+  if (name === 'borders' && countryDataSource) { countryDataSource.show = false; bordersVisible = false; return; }
+  if (name === 'radar') { hideRainRadar(); return; }
+  if (LAYER_DS[name]) { LAYER_DS[name].show = false; }
+}
+
+function getOrCreateDS(name) {
+  if (!LAYER_DS[name]) {
+    LAYER_DS[name] = new Cesium.CustomDataSource(name);
+    viewer.dataSources.add(LAYER_DS[name]);
+  }
+  LAYER_DS[name].entities.removeAll();
+  LAYER_DS[name].show = true;
+  return LAYER_DS[name];
+}
+
+// ── NUCLEAR PLANTS
+function loadNuclearEntities() {
+  const ds = getOrCreateDS('nuclear');
+  NUCLEAR_PLANTS.forEach(([name,country,lat,lon,cap,reactors,status]) => {
+    const e = ds.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(lon, lat),
+      billboard: { image: makeIcon('☢️',status==='Active'?'#FFCC00':'#FF8C00'), width:20, height:20, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+      label: { text: name, font:'9px Courier New', fillColor: Cesium.Color.fromCssColorString('#FFCC00'), style: Cesium.LabelStyle.FILL, pixelOffset: new Cesium.Cartesian2(0,-16), disableDepthTestDistance: Number.POSITIVE_INFINITY, show: false }
+    });
+    e._sentinelType = 'nuclear'; e._sentinelLabel = name; e._sentinelColor = '#FFCC00';
+    e._sentinelCategory = `☢ NUCLEAR PLANT — ${country}`;
+    e._sentinelBody = `CAPACITY: ${cap.toLocaleString()} MW\nREACTORS: ${reactors}\nSTATUS: ${status}\nCOUNTRY: ${country}\nPOSITION: ${lat.toFixed(2)}°, ${lon.toFixed(2)}°`;
+    e._sentinelTags = ['NUCLEAR', status.toUpperCase(), country];
+  });
+}
+
+// ── OIL REFINERIES
+function loadRefineryEntities() {
+  const ds = getOrCreateDS('refineries');
+  OIL_REFINERIES.forEach(([name,country,lat,lon,cap,operator]) => {
+    const e = ds.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(lon, lat),
+      billboard: { image: makeIcon('🏭','#FF8C00'), width:18, height:18, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    });
+    e._sentinelType = 'refinery'; e._sentinelLabel = name; e._sentinelColor = '#FF8C00';
+    e._sentinelCategory = `🏭 OIL REFINERY — ${country}`;
+    e._sentinelBody = `CAPACITY: ${(cap/1000).toFixed(0)}K BPD\nOPERATOR: ${operator}\nCOUNTRY: ${country}\nPOSITION: ${lat.toFixed(2)}°, ${lon.toFixed(2)}°`;
+    e._sentinelTags = ['REFINERY', operator, country];
+  });
+}
+
+// ── MAJOR PORTS
+function loadPortEntities() {
+  const ds = getOrCreateDS('ports');
+  MAJOR_PORTS.forEach(([name,country,lat,lon,teu,type]) => {
+    const e = ds.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(lon, lat),
+      billboard: { image: makeIcon('⚓','#4488FF'), width:18, height:18, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    });
+    e._sentinelType = 'port'; e._sentinelLabel = name; e._sentinelColor = '#4488FF';
+    e._sentinelCategory = `⚓ ${type} — ${country}`;
+    e._sentinelBody = `PORT: ${name}\n${teu > 0 ? 'THROUGHPUT: '+(teu/1e6).toFixed(1)+'M TEU\n' : ''}TYPE: ${type}\nCOUNTRY: ${country}`;
+    e._sentinelTags = [type, country];
+  });
+}
+
+// ── SUBMARINE CABLES
+function loadCableEntities() {
+  const ds = getOrCreateDS('cables');
+  SUBMARINE_CABLES.forEach(([name,cap,length,owners,waypoints]) => {
+    const positions = [];
+    waypoints.forEach(([lon,lat]) => positions.push(Cesium.Cartesian3.fromDegrees(lon, lat)));
+    const e = ds.entities.add({
+      polyline: {
+        positions: positions,
+        width: 2,
+        material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.15, color: Cesium.Color.fromCssColorString('#00CCFF').withAlpha(0.6) }),
+        clampToGround: false
       }
+    });
+    e._sentinelType = 'cable'; e._sentinelLabel = name; e._sentinelColor = '#00CCFF';
+    e._sentinelCategory = '🔌 SUBMARINE FIBER OPTIC CABLE';
+    e._sentinelBody = `NAME: ${name}\nCAPACITY: ${cap} Tbps\nLENGTH: ${length.toLocaleString()} km\nOWNERS: ${owners}`;
+    e._sentinelTags = ['FIBER', cap+'Tbps'];
+    // Add label at midpoint
+    const mid = waypoints[Math.floor(waypoints.length/2)];
+    ds.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(mid[0], mid[1]),
+      label: { text: name, font:'8px Courier New', fillColor: Cesium.Color.fromCssColorString('#00CCFF').withAlpha(0.6), style: Cesium.LabelStyle.FILL, disableDepthTestDistance: Number.POSITIVE_INFINITY, distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 15000000) }
+    });
+  });
+}
 
-      // ── SHARED MARKER GEOMETRIES
-      const markerGeo = new THREE.SphereGeometry(0.023, 8, 8);
-      const glowGeo = new THREE.SphereGeometry(0.042, 8, 8);
-      const ringGeo = new THREE.RingGeometry(0.030, 0.040, 24);
-
-      // Satellite/Flight geometries (SHARED — reused, never created inside loops)
-      const satGeo = new THREE.SphereGeometry(0.014, 6, 6);
-      const satRingGeo = new THREE.RingGeometry(0.019, 0.026, 16);
-      const fltGeo = new THREE.ConeGeometry(0.010, 0.022, 4);
-
-      // Vessel geometry (SHARED)
-      const vesselGeo = new THREE.SphereGeometry(0.012, 6, 6);
-      const vesselRingGeo = new THREE.RingGeometry(0.016, 0.022, 12);
-
-      // Weather event geometries (SHARED) — diamond shapes to distinguish from other markers
-      const wxGeo = new THREE.OctahedronGeometry(0.014, 0);
-      const wxRingGeo = new THREE.RingGeometry(0.019, 0.027, 20);
-      const wxGlowGeo = new THREE.OctahedronGeometry(0.028, 0);
-
-      let rayTargets = [];
-      let satMeshes = [];
-      let flightMeshes = [];
-      let vesselMeshes = [];
-      let infraLines = [];
-      let weatherMeshes = [];
-      let weatherTrackLines = [];
-      let weatherData = [];
-      let showWeather = false;
-      let wxLoaded = false;
-      let wxUpdateInterval = null;
-
-      // EONET category → color mapping
-      const WX_COLORS = {
-        wildfires: '#FF4422',
-        severeStorms: '#00C8FF',
-        volcanoes: '#CC44FF',
-        seaLakeIce: '#AAEEFF',
-        earthquakes: '#FFCC00',
-        floods: '#4488FF',
-        landslides: '#AA8844',
-        drought: '#CC8800',
-        dustHaze: '#998866',
-        snow: '#DDDDFF',
-        tempExtremes: '#FF8800',
-        waterColor: '#22AACC',
-        manmade: '#FF6600',
-      };
-
-      // EONET category → icon
-      const WX_ICONS = {
-        wildfires: '🔥',
-        severeStorms: '🌀',
-        volcanoes: '🌋',
-        seaLakeIce: '🧊',
-        earthquakes: '⚡',
-        floods: '🌊',
-        landslides: '⛰️',
-        drought: '☀️',
-        dustHaze: '🌫️',
-        snow: '❄️',
-        tempExtremes: '🌡️',
-        waterColor: '💧',
-        manmade: '🏭',
-      };
-
-      function rebuildRayTargets() {
-        rayTargets = [
-          ...markers.flatMap(m => [m.mesh, m.glow]),
-          ...satMeshes.map(m => m.mesh),
-          ...flightMeshes.map(m => m.mesh),
-          ...vesselMeshes.map(m => m.mesh),
-          ...weatherMeshes.map(m => m.mesh)
-        ];
+// ── OIL/GAS PIPELINES
+function loadPipelineEntities() {
+  const ds = getOrCreateDS('pipelines');
+  OIL_PIPELINES.forEach(([name,type,cap,countries,waypoints]) => {
+    const positions = [];
+    waypoints.forEach(([lon,lat]) => positions.push(Cesium.Cartesian3.fromDegrees(lon, lat)));
+    const color = type === 'Oil' ? '#FF6600' : '#FFCC00';
+    const e = ds.entities.add({
+      polyline: {
+        positions: positions,
+        width: 2.5,
+        material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.1, color: Cesium.Color.fromCssColorString(color).withAlpha(0.7) }),
+        clampToGround: true
       }
+    });
+    e._sentinelType = 'pipeline'; e._sentinelLabel = name; e._sentinelColor = color;
+    e._sentinelCategory = `🛢 ${type.toUpperCase()} PIPELINE`;
+    e._sentinelBody = `NAME: ${name}\nTYPE: ${type}\nCAPACITY: ${cap} MBPD\nROUTE: ${countries}`;
+    e._sentinelTags = [type.toUpperCase(), 'PIPELINE'];
+    const mid = waypoints[Math.floor(waypoints.length/2)];
+    ds.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(mid[0], mid[1]),
+      label: { text: name, font:'8px Courier New', fillColor: Cesium.Color.fromCssColorString(color).withAlpha(0.7), style: Cesium.LabelStyle.FILL, disableDepthTestDistance: Number.POSITIVE_INFINITY, distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 8000000) }
+    });
+  });
+}
 
-      function makeMarker(h) {
-        const col = COLORS[h.sev] || '#FF6600';
-        const c = new THREE.Color(col);
-        const pos = latLonToVec3(h.lat, h.lon);
-        const mesh = new THREE.Mesh(markerGeo, new THREE.MeshBasicMaterial({ color: c }));
-        mesh.position.copy(pos); mesh.userData = { type: 'hotspot', hotspot: h };
-        const glow = new THREE.Mesh(glowGeo, new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.10, side: THREE.FrontSide }));
-        glow.position.copy(pos); glow.userData = { type: 'hotspot', hotspot: h };
-        const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.55, side: THREE.DoubleSide }));
-        ring.position.copy(pos); ring.lookAt(0, 0, 0); ring.rotateX(Math.PI / 2);
-        ring.userData = { phase: Math.random() * Math.PI * 2 };
-        scene.add(ring); scene.add(glow); scene.add(mesh);
-        markers.push({ mesh, ring, glow, hotspot: h, basePos: pos.clone() });
-      }
+// ── CONFLICT HOTSPOTS (from GDELT)
+function loadConflictHotspots() {
+  const ds = getOrCreateDS('conflicts');
+  const DATA = window.__SENTINEL_DATA__;
+  const events = (DATA && DATA.events) || [];
+  events.forEach(ev => {
+    const lat = parseFloat(ev.lat), lon = parseFloat(ev.lon);
+    if (!isFinite(lat) || !isFinite(lon)) return;
+    const e = ds.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(lon, lat),
+      billboard: { image: makeIcon('◆','#FF4444'), width:16, height:16, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    });
+    e._sentinelType = 'conflict'; e._sentinelLabel = ev.name || 'CONFLICT'; e._sentinelColor = '#FF4444';
+    e._sentinelCategory = 'CONFLICT EVENT — GDELT';
+    e._sentinelBody = ev.name || 'Conflict event detected by GDELT';
+    e._sentinelTags = ['GDELT','LIVE','CONFLICT'];
+  });
+  // Also add static hotspots from GDELT queries (auto-fetch)
+  autoFetchConflicts(ds);
+}
 
-      function renderMarkers() {
-        markers.forEach(({ mesh, ring, glow }) => { scene.remove(mesh); mesh.material.dispose(); scene.remove(ring); ring.material.dispose(); scene.remove(glow); glow.material.dispose(); });
-        markers.length = 0;
-        HOTSPOTS.filter(h => activeFilter === 'all' || h.type === activeFilter).forEach(makeMarker);
-        if (activeFilter === 'custom' || activeFilter === 'all') customEvents.forEach(makeMarker);
-        rebuildRayTargets();
-      }
-      renderMarkers();
+async function autoFetchConflicts(ds) {
+  const queries = [
+    {q:'gaza israel war',lat:31.5,lon:34.8,label:'GAZA/ISRAEL'},
+    {q:'ukraine russia war',lat:49,lon:31,label:'UKRAINE'},
+    {q:'houthi red sea',lat:14,lon:43,label:'RED SEA'},
+    {q:'iran us conflict',lat:26.5,lon:56,label:'US-IRAN'},
+    {q:'taiwan china military',lat:25,lon:121,label:'TAIWAN'},
+    {q:'sudan civil war',lat:15.6,lon:32.5,label:'SUDAN'},
+    {q:'sahel mali niger',lat:14,lon:2,label:'SAHEL'},
+    {q:'north korea missile',lat:39,lon:126,label:'N. KOREA'},
+  ];
+  for (const q of queries) {
+    try {
+      const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 6000);
+      const r = await fetch(`https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(q.q)}%20sourcelang:english&mode=ArtList&maxrecords=2&format=json&timespan=48h`, {signal:ctrl.signal});
+      if (!r.ok) continue;
+      const data = await r.json();
+      const count = (data.articles||[]).length;
+      const sev = count >= 2 ? 'CRITICAL' : 'ELEVATED';
+      const col = count >= 2 ? '#FF4444' : '#FF8C00';
+      const e = ds.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(q.lon, q.lat),
+        billboard: { image: makeIcon('◆', col), width:20, height:20, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+        label: { text: q.label, font:'10px Courier New', fillColor: Cesium.Color.fromCssColorString(col), pixelOffset: new Cesium.Cartesian2(0,-18), disableDepthTestDistance: Number.POSITIVE_INFINITY }
+      });
+      e._sentinelType = 'conflict'; e._sentinelLabel = q.label; e._sentinelColor = col;
+      e._sentinelCategory = `◆ ${sev} — ${q.label}`;
+      e._sentinelBody = data.articles && data.articles[0] ? data.articles[0].title : 'Active conflict zone';
+      e._sentinelTags = ['LIVE', sev];
+    } catch(e){}
+  }
+}
 
-      // ============================================================
-      //  VESSEL TRACKING MODULE
-      // ============================================================
-      let vesselData = [];
+// ── VESSELS
+function loadVesselLayer() {
+  const DATA = window.__SENTINEL_DATA__;
+  if (DATA && DATA.vessels) loadVesselEntities(DATA.vessels);
+}
 
-      function renderVesselMarkers() {
-        vesselMeshes.forEach(({ mesh, ring }) => {
-          scene.remove(mesh); mesh.material.dispose();
-          if (ring) { scene.remove(ring); ring.material.dispose(); }
-        });
-        vesselMeshes.length = 0;
-        if (vesselData.length === 0) { rebuildRayTargets(); return; }
-        vesselData.forEach(v => {
-          if (!isFinite(v.lat) || !isFinite(v.lon)) return;
-          const pos = latLonToVec3(v.lat, v.lon, 1.012);
-          if (!isFinite(pos.x)) return;
-          const mesh = new THREE.Mesh(vesselGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(0x4488FF) }));
-          mesh.position.copy(pos);
-          mesh.userData = { type: 'vessel', vessel: v, basePos: pos.clone() };
-          const ring = new THREE.Mesh(vesselRingGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(0x4488FF), transparent: true, opacity: 0.35, side: THREE.DoubleSide }));
-          ring.position.copy(pos);
-          ring.userData = { phase: Math.random() * Math.PI * 2, basePos: pos.clone() };
-          scene.add(mesh); scene.add(ring);
-          vesselMeshes.push({ mesh, ring, vessel: v, basePos: pos.clone() });
-        });
-        rebuildRayTargets();
-      }
+function loadVesselEntities(vessels) {
+  const ds = getOrCreateDS('vessels');
+  const limit = PRESETS[currentPreset]?.aisLim || 4000;
+  vessels.slice(0, limit).forEach(v => {
+    if (!isFinite(v.lat) || !isFinite(v.lon)) return;
+    const e = ds.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(v.lon, v.lat),
+      billboard: { image: makeIcon('🚢','#4488FF'), width:14, height:14, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    });
+    e._sentinelType = 'vessel'; e._sentinelLabel = v.name || 'VESSEL'; e._sentinelColor = '#4488FF';
+    e._sentinelCategory = `🚢 AIS VESSEL`;
+    e._sentinelBody = `NAME: ${v.name||'UNKNOWN'}\nSPEED: ${(v.speed||0).toFixed(1)} KTS\nHEADING: ${Math.round(v.heading||0)}°\nMMSI: ${v.mmsi||'—'}`;
+    e._sentinelTags = ['AIS', v.type||'VESSEL'];
+  });
+}
 
-      // ============================================================
-      //  INFRASTRUCTURE LINES MODULE (shipping lanes)
-      // ============================================================
-      const infraLineMat = new THREE.LineBasicMaterial({ color: 0x335577, transparent: true, opacity: 0.45, linewidth: 1 });
-
-      function renderInfraLines(geojson) {
-        infraLines.forEach(l => { scene.remove(l); l.geometry.dispose(); });
-        infraLines.length = 0;
-        if (!geojson) return;
-        const features = geojson.features || geojson.geometries || [];
-        features.forEach(f => {
-          const coords = (f.geometry || f).coordinates || [];
-          if (!coords || coords.length < 2) return;
-          // Handle both LineString and MultiLineString
-          const lines = (f.geometry || f).type === 'MultiLineString' ? coords : [coords];
-          lines.forEach(line => {
-            if (line.length < 2) return;
-            const pts = [];
-            line.forEach(([lon, lat]) => {
-              if (!isFinite(lat) || !isFinite(lon)) return;
-              const v = latLonToVec3(lat, lon, 1.006);
-              pts.push(v.x, v.y, v.z);
-            });
-            if (pts.length < 6) return;
-            const geo = new THREE.BufferGeometry();
-            geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-            const line3 = new THREE.Line(geo, infraLineMat);
-            scene.add(line3);
-            infraLines.push(line3);
-          });
-        });
-      }
-
-      // ============================================================
-      //  SENTINEL DATA INGESTION (from Streamlit)
-      // ============================================================
-      function ingestSentinelData() {
-        const DATA = window.__SENTINEL_DATA__;
-        if (!DATA) return;
-
-        // 1. Events (GDELT conflicts) → HOTSPOTS
-        if (DATA.events && DATA.events.length > 0) {
-          HOTSPOTS = DATA.events.map(e => ({
-            lat: parseFloat(e.lat) || 0, lon: parseFloat(e.lon) || 0,
-            label: (e.name || 'EVENT').substring(0, 30),
-            sev: 'critical', type: 'conflict',
-            title: e.name || 'Conflict Event',
-            body: e.url ? 'Source: ' + e.url : 'GDELT Conflict Event',
-            mkt: '', tags: ['GDELT', 'LIVE'],
-            url: e.url || ''
-          }));
-          // Also keep fallback hotspots as persistent geopolitical markers
-          HOTSPOTS.push(...FALLBACK_HOTSPOTS);
-        } else {
-          HOTSPOTS = FALLBACK_HOTSPOTS.slice();
-        }
-        renderMarkers();
-
-        // 2. Vessels (AIS)
-        if (DATA.vessels && DATA.vessels.length > 0) {
-          vesselData = DATA.vessels;
-          renderVesselMarkers();
-        }
-
-        // 3. Infrastructure (shipping lanes GeoJSON)
-        if (DATA.infra) {
-          renderInfraLines(DATA.infra);
-        }
-
-        // 4. Pre-computed satellite positions from Python/skyfield
-        if (DATA.sats && DATA.sats.length > 0 && showSats) {
-          // Merge with existing satData if satellite.js loaded, otherwise use as-is
-          DATA.sats.forEach(s => {
-            if (!s.lat || !s.lon) return;
-            const existing = satData.find(x => x.name === s.name);
-            if (existing) {
-              existing.lat = parseFloat(s.lat); existing.lon = parseFloat(s.lon);
-              existing.altKm = parseFloat(s.alt_km || s.altKm || 400);
-              const r = 1.015 + Math.min(Math.max(existing.altKm, 200), 25000) * 0.000055;
-              existing.basePos = latLonToVec3(existing.lat, existing.lon, r);
-            }
-          });
-          if (showSats) renderSatMarkers();
-        }
-
-        // 5. Pre-computed military flights from Python
-        if (DATA.planes && DATA.planes.length > 0 && showFlights) {
-          flightData = DATA.planes.map(p => ({
-            callsign: (p.flight || p.callsign || p.hex || 'MIL').toString().trim(),
-            lat: parseFloat(p.lat), lon: parseFloat(p.lon),
-            alt: Math.round(parseFloat(p.alt_baro || p.alt || 0)),
-            speed: Math.round(parseFloat(p.gs || p.speed || 0)),
-            heading: parseFloat(p.track || p.heading || 0),
-            hex: (p.hex || '').toString(), country: 'MIL', type: p.type || 'MIL', reg: p.reg || ''
-          })).filter(f => isFinite(f.lat) && isFinite(f.lon));
-          renderFlightMarkers();
-        }
-      }
-      // Ingest on load
-      ingestSentinelData();
-
-      // ============================================================
-      //  SATELLITE TRACKING MODULE
-      // ============================================================
-      let satData = [];
-      let showSats = false;
-      let satLoaded = false;
-
-      // CelesTrak GP TLE API — correct paths (SOCRATES is conjunction-only, pub/TLE is catalog)
-      const CELESTRAK_URLS = [
-        g => `https://celestrak.org/pub/TLE/${g}.txt`,
-        g => `https://celestrak.com/pub/TLE/${g}.txt`,
-        g => `https://celestrak.org/SOCRATES/gp.php?GROUP=${g}&FORMAT=tle`,
-      ];
-
-      const SAT_GROUPS = [
-        { id: 'stations', label: 'Space Stations' },
-        { id: 'visual', label: 'Brightest Sats' },
-        { id: 'military', label: 'Military Sats' },
-        { id: 'starlink', label: 'Starlink' },
-      ];
-
-      async function fetchSatTLEs() {
-        if (typeof satellite === 'undefined') {
-          document.getElementById('sat-status').style.display = '';
-          document.getElementById('sat-status').textContent = '⚠ satellite.js CDN failed';
-          showSatsOffline(); return;
-        }
-        if (satLoaded) return updateSatPositions();
-        let loaded = 0;
-        for (const group of SAT_GROUPS) {
-          let ok = false;
-          for (const urlFn of CELESTRAK_URLS) {
-            if (ok) break;
-            try {
-              const ctrl = new AbortController();
-              const timer = setTimeout(() => ctrl.abort(), 8000);
-              const r = await fetch(urlFn(group.id), { signal: ctrl.signal });
-              clearTimeout(timer);
-              if (!r.ok) continue;
-              const text = await r.text();
-              if (!text.includes('1 ') || !text.includes('2 ')) continue;
-              const count = parseTLEGroup(text, group.id);
-              if (count > 0) { ok = true; loaded += count; }
-            } catch (e) { continue; }
-          }
-        }
-        satLoaded = true;
-        if (loaded > 0) {
-          document.getElementById('sat-status').style.display = '';
-          renderSatMarkers(); updateSatListPanel();
-        } else { showSatsOffline(); }
-      }
-
-      function parseTLEGroup(text, groupId) {
-        const lines = text.trim().split('\n').map(l => l.trim()).filter(l => l.length > 0);
-        let count = 0;
-        for (let i = 0; i + 2 < lines.length; i += 3) {
-          const name = lines[i].replace(/^0 /, '');
-          const tle1 = lines[i + 1]; const tle2 = lines[i + 2];
-          if (!tle1.startsWith('1 ') || !tle2.startsWith('2 ')) continue;
-          if (satData.find(s => s.name === name)) continue;
-          try {
-            const satrec = satellite.twoline2satrec(tle1, tle2);
-            const parts = tle2.trim().split(/\s+/);
-            const incl = parseFloat(parts[2]) || 0;
-            const meanMotion = parseFloat(parts[7]) || 0;
-            const altKm = meanMotion > 0 ? Math.round(Math.pow(398600 / Math.pow(meanMotion * 2 * Math.PI / 1440, 2), 1 / 3) - 6371) : 400;
-            const period = meanMotion > 0 ? Math.round(1440 / meanMotion) : 92;
-            satData.push({
-              name, tle1, tle2, satrec, noradId: parts[1] || '?', groupId, basePos: null, lat: null, lon: null, altKm,
-              info: { incl: incl.toFixed(1), period, altKm, meanMotion: meanMotion.toFixed(4) }
-            });
-            count++;
-          } catch (e) { }
-        }
-        return count;
-      }
-
-      // Graceful offline fallback — no stale TLEs that would misplot positions
-      function showSatsOffline() {
-        satLoaded = true;
-        const badge = document.getElementById('badge-sats');
-        badge.textContent = '◉ SATS: OFFLINE';
-        badge.style.color = '#FF4444';
-        badge.classList.add('active');
-        document.getElementById('sat-status').style.display = '';
-        document.getElementById('sat-status').textContent = '⚠ Celestrak unavailable — satellite layer offline';
-        document.getElementById('sat-status').style.color = '#FF4444';
-      }
-
-      function updateSatPositions() {
-        const now = new Date();
-        satData.forEach(sat => {
-          try {
-            const pv = satellite.propagate(sat.satrec, now);
-            if (!pv || !pv.position) return;
-            const { x, y, z } = pv.position;
-            if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return;
-            const gmst = satellite.gstime(now);
-            const geo = satellite.eciToGeodetic(pv.position, gmst);
-            const lat = satellite.degreesLat(geo.latitude);
-            const lon = satellite.degreesLong(geo.longitude);
-            const altKm = geo.height;
-            if (!isFinite(lat) || !isFinite(lon) || !isFinite(altKm)) return;
-            if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
-            sat.lat = lat; sat.lon = lon; sat.altKm = altKm;
-            const r = 1.015 + Math.min(Math.max(altKm, 200), 25000) * 0.000055;
-            sat.basePos = latLonToVec3(lat, lon, r);
-            sat.speed = pv.velocity ? Math.sqrt(pv.velocity.x ** 2 + pv.velocity.y ** 2 + pv.velocity.z ** 2) * 3600 : 0;
-          } catch (e) { sat.basePos = null; }
-        });
-        satMeshes.forEach(({ mesh, ring, sat }) => {
-          if (sat.basePos && isFinite(sat.basePos.x)) {
-            mesh.userData.basePos = sat.basePos.clone();
-            if (ring) ring.userData.basePos = sat.basePos.clone();
-          }
-        });
-      }
-
-      function renderSatMarkers() {
-        satMeshes.forEach(({ mesh, ring }) => {
-          scene.remove(mesh); mesh.material.dispose();
-          if (ring) { scene.remove(ring); ring.material.dispose(); }
-        });
-        satMeshes.length = 0;
-        if (!showSats) { rebuildRayTargets(); return; }
-        updateSatPositions();
-        const visible = satData.filter(s => s.basePos && isFinite(s.basePos.x) && isFinite(s.basePos.y)).slice(0, 150);
-        visible.forEach(sat => {
-          const col = sat.groupId === 'military' ? new THREE.Color(0xFF4400) :
-            sat.groupId === 'starlink' ? new THREE.Color(0x88AAFF) :
-              sat.groupId === 'gps' || sat.groupId === 'gnss' ? new THREE.Color(0x00FF88) :
-                sat.groupId === 'weather' ? new THREE.Color(0xFFCC00) :
-                  new THREE.Color(0x00FFFF);
-          const mesh = new THREE.Mesh(satGeo, new THREE.MeshBasicMaterial({ color: col }));
-          mesh.position.copy(sat.basePos);
-          mesh.userData = { type: 'satellite', sat, basePos: sat.basePos.clone() };
-          const ring = new THREE.Mesh(satRingGeo, new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.35, side: THREE.DoubleSide }));
-          ring.position.copy(sat.basePos);
-          ring.userData = { phase: Math.random() * Math.PI * 2, basePos: sat.basePos.clone() };
-          scene.add(mesh); scene.add(ring);
-          satMeshes.push({ mesh, ring, sat, basePos: sat.basePos.clone() });
-        });
-        document.getElementById('badge-sats').textContent = `◉ SATS: ${visible.length}`;
-        document.getElementById('badge-sats').classList.add('active');
-        rebuildRayTargets();
-      }
-
-      function updateSatListPanel() {
-        const items = document.getElementById('sat-items');
-        const count = document.getElementById('sat-count');
-        count.textContent = `(${satData.length})`;
-        items.innerHTML = satData.slice(0, 40).map((s, i) => `
-        <div class="satpi" onclick="focusSat(${i})">
-          <div class="satpn">${s.name}</div>
-          <div class="satps">ALT: ${s.altKm ? Math.round(s.altKm) + 'KM' : '—'} · ${s.groupId.toUpperCase()}</div>
-        </div>`).join('');
-      }
-
-      window.focusSat = function (idx) {
-        const sat = satData[idx];
-        if (!sat || !sat.lat) return;
-        flyTo(sat.lat, sat.lon);
-        const W = canvas.clientWidth || CW, H = canvas.clientHeight || CH;
-        setTimeout(() => showSatCard(sat, W * 0.3, H * 0.3), 600);
-      };
-
-      // ============================================================
-      //  MILITARY FLIGHT TRACKING MODULE
-      // ============================================================
-      let flightData = [];
-      let showFlights = false;
-      let satUpdateInterval = null;
-      let fltUpdateInterval = null;
-
-      const isMilHex = hex => hex && /^(ae|43c|43d|43e|43f|440|441|442)/i.test(hex);
-      const MIL_CALLSIGN = /^(REACH|RCH|SPAR|ARMY|NAVY|PAT|SAM|GOLD|HAWK|VIPER|IRON|STEEL|WOLF|RANGER|BEAR|EAGLE|FALCON|COBRA|RAPTOR|GHOST|PHANTOM|SHADOW|REAPER|PREDATOR|SENTINEL|WARRIOR|CNV|MAGIC|BOXER|BUCK|DUKE|KING|ATLAS|RRR|MARAUDER|HAVOC|DRAGON|SKULL|JOLLY)/i;
-
-      async function fetchMilitaryFlights() {
-        let flights = [];
-
-        // 1) ADS-B Exchange (requires API key)
-        if (typeof ADSBX_API_KEY !== 'undefined' && ADSBX_API_KEY) {
-          try {
-            const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 8000);
-            const r = await fetch('https://adsbexchange-com1.p.rapidapi.com/v2/mil/', {
-              signal: ctrl.signal,
-              headers: { 'X-RapidAPI-Key': ADSBX_API_KEY, 'X-RapidAPI-Host': 'adsbexchange-com1.p.rapidapi.com' }
-            });
-            if (r.ok) {
-              const data = await r.json();
-              flights = (data.ac || []).filter(a => a.lat && a.lon && !a.gnd).map(a => ({
-                callsign: (a.flight || a.r || 'UNKNOWN').trim(),
-                lat: parseFloat(a.lat), lon: parseFloat(a.lon),
-                alt: Math.round(parseFloat(a.alt_baro) || 0),
-                speed: Math.round(parseFloat(a.gs) || 0),
-                heading: parseFloat(a.track) || 0,
-                hex: a.hex || '', country: 'USA', type: a.t || 'MIL', reg: a.r || ''
-              }));
-            }
-          } catch (e) { }
-        }
-
-        // 2) adsb.fi military endpoint — no key needed, good global coverage
-        if (flights.length === 0) {
-          try {
-            const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 10000);
-            const r = await fetch('https://api.adsb.fi/v1/mil', { signal: ctrl.signal });
-            if (r.ok) {
-              const data = await r.json();
-              flights = (data.aircraft || data.ac || [])
-                .filter(a => a.lat != null && a.lon != null && a.alt_baro !== 'ground')
-                .slice(0, 300)
-                .map(a => ({
-                  callsign: (a.flight || a.r || a.hex || 'MIL').trim(),
-                  lat: parseFloat(a.lat), lon: parseFloat(a.lon),
-                  alt: Math.round(parseFloat(a.alt_baro) || 0),
-                  speed: Math.round(parseFloat(a.gs) || 0),
-                  heading: parseFloat(a.track) || 0,
-                  hex: a.hex || '', country: 'MIL', type: a.t || 'MIL', reg: a.r || ''
-                }))
-                .filter(f => isFinite(f.lat) && isFinite(f.lon));
-            }
-          } catch (e) { }
-        }
-
-        // 3) OpenSky fallback
-        if (flights.length === 0) {
-          try {
-            const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 12000);
-            const r = await fetch('https://opensky-network.org/api/states/all', { signal: ctrl.signal });
-            if (r.ok) {
-              const data = await r.json();
-              flights = (data.states || [])
-                .filter(s => s[5] != null && s[6] != null && s[8] === false &&
-                  (isMilHex(s[0]) || MIL_CALLSIGN.test((s[1] || ''))))
-                .slice(0, 300)
-                .map(s => ({
-                  callsign: (s[1] || s[0] || 'MIL').trim(),
-                  lat: parseFloat(s[6]), lon: parseFloat(s[5]),
-                  alt: Math.round((s[7] || 0) * 3.281),
-                  speed: Math.round((s[9] || 0) * 1.944),
-                  heading: parseFloat(s[10]) || 0,
-                  hex: s[0], country: s[2] || '?', type: 'MIL', reg: ''
-                }))
-                .filter(f => isFinite(f.lat) && isFinite(f.lon));
-            }
-          } catch (e) { }
-        }
-
-        flightData = flights;
-        renderFlightMarkers();
-      }
-
-      function renderFlightMarkers() {
-        flightMeshes.forEach(({ mesh }) => { scene.remove(mesh); mesh.material.dispose(); });
-        flightMeshes.length = 0;
-        if (!showFlights || flightData.length === 0) {
-          document.getElementById('badge-flt').textContent = '✈ MIL-AIR: OFF';
-          document.getElementById('badge-flt').classList.remove('flt-active');
-          rebuildRayTargets(); return;
-        }
-        flightData.forEach(flight => {
-          if (!isFinite(flight.lat) || !isFinite(flight.lon)) return;
-          if (flight.lat < -90 || flight.lat > 90 || flight.lon < -180 || flight.lon > 180) return;
-          const mesh = new THREE.Mesh(fltGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xFFDD00) }));
-          const pos = latLonToVec3(flight.lat, flight.lon, 1.016);
-          if (!isFinite(pos.x) || !isFinite(pos.y) || !isFinite(pos.z)) return;
-          mesh.position.copy(pos);
-          const up = pos.clone().normalize();
-          mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
-          const rot = new THREE.Quaternion();
-          rot.setFromAxisAngle(up, (flight.heading || 0) * Math.PI / 180);
-          mesh.quaternion.premultiply(rot);
-          mesh.userData = { type: 'flight', flight, basePos: pos.clone() };
-          scene.add(mesh);
-          flightMeshes.push({ mesh, flight, basePos: pos.clone() });
-        });
-        document.getElementById('badge-flt').textContent = `✈ MIL-AIR: ${flightMeshes.length}`;
-        document.getElementById('badge-flt').classList.add('flt-active');
-        document.getElementById('flt-status').style.display = '';
-        rebuildRayTargets();
-      }
-
-
-      // ============================================================
-      //  TRACK VISUALIZATION MODULE
-      // ============================================================
-      let trackingObj = null;     // {type:'sat'|'flight', data:satObj|flightObj}
-      let trackLatLons = [];      // [{lat,lon}] stored in geo coords
-      let trackLine = null;       // THREE.Line
-      let trackUpdateInt = null;
-
-      function startTracking(type, obj) {
-        stopTracking();
-        trackingObj = { type, obj };
-        const bar = document.getElementById('trackbar');
-        const label = document.getElementById('trackbar-label');
-        bar.style.display = 'block';
-
-        if (type === 'sat') {
-          bar.className = ''; // cyan
-          label.textContent = '◉ TRACKING: ' + obj.name;
-          computeOrbitTrack(obj);
-          trackUpdateInt = setInterval(() => computeOrbitTrack(obj), 30000);
-        } else if (type === 'vessel') {
-          bar.className = 'vessel';
-          label.textContent = '🚢 TRACKING: ' + (obj.name || 'VESSEL');
-          computeVesselPath(obj);
-          trackUpdateInt = setInterval(() => computeVesselPath(obj), 30000);
-        } else {
-          bar.className = 'flt';
-          label.textContent = '✈ TRACKING: ' + (obj.callsign || obj.hex);
-          computeFlightPath(obj);
-          trackUpdateInt = setInterval(() => fetchMilitaryFlights().then(() => {
-            const updated = flightData.find(f => f.hex === obj.hex);
-            if (updated) computeFlightPath(updated);
-          }), 30000);
-        }
-      }
-
-      function stopTracking() {
-        if (trackLine) {
-          scene.remove(trackLine);
-          trackLine.geometry.dispose();
-          trackLine.material.dispose();
-          trackLine = null;
-        }
-        if (trackUpdateInt) { clearInterval(trackUpdateInt); trackUpdateInt = null; }
-        trackingObj = null; trackLatLons = [];
-        document.getElementById('trackbar').style.display = 'none';
-      }
-
-      function computeOrbitTrack(sat) {
-        // Full orbit track: compute orbital period from mean motion, then
-        // propagate backward 1/4 period and forward 3/4 period at 1-min steps
-        trackLatLons = [];
-        const now = new Date();
-        let periodMin = 90; // default LEO ~90 min
+// ── SATELLITES (CelesTrak TLE)
+async function loadSatelliteEntities() {
+  const ds = getOrCreateDS('satellites');
+  document.getElementById('sat-status').style.display = '';
+  if (typeof satellite === 'undefined') return;
+  const limit = PRESETS[currentPreset]?.satLim || 2000;
+  const groups = ['stations','visual','military'];
+  let total = 0;
+  for (const gid of groups) {
+    if (total >= limit) break;
+    try {
+      const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 8000);
+      const r = await fetch(`https://celestrak.org/pub/TLE/${gid}.txt`, {signal:ctrl.signal});
+      if (!r.ok) continue;
+      const text = await r.text();
+      const lines = text.trim().split('\n').map(l=>l.trim()).filter(l=>l);
+      for (let i = 0; i+2 < lines.length && total < limit; i += 3) {
+        const name = lines[i].replace(/^0 /,'');
+        const tle1 = lines[i+1], tle2 = lines[i+2];
+        if (!tle1.startsWith('1 ') || !tle2.startsWith('2 ')) continue;
         try {
-          // Mean motion (rev/day) → period in minutes
-          if (sat.satrec && sat.satrec.no) {
-            const revPerDay = sat.satrec.no * 1440 / (2 * Math.PI); // rad/min → rev/day
-            if (revPerDay > 0) periodMin = 1440 / revPerDay;
-          }
-        } catch (e) { }
-        periodMin = Math.max(85, Math.min(periodMin, 200)); // clamp to reasonable range
-        const backMin = Math.round(periodMin * 0.25);
-        const fwdMin = Math.round(periodMin * 0.75);
-        for (let m = -backMin; m <= fwdMin; m += 1) {
-          const t = new Date(now.getTime() + m * 60000);
-          try {
-            const pv = satellite.propagate(sat.satrec, t);
-            if (!pv.position) continue;
-            const gmst = satellite.gstime(t);
-            const geo = satellite.eciToGeodetic(pv.position, gmst);
-            trackLatLons.push({ lat: satellite.degreesLat(geo.latitude), lon: satellite.degreesLong(geo.longitude) });
-          } catch (e) { }
-        }
-        buildTrackLine(new THREE.Color(0x00FFFF));
-      }
-
-      function computeFlightPath(flight) {
-        // Project forward 30 min at current heading/speed
-        trackLatLons = [];
-        const R = 6371; // Earth radius km
-        const speedKmh = flight.speed * 1.852; // knots to km/h
-        const distKm30 = speedKmh * 0.5; // 30 minutes
-        // Add a few past positions (we only have current pos, so just show future)
-        for (let m = -5; m <= 30; m += 2) {
-          const dist = speedKmh * (m / 60);
-          const d = dist / R;
-          const hdg = flight.heading * Math.PI / 180;
-          const lat1 = flight.lat * Math.PI / 180;
-          const lon1 = flight.lon * Math.PI / 180;
-          const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(hdg));
-          const lon2 = lon1 + Math.atan2(Math.sin(hdg) * Math.sin(d) * Math.cos(lat1), Math.cos(d) - Math.sin(lat1) * Math.sin(lat2));
-          trackLatLons.push({ lat: lat2 * 180 / Math.PI, lon: lon2 * 180 / Math.PI });
-        }
-        buildTrackLine(new THREE.Color(0xFFDD00));
-      }
-
-      const _tmpV = new THREE.Vector3();
-      function buildTrackLine(color) {
-        if (trackLine) {
-          scene.remove(trackLine);
-          trackLine.geometry.dispose();
-          trackLine.material.dispose();
-          trackLine = null;
-        }
-        if (trackLatLons.length < 2) return;
-
-        // Split at antimeridian crossings (lon jump >180°)
-        const segments = [];
-        let current = [trackLatLons[0]];
-        for (let i = 1; i < trackLatLons.length; i++) {
-          const dLon = Math.abs(trackLatLons[i].lon - trackLatLons[i - 1].lon);
-          if (dLon > 180) { segments.push(current); current = [trackLatLons[i]]; }
-          else { current.push(trackLatLons[i]); }
-        }
-        segments.push(current);
-
-        // Build geometry from all segments (broken by NaN gaps)
-        const allPts = [];
-        segments.forEach((seg, si) => {
-          seg.forEach(({ lat, lon }) => {
-            const v = latLonToVec3(lat, lon, 1.025);
-            allPts.push(v.x, v.y, v.z);
+          const satrec = satellite.twoline2satrec(tle1, tle2);
+          const now = new Date();
+          const pv = satellite.propagate(satrec, now);
+          if (!pv.position) continue;
+          const gmst = satellite.gstime(now);
+          const geo = satellite.eciToGeodetic(pv.position, gmst);
+          const lat = satellite.degreesLat(geo.latitude);
+          const lon = satellite.degreesLong(geo.longitude);
+          const alt = geo.height;
+          if (!isFinite(lat) || !isFinite(lon)) continue;
+          const col = gid==='military'?'#FF4400':gid==='stations'?'#00FF88':'#00FFFF';
+          const e = ds.entities.add({
+            position: Cesium.Cartesian3.fromDegrees(lon, lat, (alt||400)*1000),
+            point: { pixelSize:4, color: Cesium.Color.fromCssColorString(col), disableDepthTestDistance: Number.POSITIVE_INFINITY },
           });
-          if (si < segments.length - 1) allPts.push(NaN, NaN, NaN);
-        });
-
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.Float32BufferAttribute(allPts, 3));
-        trackLine = new THREE.Line(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.75, linewidth: 2 }));
-        scene.add(trackLine);
+          e._sentinelType = 'satellite'; e._sentinelLabel = name; e._sentinelColor = col;
+          e._sentinelCategory = `◉ SATELLITE — ${gid.toUpperCase()}`;
+          e._sentinelBody = `NAME: ${name}\nALT: ${Math.round(alt||400)} KM\nGROUP: ${gid}`;
+          e._sentinelTags = [gid.toUpperCase(), 'SAT'];
+          total++;
+        } catch(e){}
       }
+    } catch(e){}
+  }
+}
 
-      // Recompute track line positions after globe rotation (applied in animate)
-      let _lastTrackLat = null;
-      function updateTrackLineForRotation(quat) {
-        if (!trackLine || trackLatLons.length === 0) return;
-        const pts = trackLine.geometry.attributes.position;
-        const arr = pts.array;
-        let j = 0, segIdx = 0;
-        // Rebuild positions applying globe quaternion
-        const segments = [];
-        let cur = [];
-        trackLatLons.forEach((ll, i) => {
-          cur.push(ll);
-          if (i < trackLatLons.length - 1) {
-            const dLon = Math.abs(trackLatLons[i + 1].lon - ll.lon);
-            if (dLon > 180) { segments.push(cur); cur = []; }
-          }
-        });
-        segments.push(cur);
-
-        let pos = 0;
-        segments.forEach((seg, si) => {
-          seg.forEach(({ lat, lon }) => {
-            const v = latLonToVec3(lat, lon, 1.025).applyQuaternion(quat);
-            arr[pos++] = v.x; arr[pos++] = v.y; arr[pos++] = v.z;
-          });
-          if (si < segments.length - 1) { arr[pos++] = NaN; arr[pos++] = NaN; arr[pos++] = NaN; }
-        });
-        pts.needsUpdate = true;
-      }
-
-      // ── CURRENT OBJECT BEING SHOWN IN CARD (for track button)
-      let currentCardObj = null;
-
-      window.startTrackingFromCard = function () {
-        if (!currentCardObj) return;
-        startTracking(currentCardObj.type, currentCardObj.data);
-        closeCard();
-      };
-
-      // ── DRAG INFO CARD
-      const ic = document.getElementById('ic');
-      let icDrag = false, icX = 0, icY = 0;
-      ic.addEventListener('mousedown', e => {
-        if (e.target.id === 'ic-close' || e.target.tagName === 'BUTTON') return;
-        icDrag = true;
-        icX = e.clientX - ic.getBoundingClientRect().left;
-        icY = e.clientY - ic.getBoundingClientRect().top;
+// ── MILITARY AIR
+async function loadMilAirEntities() {
+  const ds = getOrCreateDS('milair');
+  document.getElementById('flt-status').style.display = '';
+  try {
+    const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 10000);
+    const r = await fetch('https://api.adsb.fi/v1/mil', {signal:ctrl.signal});
+    if (!r.ok) return;
+    const data = await r.json();
+    (data.aircraft||data.ac||[]).filter(a=>a.lat!=null&&a.lon!=null).slice(0,300).forEach(a => {
+      const e = ds.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(a.lon, a.lat, (a.alt_baro||10000)*0.3048),
+        billboard: { image: makeIcon('✈','#FFDD00'), width:14, height:14, disableDepthTestDistance: Number.POSITIVE_INFINITY },
       });
-      window.addEventListener('mousemove', e => {
-        if (!icDrag) return;
-        ic.style.left = (e.clientX - icX) + 'px';
-        ic.style.top = (e.clientY - icY) + 'px';
+      const cs = (a.flight||a.r||a.hex||'MIL').trim();
+      e._sentinelType = 'milair'; e._sentinelLabel = cs; e._sentinelColor = '#FFDD00';
+      e._sentinelCategory = '✈ MILITARY AIRCRAFT';
+      e._sentinelBody = `CALLSIGN: ${cs}\nALT: ${Math.round(a.alt_baro||0)} FT\nSPEED: ${Math.round(a.gs||0)} KTS\nHEADING: ${Math.round(a.track||0)}°\nICAO: ${a.hex||'—'}`;
+      e._sentinelTags = ['MIL','LIVE'];
+    });
+  } catch(e){}
+}
+
+// ── NASA EONET
+async function loadEONETEntities() {
+  const ds = getOrCreateDS('eonet');
+  try {
+    const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 12000);
+    const r = await fetch('https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=50', {signal:ctrl.signal});
+    if (!r.ok) return;
+    const data = await r.json();
+    const icons = {wildfires:'🔥',severeStorms:'🌀',volcanoes:'🌋',earthquakes:'⚡',floods:'🌊'};
+    const colors = {wildfires:'#FF4422',severeStorms:'#00C8FF',volcanoes:'#CC44FF',earthquakes:'#FFCC00',floods:'#4488FF'};
+    (data.events||[]).forEach(evt => {
+      const cat = evt.categories?.[0]?.id || 'unknown';
+      const geom = evt.geometry || [];
+      const latest = geom[geom.length-1] || {};
+      const coords = latest.coordinates || [0,0];
+      if (!isFinite(coords[1]) || !isFinite(coords[0])) return;
+      const col = colors[cat] || '#AA44FF';
+      const icon = icons[cat] || '🌪';
+      const e = ds.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(coords[0], coords[1]),
+        billboard: { image: makeIcon(icon, col), width:18, height:18, disableDepthTestDistance: Number.POSITIVE_INFINITY },
       });
-      window.addEventListener('mouseup', () => icDrag = false);
-
-      // ── INTERACTION
-      const raycaster = new THREE.Raycaster();
-      raycaster.params.Mesh = { backfaceCulling: false };
-      const mouse = new THREE.Vector2();
-
-      function getCanvasXY(e) { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top, cx: e.clientX, cy: e.clientY }; }
-      function canvasToNDC(x, y) { const W = canvas.clientWidth || CW, H = canvas.clientHeight || CH; return { x: (x / W) * 2 - 1, y: -(y / H) * 2 + 1 }; }
-
-      canvas.addEventListener('mousedown', e => { dragging = true; isDrag = false; dragDist = 0; autoRotate = false; const p = getCanvasXY(e); prevX = p.x; prevY = p.y; });
-      canvas.addEventListener('mouseup', () => { dragging = false; });
-
-      let lastHover = 0;
-      canvas.addEventListener('mousemove', e => {
-        const p = getCanvasXY(e);
-        if (dragging) {
-          const dx = p.x - prevX, dy = p.y - prevY;
-          dragDist += Math.abs(dx) + Math.abs(dy);
-          if (dragDist > 5) isDrag = true;
-          targetRotY += dx * 0.005; targetRotX += dy * 0.004;
-          targetRotX = Math.max(-Math.PI / 2.1, Math.min(Math.PI / 2.1, targetRotX));
-          prevX = p.x; prevY = p.y; return;
-        }
-        const now = performance.now();
-        if (now - lastHover < 60) return;
-        lastHover = now;
-        const ndc = canvasToNDC(p.x, p.y);
-        mouse.x = ndc.x; mouse.y = ndc.y;
-        raycaster.setFromCamera(mouse, camera);
-        const hits = raycaster.intersectObjects(rayTargets);
-        const tt = document.getElementById('tt');
-        if (hits.length && hits[0].object.userData.type) {
-          const ud = hits[0].object.userData;
-          tt.style.display = 'block';
-          tt.style.left = (p.x + 14) + 'px'; tt.style.top = (p.y - 6) + 'px';
-          if (ud.type === 'hotspot') {
-            tt.className = ''; tt.textContent = ud.hotspot.label + ' — ' + ud.hotspot.sev.toUpperCase();
-          } else if (ud.type === 'satellite') {
-            tt.className = 'sat'; tt.textContent = '◉ ' + ud.sat.name + (ud.sat.altKm ? ' — ' + Math.round(ud.sat.altKm) + 'KM' : '');
-          } else if (ud.type === 'flight') {
-            tt.className = 'flt'; tt.textContent = '✈ ' + (ud.flight.callsign || ud.flight.hex) + ' — ' + ud.flight.alt + 'FT';
-          } else if (ud.type === 'vessel') {
-            tt.className = ''; tt.style.borderColor = '#4488FF';
-            tt.textContent = '🚢 ' + (ud.vessel.name || 'VESSEL') + ' — ' + ud.vessel.speed.toFixed(0) + 'KTS';
-          } else if (ud.type === 'weather') {
-            const wxIcon = WX_ICONS[ud.weather.category] || '🌪';
-            tt.className = 'wx';
-            let wxTip = wxIcon + ' ' + ud.weather.title;
-            if (ud.weather.magnitude != null) wxTip += ' — ' + ud.weather.magnitude + ' ' + ud.weather.magnitudeUnit;
-            tt.textContent = wxTip;
-          }
-          canvas.style.cursor = 'pointer';
-        } else { tt.style.display = 'none'; canvas.style.cursor = 'default'; }
-      });
-
-      canvas.addEventListener('click', e => {
-        if (isDrag) return;
-        const p = getCanvasXY(e);
-        const ndc = canvasToNDC(p.x, p.y);
-        mouse.x = ndc.x; mouse.y = ndc.y;
-        raycaster.setFromCamera(mouse, camera);
-        const hits = raycaster.intersectObjects(rayTargets);
-        if (hits.length && hits[0].object.userData.type) {
-          const ud = hits[0].object.userData;
-          if (ud.type === 'hotspot') showHotspotCard(ud.hotspot, p.x, p.y);
-          else if (ud.type === 'satellite') showSatCard(ud.sat, p.x, p.y);
-          else if (ud.type === 'flight') showFlightCard(ud.flight, p.x, p.y);
-          else if (ud.type === 'vessel') showVesselCard(ud.vessel, p.x, p.y);
-          else if (ud.type === 'weather') showWeatherCard(ud.weather, p.x, p.y);
-        } else { closeCard(); }
-      });
-
-      canvas.addEventListener('wheel', e => {
-        e.preventDefault();
-        camera.position.z = Math.max(1.4, Math.min(5.0, camera.position.z + e.deltaY * 0.001));
-      }, { passive: false });
-
-      function closeCard() {
-        const ic = document.getElementById('ic');
-        ic.style.display = 'none'; ic.className = '';
-        currentCardObj = null;
-        document.getElementById('ic-track-btn').style.display = 'none';
-        // Reset vessel card injected HTML
-        document.getElementById('ic-ttl').innerHTML = '';
-      }
-      window.closeCard = closeCard;
-
-      function positionCard(px, py) {
-        const ic = document.getElementById('ic');
-        const W = canvas.clientWidth || CW, H = canvas.clientHeight || CH;
-        const IW = ic.offsetWidth || 320, IH = ic.offsetHeight || 260;
-        let x = px + 16, y = py - 20;
-        if (x + IW > W - 10) x = px - IW - 10;
-        if (y + IH > H - 10) y = H - IH - 10;
-        if (y < 50) y = 50; if (x < 10) x = 10;
-        ic.style.left = x + 'px'; ic.style.top = y + 'px'; ic.style.display = 'block';
-      }
-
-      function showHotspotCard(h, px, py) {
-        currentCardObj = null;
-        const ic = document.getElementById('ic');
-        document.getElementById('ic-sev').textContent = h.sev.toUpperCase() + ' — ' + h.type.toUpperCase();
-        document.getElementById('ic-ttl').textContent = h.title || h.label;
-        document.getElementById('ic-body').textContent = h.body || '';
-        document.getElementById('ic-mkt').textContent = h.mkt ? '📊 MARKET: ' + h.mkt : '';
-        document.getElementById('ic-tags').innerHTML = (h.tags || []).map(t => `<span class="ictag">${t}</span>`).join('');
-        document.getElementById('ic-date').textContent = 'UPDATED: LIVE';
-        document.getElementById('ic-track-btn').style.display = 'none';
-        ic.className = 'show ' + (h.sev || 'elevated');
-        positionCard(px, py);
-      }
-
-      function showSatCard(sat, px, py) {
-        currentCardObj = { type: 'sat', data: sat };
-        const ic = document.getElementById('ic');
-        document.getElementById('ic-sev').textContent = 'SATELLITE — ' + sat.groupId.toUpperCase();
-        document.getElementById('ic-ttl').textContent = sat.name;
-        const alt = sat.altKm ? Math.round(sat.altKm) + 'KM' : 'N/A';
-        const spd = sat.speed ? Math.round(sat.speed) + ' KM/H' : 'N/A';
-
-        let flag = "🛰️ UNKN";
-        let n = (sat.name || "").toUpperCase();
-        let img = "";
-        if (n.includes("STARLINK")) {
-          flag = "🇺🇸 USA (SpaceX)"; img = "https://flagcdn.com/w320/us.png";
-        } else if (n.includes("SPACEBEE") || n.includes("USA") || n.includes("NOAA") || n.includes("GOES") || n.includes("FLOCK") || n.includes("GPS") || n.includes("NAVSTAR")) {
-          flag = "🇺🇸 USA"; img = "https://flagcdn.com/w320/us.png";
-        } else if (n.includes("COSMOS") || n.includes("KSM") || n.includes("METEOR") || n.includes("GLONASS") || n.includes("RESURS")) {
-          flag = "🇷🇺 RUS"; img = "https://flagcdn.com/w320/ru.png";
-        } else if (n.includes("BEIDOU") || n.includes("PRC") || n.includes("FENGYUN") || n.includes("GAOFEN") || n.includes("YAOGAN") || n.includes("TIANHUI")) {
-          flag = "🇨🇳 CHN"; img = "https://flagcdn.com/w320/cn.png";
-        } else if (n.includes("GALILEO") || n.includes("SENTINEL") || n.includes("METOP") || n.includes("PLEIADES")) {
-          flag = "🇪🇺 ESA/EU"; img = "https://flagcdn.com/w320/eu.png";
-        } else if (n.includes("GSAT") || n.includes("CARTOSAT") || n.includes("INSAT") || n.includes("RISAT") || n.includes("MICROSAT")) {
-          flag = "🇮🇳 IND"; img = "https://flagcdn.com/w320/in.png";
-        } else if (n.includes("IGS") || n.includes("QZS") || n.includes("ALOS") || n.includes("HIMAWARI")) {
-          flag = "🇯🇵 JPN"; img = "https://flagcdn.com/w320/jp.png";
-        } else if (n.includes("ONEWEB")) {
-          flag = "🇬🇧 UK (OneWeb)"; img = "https://flagcdn.com/w320/gb.png";
-        } else if (n.includes("ISS") || n.includes("ZARYA")) {
-          flag = "🌐 INT (ISS)";
-        } else if (n.includes("IRIDIUM")) {
-          flag = "🌐 INT (Iridium)";
-        }
-
-        document.getElementById('ic-body').textContent =
-          `ALTITUDE: ${alt}\nPERIOD: ${sat.info.period} MIN\nINCLINATION: ${sat.info.incl}°\nSPEED: ${spd}\nORIGIN: ${flag}\nNORAD ID: ${sat.noradId || '—'}`;
-
-        const mkt = document.getElementById('ic-mkt');
-        mkt.innerHTML = '';
-        if (img) {
-          mkt.innerHTML = `<img src="${img}" style="margin-top:8px; border-radius:4px; max-width:80px; max-height:50px; opacity:0.95; border:1px solid #444;" />`;
-        }
-
-        document.getElementById('ic-tags').innerHTML = `<span class="ictag">${sat.groupId.toUpperCase()}</span><span class="ictag">NORAD ${sat.noradId || '?'}</span>`;
-        document.getElementById('ic-date').textContent = 'POSITION: LIVE PROPAGATED';
-        const btn = document.getElementById('ic-track-btn');
-        btn.textContent = '◉ TRACK ORBIT'; btn.className = ''; btn.style.display = 'block';
-        ic.className = 'show satellite';
-        positionCard(px, py);
-      }
-
-      function showFlightCard(flight, px, py) {
-        currentCardObj = { type: 'flight', data: flight };
-        const ic = document.getElementById('ic');
-        document.getElementById('ic-sev').textContent = 'MILITARY AIRCRAFT — ' + flight.country;
-        document.getElementById('ic-ttl').textContent = (flight.callsign || flight.hex) || 'UNKNOWN';
-        // Body with photo
-        let bodyText =
-          `ALTITUDE: ${flight.alt.toLocaleString()} FT\nSPEED: ${flight.speed} KTS\nHEADING: ${Math.round(flight.heading)}°\nICAO24: ${flight.hex || '—'}\nTYPE: ${flight.type || 'MILITARY'}\nREG: ${flight.reg || '—'}`;
-        document.getElementById('ic-body').textContent = bodyText;
-        // Fetch aircraft photo from planespotters.net API (returns JSON)
-        const photoContainer = document.getElementById('ic-mkt');
-        photoContainer.innerHTML = '';
-
-        let cleanHex = (flight.hex || '').replace(/[^a-zA-Z0-9]/g, '');
-        let cleanReg = (flight.reg || '').replace(/[^a-zA-Z0-9-]/g, '');
-
-        if (cleanHex || cleanReg) {
-          photoContainer.innerHTML = '<div style="color:#333;font-size:9px;margin-top:4px">Loading photo…</div>';
-
-          let p = cleanHex ? fetch(`https://api.planespotters.net/pub/photos/hex/${cleanHex}`).then(r => r.ok ? r.json() : { photos: [] }) : Promise.resolve({ photos: [] });
-
-          p.then(data => {
-            if (data && data.photos && data.photos.length > 0) return data;
-            if (cleanReg) return fetch(`https://api.planespotters.net/pub/photos/reg/${cleanReg}`).then(r => r.ok ? r.json() : { photos: [] });
-            return data;
-          })
-            .then(data => {
-              if (data && data.photos && data.photos.length > 0) {
-                const url = data.photos[0].thumbnail_large?.src || data.photos[0].thumbnail?.src || '';
-                if (url) photoContainer.innerHTML = `<div style="margin-top:6px"><img src="${url}" style="width:100%;max-width:260px;border-radius:3px;border:1px solid #222" draggable="false" onerror="this.parentElement.style.display='none'"/></div>`;
-                else photoContainer.innerHTML = '';
-              } else { photoContainer.innerHTML = ''; }
-            })
-            .catch(() => { photoContainer.innerHTML = ''; });
-        }
-        document.getElementById('ic-tags').innerHTML = `<span class="ictag">MIL</span><span class="ictag">${flight.country}</span><span class="ictag">${flight.type || 'UNKN'}</span>`;
-        document.getElementById('ic-date').textContent = 'POSITION: LIVE ADS-B';
-        const btn = document.getElementById('ic-track-btn');
-        btn.textContent = '✈ TRACK FLIGHT PATH'; btn.className = 'flt'; btn.style.display = 'block';
-        ic.className = 'show flight';
-        positionCard(px, py);
-      }
-
-      function computeVesselPath(vessel) {
-        // Project vessel course forward 60 min at current heading/speed
-        trackLatLons = [];
-        const R = 6371; // Earth radius km
-        const speedKmh = vessel.speed * 1.852; // knots to km/h
-        for (let m = -10; m <= 60; m += 2) {
-          const dist = speedKmh * (m / 60);
-          const d = dist / R;
-          const hdg = vessel.heading * Math.PI / 180;
-          const lat1 = vessel.lat * Math.PI / 180;
-          const lon1 = vessel.lon * Math.PI / 180;
-          const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(hdg));
-          const lon2 = lon1 + Math.atan2(Math.sin(hdg) * Math.sin(d) * Math.cos(lat1), Math.cos(d) - Math.sin(lat1) * Math.sin(lat2));
-          trackLatLons.push({ lat: lat2 * 180 / Math.PI, lon: lon2 * 180 / Math.PI });
-        }
-        buildTrackLine(new THREE.Color(0x4488FF));
-      }
-
-      function showVesselCard(vessel, px, py) {
-        currentCardObj = { type: 'vessel', data: vessel };
-        const ic = document.getElementById('ic');
-
-        // Derive navigational status from speed
-        let navStatus = 'Under Way';
-        let navColor = '#00CC44';
-        if (vessel.speed < 0.5) { navStatus = 'Stopped'; navColor = '#FF4444'; }
-        else if (vessel.speed < 3) { navStatus = 'Slow Steam'; navColor = '#FF8C00'; }
-        else if (vessel.speed > 18) { navStatus = 'High Speed'; navColor = '#00AAFF'; }
-
-        // Format type label
-        const typeLabel = (vessel.type || 'cargo').replace(/[_-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-
-        // Guess region from lat/lon
-        let region = '';
-        const lat = vessel.lat, lon = vessel.lon;
-        if (lat > 25 && lat < 32 && lon > 30 && lon < 35) region = 'SUEZ CANAL';
-        else if (lat > 12 && lat < 15 && lon > 42 && lon < 45) region = 'BAB EL-MANDEB';
-        else if (lat > 25 && lat < 28 && lon > 54 && lon < 58) region = 'STRAIT OF HORMUZ';
-        else if (lat > 0 && lat < 3 && lon > 102 && lon < 105) region = 'MALACCA STRAIT';
-        else if (lat > 23 && lat < 26 && lon > 118 && lon < 121) region = 'TAIWAN STRAIT';
-        else if (lat > -36 && lat < -33 && lon > 17 && lon < 20) region = 'CAPE OF GOOD HOPE';
-        else if (lat > 35 && lat < 37 && lon > -6 && lon < -4) region = 'STRAIT OF GIBRALTAR';
-        else if (lat > 50 && lat < 52 && lon > 0 && lon < 3) region = 'ENGLISH CHANNEL';
-        else if (lat > 8 && lat < 10 && lon > -80 && lon < -79) region = 'PANAMA CANAL';
-        else if (lat > 30 && lat < 42 && lon > 120 && lon < 145) region = 'EAST ASIA';
-        else if (lat > 20 && lat < 45 && lon > -130 && lon < -60) region = 'NORTH AMERICA';
-        else if (lat > 35 && lat < 60 && lon > -10 && lon < 30) region = 'EUROPE';
-        else if (lat > -10 && lat < 20 && lon > 40 && lon < 80) region = 'INDIAN OCEAN';
-        else if (lat > 5 && lat < 22 && lon > 105 && lon < 120) region = 'SOUTH CHINA SEA';
-        else region = `${Math.abs(lat).toFixed(0)}°${lat >= 0 ? 'N' : 'S'}, ${Math.abs(lon).toFixed(0)}°${lon >= 0 ? 'E' : 'W'}`;
-
-        // Draught estimate based on vessel type
-        let draught = '—';
-        const tl = (vessel.type || '').toLowerCase();
-        if (tl.includes('tanker')) draught = '14.5m';
-        else if (tl.includes('container')) draught = '12.0m';
-        else if (tl.includes('cargo') || tl.includes('bulk')) draught = '10.5m';
-
-        // Speed progress percentage (0-25 kts mapped to 0-100%)
-        const speedPct = Math.min(vessel.speed / 20 * 100, 100);
-
-        // Build the vessel-specific HTML inside the title element (which stays visible)
-        // We hide the other generic elements via CSS
-        const vesselHTML = `
-          <div class="vc-header">
-            <div class="vc-header-icon">🚢</div>
-            <div class="vc-header-info">
-              <div class="vc-header-name">${vessel.name || 'UNKNOWN VESSEL'}</div>
-              <div class="vc-header-type">${typeLabel}</div>
-            </div>
-          </div>
-
-          <div class="vc-dest">
-            <div class="vc-dest-row">
-              <div>
-                <div class="vc-dest-label">POSITION</div>
-                <div class="vc-dest-value">${vessel.lat.toFixed(4)}° / ${vessel.lon.toFixed(4)}°</div>
-              </div>
-              <div class="vc-dest-country">${region}</div>
-            </div>
-            <div style="font-size:10px;color:#666;margin-top:2px">
-              MMSI: <span style="color:#aaa;font-weight:600">${vessel.mmsi || '—'}</span>
-            </div>
-          </div>
-
-          <div class="vc-progress">
-            <div style="display:flex;justify-content:space-between;margin-bottom:6px">
-              <div style="font-size:9px;color:#FF6600;font-weight:700">HEADING: ${Math.round(vessel.heading)}°</div>
-              <div style="font-size:9px;color:#888">${vessel.speed.toFixed(1)} KTS</div>
-            </div>
-            <div class="vc-progress-bar">
-              <div class="vc-progress-fill" style="width:${speedPct}%">
-                <div class="vc-progress-arrow"></div>
-              </div>
-            </div>
-            <div class="vc-progress-dots">
-              <div class="vc-progress-dot filled"></div>
-              <div class="vc-progress-dot ${vessel.speed > 5 ? 'filled' : ''}"></div>
-              <div class="vc-progress-dot ${vessel.speed > 10 ? 'filled' : ''}"></div>
-              <div class="vc-progress-dot ${vessel.speed > 15 ? 'filled' : ''}"></div>
-            </div>
-          </div>
-
-          <div class="vc-data">
-            <div class="vc-data-cell">
-              <div class="vc-data-label">Nav Status:</div>
-              <div class="vc-data-val" style="color:${navColor}">${navStatus}</div>
-            </div>
-            <div class="vc-data-cell">
-              <div class="vc-data-label">Speed/Course:</div>
-              <div class="vc-data-val">${vessel.speed.toFixed(1)}kn / ${Math.round(vessel.heading)}°</div>
-            </div>
-            <div class="vc-data-cell">
-              <div class="vc-data-label">Draught:</div>
-              <div class="vc-data-val">${draught}</div>
-            </div>
-          </div>
-
-          <div class="vc-actions">
-            <button class="vc-track-btn" onclick="startTrackingFromCard()">
-              📡 TRACK
-            </button>
-          </div>
-
-          <div class="vc-footer">
-            Received: <b>LIVE</b> <span class="vc-ais-src">(AIS source: ${vessel.mmsi?.startsWith('STATIC') ? 'Static Reference' : 'Roaming'})</span>
-          </div>
-        `;
-
-        // Clear generic fields
-        document.getElementById('ic-sev').textContent = '';
-        document.getElementById('ic-body').textContent = '';
-        document.getElementById('ic-mkt').textContent = '';
-        document.getElementById('ic-tags').innerHTML = '';
-        document.getElementById('ic-date').textContent = '';
-        document.getElementById('ic-track-btn').style.display = 'none';
-
-        // Inject vessel HTML into title element
-        document.getElementById('ic-ttl').innerHTML = vesselHTML;
-        ic.className = 'show vessel';
-        positionCard(px, py);
-      }
-
-      // ── LAYER TOGGLES
-      window.toggleSatLayer = function (btn) {
-        showSats = !showSats;
-        if (showSats) {
-          btn.classList.add('sat-on');
-          document.getElementById('satpanel').style.display = 'block';
-          document.getElementById('tp').style.display = 'none';
-          document.getElementById('wxpanel').style.display = 'none';
-          fetchSatTLEs(); // renderSatMarkers() is called inside fetchSatTLEs on completion
-          if (satUpdateInterval) clearInterval(satUpdateInterval);
-          satUpdateInterval = setInterval(updateSatPositions, 30000);
-        } else {
-          btn.classList.remove('sat-on');
-          document.getElementById('satpanel').style.display = 'none';
-          if (!showWeather) document.getElementById('tp').style.display = 'block';
-          else document.getElementById('wxpanel').style.display = 'block';
-          document.getElementById('badge-sats').textContent = '◉ SATS: OFF';
-          document.getElementById('badge-sats').classList.remove('active');
-          if (satUpdateInterval) { clearInterval(satUpdateInterval); satUpdateInterval = null; }
-          if (trackingObj?.type === 'sat') stopTracking();
-          renderSatMarkers();
-        }
-      };
-
-      window.toggleFlightLayer = function (btn) {
-        showFlights = !showFlights;
-        if (showFlights) {
-          btn.classList.add('flt-on');
-          fetchMilitaryFlights();
-          if (fltUpdateInterval) clearInterval(fltUpdateInterval);
-          fltUpdateInterval = setInterval(fetchMilitaryFlights, 60000);
-        } else {
-          btn.classList.remove('flt-on');
-          if (fltUpdateInterval) { clearInterval(fltUpdateInterval); fltUpdateInterval = null; }
-          if (trackingObj?.type === 'flight') stopTracking();
-          renderFlightMarkers();
-        }
-      };
-
-      // ============================================================
-      //  NASA EONET WEATHER EVENTS MODULE
-      // ============================================================
-
-      async function fetchEONETEvents() {
-        const URLS = [
-          'https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=50',
-          'https://eonet.gsfc.nasa.gov/api/v3/events?days=30&limit=50',
-        ];
-        for (const url of URLS) {
-          try {
-            const ctrl = new AbortController();
-            setTimeout(() => ctrl.abort(), 12000);
-            const r = await fetch(url, { signal: ctrl.signal });
-            if (!r.ok) continue;
-            const data = await r.json();
-            if (!data.events || data.events.length === 0) continue;
-            weatherData = data.events.map(evt => {
-              const cat = (evt.categories && evt.categories[0]) ? evt.categories[0].id : 'unknown';
-              const catTitle = (evt.categories && evt.categories[0]) ? evt.categories[0].title : 'Natural Event';
-              // Use latest geometry point for position
-              const geom = evt.geometry || [];
-              const latest = geom[geom.length - 1] || {};
-              const coords = latest.coordinates || [0, 0];
-              return {
-                id: evt.id,
-                title: evt.title || 'Unknown Event',
-                description: evt.description || '',
-                category: cat,
-                categoryTitle: catTitle,
-                lat: coords[1],
-                lon: coords[0],
-                date: latest.date || '',
-                magnitude: latest.magnitudeValue,
-                magnitudeUnit: latest.magnitudeUnit || '',
-                link: evt.link || '',
-                sourceUrl: (evt.sources && evt.sources[0]) ? evt.sources[0].url : '',
-                sourceId: (evt.sources && evt.sources[0]) ? evt.sources[0].id : '',
-                closed: evt.closed,
-                geometry: geom, // full track for storms
-              };
-            }).filter(e => isFinite(e.lat) && isFinite(e.lon) && Math.abs(e.lat) <= 90 && Math.abs(e.lon) <= 180);
-            wxLoaded = true;
-            document.getElementById('wx-status').style.display = '';
-            renderWeatherMarkers();
-            renderWeatherTrackLines();
-            updateWeatherListPanel();
-            return;
-          } catch (e) { continue; }
-        }
-        // Offline fallback
-        wxLoaded = true;
-        const badge = document.getElementById('badge-wx');
-        badge.textContent = '🌪 EONET: OFFLINE';
-        badge.style.color = '#FF4444';
-        badge.classList.add('wx-active');
-      }
-
-      function renderWeatherMarkers() {
-        weatherMeshes.forEach(({ mesh, ring, glow }) => {
-          scene.remove(mesh); mesh.material.dispose();
-          if (ring) { scene.remove(ring); ring.material.dispose(); }
-          if (glow) { scene.remove(glow); glow.material.dispose(); }
-        });
-        weatherMeshes.length = 0;
-        if (!showWeather || weatherData.length === 0) {
-          rebuildRayTargets();
-          return;
-        }
-        weatherData.forEach(evt => {
-          const colHex = WX_COLORS[evt.category] || '#00C8FF';
-          const col = new THREE.Color(colHex);
-          const pos = latLonToVec3(evt.lat, evt.lon, 1.014);
-          if (!isFinite(pos.x)) return;
-
-          const mesh = new THREE.Mesh(wxGeo, new THREE.MeshBasicMaterial({ color: col }));
-          mesh.position.copy(pos);
-          mesh.userData = { type: 'weather', weather: evt, basePos: pos.clone() };
-
-          const ring = new THREE.Mesh(wxRingGeo, new THREE.MeshBasicMaterial({
-            color: col, transparent: true, opacity: 0.45, side: THREE.DoubleSide
-          }));
-          ring.position.copy(pos);
-          ring.userData = { phase: Math.random() * Math.PI * 2, basePos: pos.clone() };
-
-          const glow = new THREE.Mesh(wxGlowGeo, new THREE.MeshBasicMaterial({
-            color: col, transparent: true, opacity: 0.08, side: THREE.FrontSide
-          }));
-          glow.position.copy(pos);
-          glow.userData = { basePos: pos.clone() };
-
-          scene.add(mesh); scene.add(ring); scene.add(glow);
-          weatherMeshes.push({ mesh, ring, glow, weather: evt, basePos: pos.clone() });
-        });
-
-        document.getElementById('badge-wx').textContent = `🌪 EONET: ${weatherMeshes.length}`;
-        document.getElementById('badge-wx').classList.add('wx-active');
-        rebuildRayTargets();
-      }
-
-      function renderWeatherTrackLines() {
-        // Clear previous
-        weatherTrackLines.forEach(l => { scene.remove(l); l.geometry.dispose(); l.material.dispose(); });
-        weatherTrackLines.length = 0;
-        if (!showWeather) return;
-        // Only draw track lines for storms with multiple geometry points
-        weatherData.filter(e => e.geometry && e.geometry.length > 1 &&
-          (e.category === 'severeStorms' || e.category === 'volcanoes')
-        ).forEach(evt => {
-          const colHex = WX_COLORS[evt.category] || '#00C8FF';
-          const pts = [];
-          evt.geometry.forEach(g => {
-            if (!g.coordinates || g.coordinates.length < 2) return;
-            const lon = g.coordinates[0], lat = g.coordinates[1];
-            if (!isFinite(lat) || !isFinite(lon)) return;
-            const v = latLonToVec3(lat, lon, 1.012);
-            pts.push(v.x, v.y, v.z);
-          });
-          if (pts.length < 6) return;
-          const geo = new THREE.BufferGeometry();
-          geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-          const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
-            color: new THREE.Color(colHex), transparent: true, opacity: 0.6, linewidth: 2
-          }));
-          scene.add(line);
-          weatherTrackLines.push(line);
-        });
-      }
-
-      function showWeatherCard(evt, px, py) {
-        currentCardObj = null;
-        const ic = document.getElementById('ic');
-        const icon = WX_ICONS[evt.category] || '🌪';
-        const colHex = WX_COLORS[evt.category] || '#00C8FF';
-        document.getElementById('ic-sev').textContent = `${icon} ${evt.categoryTitle.toUpperCase()} — NASA EONET`;
-        document.getElementById('ic-ttl').textContent = evt.title;
-
-        let bodyParts = [];
-        if (evt.description) bodyParts.push(evt.description);
-        bodyParts.push(`LOCATION: ${evt.lat.toFixed(2)}°, ${evt.lon.toFixed(2)}°`);
-        if (evt.magnitude != null) {
-          bodyParts.push(`MAGNITUDE: ${evt.magnitude} ${evt.magnitudeUnit}`);
-        }
-        if (evt.date) {
-          bodyParts.push(`LAST UPDATED: ${new Date(evt.date).toLocaleString()}`);
-        }
-        if (evt.geometry && evt.geometry.length > 1) {
-          bodyParts.push(`TRACK: ${evt.geometry.length} positions recorded`);
-        }
-        bodyParts.push(`STATUS: ${evt.closed ? 'CLOSED' : 'ACTIVE'}`);
-        if (evt.sourceId) {
-          bodyParts.push(`SOURCE: ${evt.sourceId}`);
-        }
-        document.getElementById('ic-body').textContent = bodyParts.join('\n');
-
-        const mkt = document.getElementById('ic-mkt');
-        // Market impact estimation based on category
-        const mktImpact = {
-          wildfires: '🔥 UTILITIES, INSURANCE, AG FUTURES',
-          severeStorms: '🌀 RE-INSURERS, SHIPPING, AG FUTURES',
-          volcanoes: '🌋 AIRLINES, AG FUTURES, RARE EARTH',
-          earthquakes: '⚡ CONSTRUCTION, INSURANCE, INFRASTRUCTURE',
-          floods: '🌊 INSURANCE, AG FUTURES, REAL ESTATE',
-          drought: '☀️ AG FUTURES, WATER UTILITIES',
-          seaLakeIce: '🧊 SHIPPING, ENERGY',
-        };
-        mkt.textContent = mktImpact[evt.category] ? `📊 MARKET: ${mktImpact[evt.category]}` : '';
-
-        const tags = [evt.categoryTitle.toUpperCase(), 'NASA', 'EONET'];
-        if (evt.magnitude != null) tags.push(`${evt.magnitude} ${evt.magnitudeUnit}`);
-        document.getElementById('ic-tags').innerHTML = tags.map(t => `<span class="ictag">${t}</span>`).join('');
-
-        let dateStr = evt.date ? new Date(evt.date).toLocaleString() : 'N/A';
-        document.getElementById('ic-date').textContent = `UPDATED: ${dateStr}`;
-        document.getElementById('ic-track-btn').style.display = 'none';
-
-        ic.className = 'show weather';
-        ic.style.borderLeftColor = colHex;
-        positionCard(px, py);
-      }
-
-      function updateWeatherListPanel() {
-        const items = document.getElementById('wx-items');
-        const count = document.getElementById('wx-count');
-        count.textContent = `(${weatherData.length})`;
-        items.innerHTML = weatherData.slice(0, 40).map((e, i) => {
-          const icon = WX_ICONS[e.category] || '🌪';
-          const colHex = WX_COLORS[e.category] || '#00C8FF';
-          let magStr = '';
-          if (e.magnitude != null) magStr = ` · ${e.magnitude} ${e.magnitudeUnit}`;
-          return `
-          <div class="wxpi" onclick="focusWeatherEvent(${i})" style="border-left-color:${colHex}">
-            <div class="wxpn">${icon} ${e.title}</div>
-            <div class="wxps" style="color:${colHex}">${e.categoryTitle.toUpperCase()}${magStr}</div>
-          </div>`;
-        }).join('');
-      }
-
-      window.focusWeatherEvent = function (idx) {
-        const evt = weatherData[idx];
-        if (!evt) return;
-        flyTo(evt.lat, evt.lon);
-        const W = canvas.clientWidth || CW, H = canvas.clientHeight || CH;
-        setTimeout(() => showWeatherCard(evt, W * 0.3, H * 0.3), 600);
-      };
-
-      window.toggleWeatherLayer = function (btn) {
-        showWeather = !showWeather;
-        if (showWeather) {
-          btn.classList.add('wx-on');
-          document.getElementById('wxpanel').style.display = 'block';
-          document.getElementById('tp').style.display = 'none';
-          document.getElementById('satpanel').style.display = 'none';
-          if (!wxLoaded) {
-            fetchEONETEvents();
-          } else {
-            renderWeatherMarkers();
-            renderWeatherTrackLines();
-          }
-          if (wxUpdateInterval) clearInterval(wxUpdateInterval);
-          wxUpdateInterval = setInterval(fetchEONETEvents, 600000); // refresh every 10 min
-        } else {
-          btn.classList.remove('wx-on');
-          document.getElementById('wxpanel').style.display = 'none';
-          if (!showSats) document.getElementById('tp').style.display = 'block';
-          document.getElementById('badge-wx').textContent = '🌪 EONET: OFF';
-          document.getElementById('badge-wx').classList.remove('wx-active');
-          if (wxUpdateInterval) { clearInterval(wxUpdateInterval); wxUpdateInterval = null; }
-          renderWeatherMarkers();
-          weatherTrackLines.forEach(l => { scene.remove(l); l.geometry.dispose(); l.material.dispose(); });
-          weatherTrackLines.length = 0;
-        }
-      };
-
-      // ── FLY TO
-      function flyTo(lat, lon) {
-        targetRotY = -(90 + lon) * Math.PI / 180;
-        targetRotX = lat * Math.PI / 180 * 0.5;
-        autoRotate = false; camera.position.z = 2.3;
-      }
-
-      function flyToTheater(lat, lon, label) {
-        flyTo(lat, lon);
-        const h = HOTSPOTS.find(h => Math.abs(h.lat - lat) < 3 && Math.abs(h.lon - lon) < 6);
-        if (h) { const W = canvas.clientWidth || CW, H = canvas.clientHeight || CH; setTimeout(() => showHotspotCard(h, W * 0.25, H * 0.3), 700); }
-      }
-      window.flyTo = flyTo; window.flyToTheater = flyToTheater;
-
-      function setFilter(f, btn) {
-        activeFilter = f;
-        document.querySelectorAll('.fbtn:not(#sat-btn):not(#flt-btn):not(#wx-btn)').forEach(b => b.classList.remove('on'));
-        if (btn) btn.classList.add('on');
-        renderMarkers();
-      }
-      window.setFilter = setFilter;
-
-      function addCustomEvent() {
-        const title = document.getElementById('ae-title').value;
-        const lat = parseFloat(document.getElementById('ae-lat').value);
-        const lon = parseFloat(document.getElementById('ae-lon').value);
-        if (!title || isNaN(lat) || isNaN(lon)) return;
-        customEvents.push({ lat, lon, label: title, sev: document.getElementById('ae-sev').value, type: 'custom', title, body: document.getElementById('ae-desc').value, mkt: document.getElementById('ae-mkt').value, tags: ['CUSTOM'] });
-        document.getElementById('adddlg').classList.remove('show');
-        renderMarkers();
-      }
-      window.addCustomEvent = addCustomEvent;
-      window.stopTracking = stopTracking;
-      window.showVesselCard = showVesselCard;
-      window.computeVesselPath = computeVesselPath;
-      window.renderVesselMarkers = renderVesselMarkers;
-
-      // Expose data for testing/debugging
-      Object.defineProperty(window, 'vesselData', { get() { return vesselData; }, set(v) { vesselData = v; } });
-      Object.defineProperty(window, 'vesselMeshes', { get() { return vesselMeshes; } });
-      Object.defineProperty(window, 'currentCardObj', { get() { return currentCardObj; } });
-
-      // ── ANIMATION LOOP
-      let lastT = 0;
-      const _quat = new THREE.Quaternion();
-      const _euler = new THREE.Euler();
-      const _rp = new THREE.Vector3();
-      const _camDir = new THREE.Vector3();
-      const _norm = new THREE.Vector3();
-      let frameCount = 0;
-
-      function animate(t) {
-        if (!isAnimating) return;   // paused — IntersectionObserver will restart us
-        requestAnimationFrame(animate);
-        try {
-          const dt = Math.min((t - lastT) / 1000, 0.05); lastT = t; frameCount++;
-          if (autoRotate) targetRotY += dt * 0.065;
-          rotX += (targetRotX - rotX) * 0.08;
-          rotY += (targetRotY - rotY) * 0.08;
-          if (globeMesh) { globeMesh.rotation.x = rotX; globeMesh.rotation.y = rotY; }
-
-          _euler.set(rotX, rotY, 0, 'XYZ');
-          _quat.setFromEuler(_euler);
-
-          // Hotspot markers
-          markers.forEach(({ mesh, ring, glow, basePos }) => {
-            _rp.copy(basePos).applyQuaternion(_quat);
-            mesh.position.copy(_rp); ring.position.copy(_rp); glow.position.copy(_rp);
-            ring.quaternion.copy(camera.quaternion);
-            ring.userData.phase = (ring.userData.phase || 0) + dt * 2.1;
-            const sinP = Math.sin(ring.userData.phase);
-            ring.material.opacity = 0.18 + 0.38 * sinP;
-            const s = 1 + 0.22 * sinP;
-            ring.scale.set(s, s, 1);
-            glow.material.opacity = 0.03 + 0.1 * Math.abs(Math.sin(ring.userData.phase * .6));
-            _camDir.copy(camera.position).sub(_rp).normalize();
-            _norm.copy(_rp).normalize();
-            const vis = _camDir.dot(_norm) > 0.06;
-            mesh.visible = ring.visible = glow.visible = vis;
-          });
-
-          // Satellite markers
-          satMeshes.forEach(({ mesh, ring, sat }) => {
-            if (!sat.basePos) return;
-            _rp.copy(sat.basePos).applyQuaternion(_quat);
-            mesh.position.copy(_rp);
-            if (ring) {
-              ring.position.copy(_rp);
-              ring.quaternion.copy(camera.quaternion);
-              ring.userData.phase = (ring.userData.phase || 0) + dt * 1.5;
-              ring.material.opacity = 0.15 + 0.25 * Math.abs(Math.sin(ring.userData.phase));
-            }
-          });
-
-          // Flight markers — NaN-safe orientation
-          flightMeshes.forEach(({ mesh, flight, basePos }) => {
-            _rp.copy(basePos).applyQuaternion(_quat);
-            mesh.position.copy(_rp);
-            const len = _rp.length();
-            if (len < 0.001) return;
-            const up = _rp.clone().divideScalar(len);
-            const dot = up.dot(new THREE.Vector3(0, 1, 0));
-            if (Math.abs(dot) > 0.9999) {
-              mesh.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), dot > 0 ? 0 : Math.PI);
-            } else {
-              mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
-            }
-            const rot2 = new THREE.Quaternion();
-            rot2.setFromAxisAngle(up, flight.heading * Math.PI / 180);
-            mesh.quaternion.premultiply(rot2);
-          });
-
-          // Vessel markers
-          vesselMeshes.forEach(({ mesh, ring, vessel, basePos }) => {
-            _rp.copy(basePos).applyQuaternion(_quat);
-            mesh.position.copy(_rp);
-            if (ring) {
-              ring.position.copy(_rp);
-              ring.quaternion.copy(camera.quaternion);
-              ring.userData.phase = (ring.userData.phase || 0) + dt * 1.8;
-              ring.material.opacity = 0.15 + 0.22 * Math.abs(Math.sin(ring.userData.phase));
-            }
-            _camDir.copy(camera.position).sub(_rp).normalize();
-            _norm.copy(_rp).normalize();
-            const vis = _camDir.dot(_norm) > 0.04;
-            mesh.visible = vis;
-            if (ring) ring.visible = vis;
-          });
-
-          // Weather markers
-          weatherMeshes.forEach(({ mesh, ring, glow, basePos }) => {
-            _rp.copy(basePos).applyQuaternion(_quat);
-            mesh.position.copy(_rp);
-            if (ring) {
-              ring.position.copy(_rp);
-              ring.quaternion.copy(camera.quaternion);
-              ring.userData.phase = (ring.userData.phase || 0) + dt * 2.5;
-              const sinP = Math.sin(ring.userData.phase);
-              ring.material.opacity = 0.20 + 0.35 * Math.abs(sinP);
-              const s = 1 + 0.18 * Math.abs(sinP);
-              ring.scale.set(s, s, 1);
-            }
-            if (glow) {
-              glow.position.copy(_rp);
-              glow.material.opacity = 0.04 + 0.08 * Math.abs(Math.sin((ring?.userData.phase || 0) * 0.7));
-            }
-            _camDir.copy(camera.position).sub(_rp).normalize();
-            _norm.copy(_rp).normalize();
-            const vis = _camDir.dot(_norm) > 0.04;
-            mesh.visible = vis;
-            if (ring) ring.visible = vis;
-            if (glow) glow.visible = vis;
-          });
-
-          // Infrastructure lines rotation
-          infraLines.forEach(line => {
-            line.quaternion.copy(_quat);
-          });
-
-          // Weather track lines rotation
-          weatherTrackLines.forEach(line => {
-            line.quaternion.copy(_quat);
-          });
-
-          // Track line rotation (every 2 frames for performance)
-          if (trackLine && trackLatLons.length > 0 && frameCount % 2 === 0) {
-            updateTrackLineForRotation(_quat);
-          }
-
-          renderer.render(scene, camera);
-        } catch (err) { /* prevent single bad frame from killing rAF loop */ }
-      }
-      // Pause/resume the rAF loop based on canvas visibility.
-      // When the user navigates to another Streamlit tab, CSS sets display:none,
-      // IntersectionObserver fires, we stop calling rAF — GPU/battery savings.
-      let isAnimating = false;
-      const _visObserver = new IntersectionObserver((entries) => {
-        if (entries[0].isIntersecting) {
-          if (!isAnimating) { isAnimating = true; animate(performance.now()); }
-        } else {
-          isAnimating = false;
-        }
-      }, { threshold: 0 });
-      _visObserver.observe(canvas);
-
-      // Resize — ResizeObserver catches iframe reflows that window.resize misses
-      const _ro = new ResizeObserver(() => {
-        const { w, h } = _getDims();
-        if (w > 50 && h > 50) { CW = w; CH = h; camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setSize(w, h); }
-      });
-      _ro.observe(canvas);
-      window.addEventListener('resize', () => {
-        const { w, h } = _getDims();
-        CW = w; CH = h;
-        camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setSize(w, h);
-      });
-
-    } // end _initThree()
-
-    // ── LIVE GDELT NEWS FEED
-    async function fetchGDELTNews() {
-      const nf = document.getElementById('nf-items');
-      // GDELT DOC 2.0 API — multiple query variants for resilience
-      const URLS = [
-        'https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict OR war OR strike OR attack OR military OR Iran OR blockade OR ceasefire)%20sourcelang:english&mode=ArtList&maxrecords=8&format=json&timespan=24h&sort=DateDesc',
-        'https://api.gdeltproject.org/api/v2/doc/doc?query=(geopolitical OR sanctions OR military OR Iran OR naval)%20sourcelang:english&mode=ArtList&maxrecords=8&format=json&timespan=48h&sort=DateDesc',
-        'https://api.gdeltproject.org/api/v2/doc/doc?query=conflict%20sourcelang:english&mode=ArtList&maxrecords=5&format=json&timespan=72h',
-      ];
-      for (const url of URLS) {
-        try {
-          const ctrl = new AbortController();
-          setTimeout(() => ctrl.abort(), 10000);
-          const r = await fetch(url, { signal: ctrl.signal });
-          if (!r.ok) continue;
-          const text = await r.text();
-          if (!text || text.length < 10) continue;
-          let data;
-          try { data = JSON.parse(text); } catch (e) { continue; }
-          const arts = (data.articles || []).filter(a => {
-            const t = a.title || '';
-            return t.length > 20 && t.charCodeAt(0) < 128 && !t.includes('cookie') && !t.includes('subscribe');
-          });
-          if (arts.length === 0) continue;
-          const seen = new Set(); const dedup = [];
-          for (const a of arts) { const k = (a.title || '').toLowerCase().trim().substring(0, 50); if (!seen.has(k)) { seen.add(k); dedup.push(a); } if (dedup.length >= 4) break; }
-          nf.innerHTML = dedup.map(a => {
-            const dom = (a.domain || 'GDELT').replace('www.', '');
-            const sd = a.seendate || '';
-            const d = sd.length >= 8 ? `${sd.slice(0, 4)}-${sd.slice(4, 6)}-${sd.slice(6, 8)}` : '';
-            return `<div style="background:rgba(0,0,0,.85);border-left:3px solid #FF6600;padding:6px 10px;margin:3px 0">
-              <a href="${a.url}" target="_blank" style="color:#DDD;text-decoration:none;font-size:12px;font-weight:600;line-height:1.4">${(a.title || '').substring(0, 100)}</a>
-              <div style="color:#555;font-size:9px;margin-top:3px">${dom} · ${d}</div></div>`;
-          }).join('');
-          return;
-        } catch (e) { continue; }
-      }
-      nf.innerHTML = '<div style="color:#444;font-size:11px;font-family:monospace">GDELT API unavailable — retrying in 5m</div>';
+      e._sentinelType = 'eonet'; e._sentinelLabel = evt.title; e._sentinelColor = col;
+      e._sentinelCategory = `${icon} ${(evt.categories?.[0]?.title||'EVENT').toUpperCase()} — NASA EONET`;
+      e._sentinelBody = `${evt.title}\nLOCATION: ${coords[1].toFixed(2)}°, ${coords[0].toFixed(2)}°\nDATE: ${latest.date||'—'}\nSTATUS: ${evt.closed?'CLOSED':'ACTIVE'}`;
+      e._sentinelTags = ['NASA','EONET', cat.toUpperCase()];
+    });
+  } catch(e){}
+}
+
+// ── RAINVIEWER WEATHER RADAR
+async function loadRainRadar() {
+  document.getElementById('wxControls').classList.add('show');
+  document.getElementById('wx-status').style.display = '';
+  try {
+    const r = await fetch('https://api.rainviewer.com/public/weather-maps.json');
+    const data = await r.json();
+    const timestamps = (data.radar?.past || []).concat(data.radar?.nowcast || []);
+    radarLayers = [];
+    timestamps.forEach((ts, i) => {
+      const layer = viewer.imageryLayers.addImageryProvider(
+        new Cesium.UrlTemplateImageryProvider({
+          url: `https://tilecache.rainviewer.com${ts.path}/256/{z}/{x}/{y}/4/1_1.png`,
+          minimumLevel: 1, maximumLevel: 12,
+          credit: 'RainViewer'
+        })
+      );
+      layer.alpha = 0;
+      layer.show = false;
+      radarLayers.push({ layer, time: ts.time });
+    });
+    if (radarLayers.length > 0) {
+      radarIdx = radarLayers.length - 1;
+      showRadarFrame(radarIdx);
     }
-    fetchGDELTNews();
-    setInterval(fetchGDELTNews, 300000);
+  } catch(e) { console.warn('RainViewer failed:', e); }
+}
 
-    // ── THEATER STATUS
-    const THEATERS = [
-      { name: 'US-IRAN', query: 'US Iran conflict blockade ceasefire nuclear', lat: 26.5, lon: 56, base: 'critical' },
-      { name: 'MIDDLE EAST', query: 'gaza israel hamas hezbollah', lat: 31.5, lon: 34.8, base: 'critical' },
-      { name: 'UKRAINE', query: 'ukraine russia war frontline', lat: 49, lon: 31, base: 'critical' },
-      { name: 'RED SEA', query: 'houthi red sea shipping attack', lat: 14, lon: 43, base: 'critical' },
-      { name: 'HORMUZ', query: 'strait hormuz iran tanker blockade', lat: 26.5, lon: 56, base: 'elevated' },
-      { name: 'SAHEL', query: 'sahel mali niger coup', lat: 14, lon: 2, base: 'elevated' },
-      { name: 'TAIWAN', query: 'taiwan china PLA military strait', lat: 25, lon: 121, base: 'watch' },
-      { name: 'S. CHINA SEA', query: 'south china sea philippines', lat: 12, lon: 115, base: 'watch' },
-    ];
+function showRadarFrame(idx) {
+  radarLayers.forEach((r, i) => {
+    r.layer.show = i === idx;
+    r.layer.alpha = i === idx ? parseFloat(document.getElementById('wxOpacity').value) / 100 : 0;
+  });
+  if (radarLayers[idx]) {
+    const d = new Date(radarLayers[idx].time * 1000);
+    document.getElementById('wxTime').textContent = d.toUTCString().slice(17,22) + ' UTC';
+  }
+}
 
-    function statusFromCount(count, base) {
-      if (count >= 50 || base === 'critical') return { label: 'CRITICAL', cls: 'tc' };
-      if (count >= 25) return { label: 'ACTIVE', cls: 'tc' };
-      if (count >= 10 || base === 'elevated') return { label: 'ELEVATED', cls: 'te' };
-      return { label: 'MONITORING', cls: 'tw' };
-    }
+function hideRainRadar() {
+  radarLayers.forEach(r => { r.layer.show = false; });
+  document.getElementById('wxControls').classList.remove('show');
+  if (radarInterval) { clearInterval(radarInterval); radarInterval = null; radarPlaying = false; }
+}
 
-    async function fetchTheaterStatus() {
-      const container = document.getElementById('tp-items');
-      let html = '';
-      for (const t of THEATERS) {
-        const s = statusFromCount(0, t.base);
-        html += `<div class="tpi" onclick="flyToTheater(${t.lat},${t.lon},'${t.name}')"><div class="tpn">${t.name}</div><div class="tps ${s.cls}">● ${s.label}</div></div>`;
-      }
-      container.innerHTML = html;
-      const promises = THEATERS.map(t => fetch(`https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(t.query)}%20sourcelang:english&mode=ArtList&maxrecords=1&format=json&timespan=24h`).then(r => r.json()).catch(() => null));
-      const results = await Promise.allSettled(promises);
-      results.forEach((res, i) => {
-        if (res.status !== 'fulfilled' || !res.value) return;
-        const count = (res.value.articles || []).length;
-        const s = statusFromCount(count > 0 ? (count === 1 ? 30 : 10) : 5, THEATERS[i].base);
-        const items = container.querySelectorAll('.tpi');
-        if (items[i]) { items[i].querySelector('.tps').className = 'tps ' + s.cls; items[i].querySelector('.tps').textContent = '● ' + s.label; }
-      });
-      document.getElementById('tp-update').textContent = 'UPDATED ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    }
-    fetchTheaterStatus();
-    setInterval(fetchTheaterStatus, 600000);
+window.wxPrev = function() { radarIdx = (radarIdx - 1 + radarLayers.length) % radarLayers.length; showRadarFrame(radarIdx); };
+window.wxNext = function() { radarIdx = (radarIdx + 1) % radarLayers.length; showRadarFrame(radarIdx); };
+window.wxPlay = function() {
+  radarPlaying = !radarPlaying;
+  document.getElementById('wxPlayBtn').textContent = radarPlaying ? '⏸ PAUSE' : '▶ PLAY';
+  if (radarPlaying) { radarInterval = setInterval(() => { radarIdx = (radarIdx+1) % radarLayers.length; showRadarFrame(radarIdx); }, 700); }
+  else { clearInterval(radarInterval); radarInterval = null; }
+};
+window.wxSetOpacity = function(v) { radarLayers.forEach(r => { if(r.layer.show) r.layer.alpha = v/100; }); };
+
+// ── ICON GENERATOR (canvas-based billboard icons)
+const _iconCache = {};
+function makeIcon(emoji, color) {
+  const key = emoji + color;
+  if (_iconCache[key]) return _iconCache[key];
+  const cv = document.createElement('canvas'); cv.width = 32; cv.height = 32;
+  const ctx = cv.getContext('2d');
+  ctx.beginPath(); ctx.arc(16,16,14,0,Math.PI*2);
+  ctx.fillStyle = color + '22'; ctx.fill();
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.font = '16px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(emoji, 16, 16);
+  const url = cv.toDataURL();
+  _iconCache[key] = url;
+  return url;
+}
+
+// ── GDELT NEWS FEED
+async function fetchGDELTNews() {
+  const nf = document.getElementById('nf-items');
+  const urls = [
+    'https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict OR war OR military OR blockade)%20sourcelang:english&mode=ArtList&maxrecords=6&format=json&timespan=24h&sort=DateDesc',
+  ];
+  for (const url of urls) {
+    try {
+      const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 10000);
+      const r = await fetch(url, {signal:ctrl.signal}); if (!r.ok) continue;
+      const data = await r.json();
+      const arts = (data.articles||[]).filter(a => (a.title||'').length > 20 && (a.title||'').charCodeAt(0) < 128);
+      if (!arts.length) continue;
+      const seen = new Set(), dedup = [];
+      for (const a of arts) { const k = (a.title||'').toLowerCase().trim().substring(0,50); if(!seen.has(k)){seen.add(k);dedup.push(a);} if(dedup.length>=4) break; }
+      nf.innerHTML = dedup.map(a => {
+        const dom = (a.domain||'GDELT').replace('www.','');
+        return `<div style="background:rgba(0,0,0,.85);border-left:3px solid #FF6600;padding:6px 10px;margin:3px 0">
+          <a href="${a.url}" target="_blank" style="color:#DDD;text-decoration:none;font-size:12px;font-weight:600;line-height:1.4">${(a.title||'').substring(0,100)}</a>
+          <div style="color:#555;font-size:9px;margin-top:3px">${dom}</div></div>`;
+      }).join('');
+      return;
+    } catch(e){}
+  }
+}
+
+// ── EXPOSE GLOBALS
+window.toggleLayer = toggleLayer;
+window.setPreset = setPreset;
+window.applyCustom = applyCustom;
+window.toggleQualPanel = toggleQualPanel;
+window.closeCountryPanel = closeCountryPanel;
+window.closeInfoCard = closeInfoCard;
+window.cpTab = cpTab;
+
+// ── BOOT
+window.addEventListener('load', () => {
+  setTimeout(async () => { await initCesium(); }, 100);
+  // Safety: force dismiss loader after 15s regardless
+  setTimeout(() => document.getElementById('ls').classList.add('gone'), 15000);
+});
   </script>
 </body>
-
 </html>

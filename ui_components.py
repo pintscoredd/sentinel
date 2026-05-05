@@ -170,6 +170,76 @@ def cpi_vs_rates_chart(fred_key, height=250):
 # RENDER HELPERS
 # ════════════════════════════════════════════════════════════════════
 
+# ── Module-level timezone objects (avoids repeated construction) ──
+TZ_PACIFIC = pytz.timezone("US/Pacific")
+TZ_EASTERN = pytz.timezone("US/Eastern")
+TZ_UTC = pytz.utc
+
+# ── Named constants ──
+TRADING_DAYS_PER_YEAR = 252
+DEFAULT_RISK_FREE_RATE = 0.045
+
+
+def metric_card(label: str, value: str, color: str = "#FF6600",
+                size: str = "18px", border_color: str = "") -> str:
+    """Render a compact metric card with label and value.
+
+    Eliminates dozens of duplicated inline-styled metric blocks
+    throughout the app.
+
+    Args:
+        label: Uppercase metric label (e.g. "VOLUME").
+        value: Formatted display value (e.g. "$1,234.56").
+        color: CSS color for the value text.
+        size:  Font size for the value.
+        border_color: Top-border accent color (defaults to *color*).
+    """
+    bc = border_color or color
+    return (
+        f'<div style="background:#080808;border:1px solid #1A1A1A;'
+        f'border-top:2px solid {bc};padding:10px 12px;'
+        f'font-family:monospace;text-align:center">'
+        f'<div style="color:#555;font-size:9px;letter-spacing:1px;'
+        f'margin-bottom:4px">{label}</div>'
+        f'<div style="color:{color};font-size:{size};'
+        f'font-weight:700">{value}</div></div>'
+    )
+
+
+def metric_card_with_delta(label: str, value: str, delta: str,
+                           delta_color: str, color: str = "#FFF",
+                           border_color: str = "#FF6600") -> str:
+    """Metric card with an additional delta line (e.g. +1.23%)."""
+    return (
+        f'<div style="background:#080808;border:1px solid #1A1A1A;'
+        f'border-top:2px solid {border_color};padding:10px 12px;'
+        f'font-family:monospace;min-height:85px">'
+        f'<div style="color:#888;font-size:9px;letter-spacing:1px;'
+        f'margin-bottom:5px;white-space:nowrap;overflow:hidden;'
+        f'text-overflow:ellipsis">{label}</div>'
+        f'<div style="color:{color};font-size:16px;font-weight:700;'
+        f'white-space:nowrap">{value}</div>'
+        f'<div style="color:{delta_color};font-size:10px;'
+        f'font-weight:600;margin-top:4px">{delta}</div></div>'
+    )
+
+
+def sentinel_grid(columns: str, children_html: str,
+                  gap: str = "6px", extra_style: str = "") -> str:
+    """Wrap *children_html* in a CSS grid container.
+
+    Args:
+        columns: CSS grid-template-columns value.
+        children_html: Pre-built HTML for grid children.
+        gap: CSS gap value.
+        extra_style: Additional inline CSS.
+    """
+    return (
+        f'<div style="display:grid;grid-template-columns:{columns};'
+        f'gap:{gap};{extra_style}">{children_html}</div>'
+    )
+
+
 def render_news_card(title, url, source, date_str, card_class="bb-news"):
     t_html = f'<a href="{_esc(url)}" target="_blank">{_esc(title[:100])}</a>' if url and url != "#" else f'<span style="color:#CCC">{_esc(title[:100])}</span>'
     return f'<div class="{card_class}">{t_html}<div class="bb-meta">{_esc(source)} &nbsp;|&nbsp; {date_str}</div></div>'
@@ -484,7 +554,7 @@ def poly_status(m):
             end = datetime.fromisoformat(end_date_iso.replace("Z", "+00:00"))
             if end < datetime.now(pytz.utc):
                 return "EXPIRED (pending resolve)", "poly-status-closed"
-        except:
+        except Exception:
             pass
     return "ACTIVE", "poly-status-active"
 
@@ -500,7 +570,7 @@ def unusual_side(m):
         if yes_p > 60: return yes_name, "poly-unusual-yes"
         elif yes_p < 40: return no_name, "poly-unusual-no"
         else: return "BOTH SIDES", "poly-unusual-yes"
-    except:
+    except Exception:
         return None, None
 
 def _extract_participants(evt, limit=5):
@@ -1040,24 +1110,34 @@ def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
             annotation_position="top left"
         )
 
+    # Compute a fixed y-axis range BEFORE layout so the chart never
+    # auto-shifts when users interact (zoom, hover, expand).  Setting
+    # autorange=False + an explicit range prevents the "jumping" bug.
+    y_lo, y_hi = None, None
+    if spot_spx and spot_spx > 0:
+        y_lo = spot_spx * (1 - display_pct)
+        y_hi = spot_spx * (1 + display_pct)
+
     fig.update_layout(**CHART_LAYOUT)
     fig.update_layout(
         xaxis_rangeslider_visible=False,
         height=500,
         margin=dict(l=10, r=60, t=30, b=10),
         title=dict(
-            text="SPX 0DTE - Gamma Levels & Price Action", 
+            text="SPX 0DTE - Gamma Levels & Price Action",
             font=dict(color="#FF6600", size=14)
         ),
         xaxis=dict(showgrid=False, color="#555"),
-        yaxis=dict(showgrid=True, gridcolor="#111", color="#555", side="right", tickformat=".0f")
+        yaxis=dict(
+            showgrid=True, gridcolor="#111", color="#555",
+            side="right", tickformat=".0f",
+            # FIX: Disable autorange and lock the range so the y-axis
+            # doesn't jump when the user tries to expand the chart.
+            autorange=False,
+            fixedrange=False,
+            range=[y_lo, y_hi] if y_lo is not None else None,
+        ),
     )
-    
-    # Set Y-axis range to focus on spot price and walls
-    if spot_spx and spot_spx > 0:
-        lo = spot_spx * (1 - display_pct)
-        hi = spot_spx * (1 + display_pct)
-        fig.update_yaxes(range=[lo, hi])
 
     return fig
 
@@ -1408,12 +1488,12 @@ def render_geo_tab():
 
     # ── 1. 3D Globe ───────────────────────────────────────────────────────────
     st.markdown(
-        '<div class="bb-ph">🌐 3D INTELLIGENCE GLOBE — MILITARY AIR · SATELLITES · CONFLICT EVENTS</div>',
+        '<div class="bb-ph">🌐 3D INTELLIGENCE GLOBE — CESIUMJS · SATELLITE TILES · INFRASTRUCTURE</div>',
         unsafe_allow_html=True,
     )
     st.markdown(
         '<div style="color:#555;font-family:monospace;font-size:10px;margin-bottom:6px">'
-        'Drag to rotate · Scroll to zoom · Click markers for intel · Toggle layers in left sidebar'
+        'Click countries for intel · Toggle layers left panel · Scroll to zoom to building level · ⚙ Quality presets bottom-right'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -1458,7 +1538,8 @@ def render_geo_tab():
             globe_html = globe_html.replace('<head>', '<head>\n' + _inject_script, 1)
         else:
             globe_html = _inject_script + globe_html
-        _components.html(globe_html, height=700, scrolling=False)
+        _components.html(globe_html, height=850, scrolling=False,
+                         key=f"globe_{hash(globe_html)}")
     except FileNotFoundError:
         st.error("⚠️ globe.html not found — place it in the same directory as ui_components.py.")
 
