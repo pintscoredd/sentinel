@@ -463,6 +463,27 @@ let radarLayers = [], radarIdx = 0, radarPlaying = false, radarInterval = null;
 // ── CLOCK
 setInterval(() => { const d = new Date(); const el = document.getElementById('clk'); if (el) el.textContent = d.toUTCString().slice(17,25)+' UTC'; }, 1000);
 
+// ── FALLBACK IMAGERY — when Cesium Ion's default Bing Maps fails
+function addFallbackImagery() {
+  try {
+    // ArcGIS World Imagery: free satellite tiles, no API key required
+    const arcgis = new Cesium.ArcGisMapServerImageryProvider({
+      url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer',
+    });
+    viewer.imageryLayers.addImageryProvider(arcgis);
+    console.log('Loaded ArcGIS World Imagery fallback');
+  } catch(e1) {
+    try {
+      // Last resort: OpenStreetMap tiles (not satellite, but at least shows geography)
+      const osm = new Cesium.OpenStreetMapImageryProvider({ url: 'https://tile.openstreetmap.org/' });
+      viewer.imageryLayers.addImageryProvider(osm);
+      console.log('Loaded OpenStreetMap fallback');
+    } catch(e2) {
+      console.error('All imagery providers failed:', e1, e2);
+    }
+  }
+}
+
 // ── INIT CESIUM
 async function initCesium() {
   try {
@@ -477,10 +498,12 @@ async function initCesium() {
     requestRenderMode: false,
   };
 
-  // Terrain — try new API first, fall back to legacy
+  // Terrain — CesiumJS 1.120+ API
   if (preset.terrain) {
     try {
-      if (Cesium.createWorldTerrainAsync) {
+      if (Cesium.CesiumTerrainProvider && Cesium.CesiumTerrainProvider.fromIonAssetId) {
+        viewerOpts.terrainProvider = await Cesium.CesiumTerrainProvider.fromIonAssetId(1);
+      } else if (Cesium.createWorldTerrainAsync) {
         viewerOpts.terrainProvider = await Cesium.createWorldTerrainAsync();
       } else if (Cesium.createWorldTerrain) {
         viewerOpts.terrainProvider = Cesium.createWorldTerrain();
@@ -488,7 +511,35 @@ async function initCesium() {
     } catch(e) { console.warn('Terrain init failed, using ellipsoid', e); }
   }
 
+  // Disable the default Ion-based imagery layer — it silently fails to
+  // black when the token is expired or rate-limited.  We add our own
+  // base layer explicitly below.
+  viewerOpts.baseLayer = false;
+
   viewer = new Cesium.Viewer('cesiumContainer', viewerOpts);
+
+  // Immediately add ArcGIS World Imagery as the base layer.
+  // This is free satellite imagery, no API key required, and it
+  // doesn't depend on Cesium Ion token validity.
+  try {
+    if (Cesium.ArcGisMapServerImageryProvider.fromUrl) {
+      // CesiumJS 1.120+ async constructor
+      Cesium.ArcGisMapServerImageryProvider.fromUrl(
+        'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer'
+      ).then(provider => {
+        viewer.imageryLayers.addImageryProvider(provider, 0);
+      }).catch(() => { addFallbackImagery(); });
+    } else {
+      // Legacy constructor
+      viewer.imageryLayers.addImageryProvider(
+        new Cesium.ArcGisMapServerImageryProvider({
+          url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer',
+        }), 0
+      );
+    }
+  } catch(e) {
+    addFallbackImagery();
+  }
 
   // Dark sky — disable default skybox instead of empty sources
   try { viewer.scene.skyBox.show = false; } catch(e) {}
@@ -582,10 +633,30 @@ function setPreset(name) {
     }
   } else {
     if (viewer.imageryLayers.length === 0) {
-      viewer.imageryLayers.addImageryProvider(Cesium.createWorldImagery());
+      // Restore ArcGIS World Imagery (same as init — free, no Ion token needed)
+      try {
+        if (Cesium.ArcGisMapServerImageryProvider.fromUrl) {
+          Cesium.ArcGisMapServerImageryProvider.fromUrl(
+            'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer'
+          ).then(provider => { viewer.imageryLayers.addImageryProvider(provider, 0); })
+           .catch(() => { addFallbackImagery(); });
+        } else {
+          viewer.imageryLayers.addImageryProvider(
+            new Cesium.ArcGisMapServerImageryProvider({
+              url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer',
+            }), 0
+          );
+        }
+      } catch(e) { addFallbackImagery(); }
     }
     if (p.terrain && !(viewer.terrainProvider instanceof Cesium.CesiumTerrainProvider)) {
-      viewer.terrainProvider = Cesium.createWorldTerrain();
+      try {
+        if (Cesium.CesiumTerrainProvider && Cesium.CesiumTerrainProvider.fromIonAssetId) {
+          Cesium.CesiumTerrainProvider.fromIonAssetId(1).then(tp => { viewer.terrainProvider = tp; }).catch(() => {});
+        } else if (Cesium.createWorldTerrain) {
+          viewer.terrainProvider = Cesium.createWorldTerrain();
+        }
+      } catch(e) {}
     }
   }
 }
