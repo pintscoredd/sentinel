@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <title>SENTINEL GEO — CesiumJS</title>
-  <script src="https://cesium.com/downloads/cesiumjs/releases/1.120/Build/Cesium/Cesium.js"></script>
-  <link href="https://cesium.com/downloads/cesiumjs/releases/1.120/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.120/Build/Cesium/Cesium.js" crossorigin="anonymous"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.120/Build/Cesium/Widgets/widgets.css" rel="stylesheet" crossorigin="anonymous">
   <style>
 /* SENTINEL GEO — CesiumJS Globe Styles */
 *{margin:0;padding:0;box-sizing:border-box;font-family:'Courier New',monospace}
@@ -232,6 +232,8 @@ html,body{background:#000;color:#d0d3d8;width:100%;height:100%;overflow:hidden}
 </div>
 
   <script>
+    // XSS-safe HTML escaper — use for ALL external data before innerHTML
+    function escHtml(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
     (function(){
       function tryLoad(urls,idx){
         if(idx>=urls.length)return;
@@ -454,7 +456,11 @@ const PRESETS = {
   EXTREME: { sse:2,   tiles:60, satLim:10000, aisLim:10000, terrain:true,  buildings:true,  label:"EXTREME" },
 };
 // SENTINEL GEO — Core CesiumJS Init + Quality + Country System
-const CESIUM_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJiZTE4MWU1YS01OGM1LTQwY2QtOTQ0Ny0yZjg2ZDAzMzY0YmIiLCJpZCI6NDI2ODQ3LCJpc3MiOiJodHRwczovL2lvbi5jZXNpdW0uY29tIiwiYXVkIjoidW5kZWZpbmVkX2RlZmF1bHQiLCJpYXQiOjE3Nzc4NDE0MjB9.8AnVDqEKPMdAfXMhzEe7X4CZLRGizVLIO8vLLMlK2tw';
+// NOTE: The previous Ion token had aud:"undefined_default" (invalid) and caused
+// terrain/buildings to silently fail. We removed it — ArcGIS World Imagery is
+// token-free. If you have a valid Ion token, paste it below and uncomment.
+// const CESIUM_TOKEN = 'YOUR_VALID_ION_TOKEN_HERE';
+const CESIUM_TOKEN = null; // null = skip Ion, use ArcGIS only (always works)
 
 let viewer, currentPreset = 'HIGH', layerState = {};
 let countryDataSource = null, bordersVisible = true;
@@ -463,31 +469,34 @@ let radarLayers = [], radarIdx = 0, radarPlaying = false, radarInterval = null;
 // ── CLOCK
 setInterval(() => { const d = new Date(); const el = document.getElementById('clk'); if (el) el.textContent = d.toUTCString().slice(17,25)+' UTC'; }, 1000);
 
-// ── FALLBACK IMAGERY — when Cesium Ion's default Bing Maps fails
-function addFallbackImagery() {
+// ── ADD ARCGIS WORLD IMAGERY (token-free, always works in Cesium 1.120+)
+async function addArcGISImagery() {
   try {
-    // ArcGIS World Imagery: free satellite tiles, no API key required
-    const arcgis = new Cesium.ArcGisMapServerImageryProvider({
-      url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer',
-    });
-    viewer.imageryLayers.addImageryProvider(arcgis);
-    console.log('Loaded ArcGIS World Imagery fallback');
-  } catch(e1) {
+    const provider = await Cesium.ArcGisMapServerImageryProvider.fromUrl(
+      'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer'
+    );
+    const layer = new Cesium.ImageryLayer(provider);
+    viewer.imageryLayers.add(layer);
+    console.log('[Sentinel] ArcGIS World Imagery loaded OK');
+    return layer;
+  } catch(e) {
+    console.error('[Sentinel] ArcGIS imagery failed:', e);
+    // Last resort: OpenStreetMap (always available)
     try {
-      // Last resort: OpenStreetMap tiles (not satellite, but at least shows geography)
-      const osm = new Cesium.OpenStreetMapImageryProvider({ url: 'https://tile.openstreetmap.org/' });
-      viewer.imageryLayers.addImageryProvider(osm);
-      console.log('Loaded OpenStreetMap fallback');
-    } catch(e2) {
-      console.error('All imagery providers failed:', e1, e2);
-    }
+      const osm = await Cesium.OpenStreetMapImageryProvider.fromUrl('https://tile.openstreetmap.org/');
+      viewer.imageryLayers.add(new Cesium.ImageryLayer(osm));
+      console.warn('[Sentinel] Fell back to OSM tiles');
+    } catch(e2) { console.error('[Sentinel] All imagery providers failed', e2); }
   }
 }
+// Keep old name for any callers
+const addFallbackImagery = addArcGISImagery;
 
 // ── INIT CESIUM
 async function initCesium() {
   try {
-  Cesium.Ion.defaultAccessToken = CESIUM_TOKEN;
+  // Only set Ion token if we have a real one
+  if (CESIUM_TOKEN) Cesium.Ion.defaultAccessToken = CESIUM_TOKEN;
   const preset = PRESETS[currentPreset];
 
   const viewerOpts = {
@@ -496,10 +505,13 @@ async function initCesium() {
     navigationHelpButton: false, infoBox: false, selectionIndicator: false,
     geocoder: false, creditContainer: document.createElement('div'),
     requestRenderMode: false,
+    // Always start with no base layer — we add ArcGIS explicitly below
+    // so we never pass a Promise (bug) or get a black globe from a bad Ion token
+    baseLayer: false,
   };
 
-  // Terrain — CesiumJS 1.120+ API
-  if (preset.terrain) {
+  // Terrain — only attempt if we have a valid Ion token
+  if (preset.terrain && CESIUM_TOKEN) {
     try {
       if (Cesium.CesiumTerrainProvider && Cesium.CesiumTerrainProvider.fromIonAssetId) {
         viewerOpts.terrainProvider = await Cesium.CesiumTerrainProvider.fromIonAssetId(1);
@@ -508,37 +520,15 @@ async function initCesium() {
       } else if (Cesium.createWorldTerrain) {
         viewerOpts.terrainProvider = Cesium.createWorldTerrain();
       }
-    } catch(e) { console.warn('Terrain init failed, using ellipsoid', e); }
+    } catch(e) { console.warn('[Sentinel] Terrain init failed, using ellipsoid:', e); }
   }
-
-  // Disable the default Ion-based imagery layer — it silently fails to
-  // black when the token is expired or rate-limited.  We add our own
-  // base layer explicitly below.
-  viewerOpts.baseLayer = false;
 
   viewer = new Cesium.Viewer('cesiumContainer', viewerOpts);
 
-  // Immediately add ArcGIS World Imagery as the base layer.
-  // This is free satellite imagery, no API key required, and it
-  // doesn't depend on Cesium Ion token validity.
-  try {
-    if (Cesium.ArcGisMapServerImageryProvider.fromUrl) {
-      // CesiumJS 1.120+ async constructor
-      Cesium.ArcGisMapServerImageryProvider.fromUrl(
-        'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer'
-      ).then(provider => {
-        viewer.imageryLayers.addImageryProvider(provider, 0);
-      }).catch(() => { addFallbackImagery(); });
-    } else {
-      // Legacy constructor
-      viewer.imageryLayers.addImageryProvider(
-        new Cesium.ArcGisMapServerImageryProvider({
-          url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer',
-        }), 0
-      );
-    }
-  } catch(e) {
-    addFallbackImagery();
+  // Add satellite imagery after viewer is created (correct async pattern)
+  // FIX: previously passed Promise directly to baseLayer which caused black globe
+  if (preset.label !== 'LOW') {
+    await addArcGISImagery();
   }
 
   // Dark sky — disable default skybox instead of empty sources
@@ -563,14 +553,13 @@ async function initCesium() {
   // Concurrent tile loads
   try { Cesium.RequestScheduler.maximumRequestsPerServer = preset.tiles; } catch(e) {}
 
-  // Buildings at high zoom (HIGH/EXTREME only)
-  if (preset.buildings) {
+  // Buildings at high zoom (HIGH/EXTREME only) — requires valid Ion token
+  if (preset.buildings && CESIUM_TOKEN) {
     try {
-      const loadTileset = Cesium.Cesium3DTileset.fromIonAssetId || Cesium.createOsmBuildings;
-      if (loadTileset) {
-        Promise.resolve(loadTileset(96188)).then(ts => {
-          if (ts) { viewer.scene.primitives.add(ts); }
-        }).catch(() => {});
+      if (Cesium.Cesium3DTileset.fromIonAssetId) {
+        Cesium.Cesium3DTileset.fromIonAssetId(96188)
+          .then(ts => { if (ts) viewer.scene.primitives.add(ts); })
+          .catch(() => {}); // Ignore if Ion rejects (bad token)
       }
     } catch(e) {}
   }
@@ -598,7 +587,7 @@ async function initCesium() {
   document.getElementById('ls').classList.add('gone');
   } catch(err) {
     console.error('CesiumJS init error:', err);
-    document.getElementById('ls').innerHTML = '<div style="color:#FF4444;font-size:12px">⚠ Globe engine error: ' + err.message + '</div>';
+    document.getElementById('ls').innerHTML = '<div style="color:#FF4444;font-size:12px">⚠ Globe engine error: ' + escHtml(err.message) + '</div>';
     setTimeout(() => document.getElementById('ls').classList.add('gone'), 5000);
   }
 }
@@ -633,28 +622,14 @@ function setPreset(name) {
     }
   } else {
     if (viewer.imageryLayers.length === 0) {
-      // Restore ArcGIS World Imagery (same as init — free, no Ion token needed)
-      try {
-        if (Cesium.ArcGisMapServerImageryProvider.fromUrl) {
-          Cesium.ArcGisMapServerImageryProvider.fromUrl(
-            'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer'
-          ).then(provider => { viewer.imageryLayers.addImageryProvider(provider, 0); })
-           .catch(() => { addFallbackImagery(); });
-        } else {
-          viewer.imageryLayers.addImageryProvider(
-            new Cesium.ArcGisMapServerImageryProvider({
-              url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer',
-            }), 0
-          );
-        }
-      } catch(e) { addFallbackImagery(); }
+      addArcGISImagery(); // restore ArcGIS — always free, no Ion needed
     }
-    if (p.terrain && !(viewer.terrainProvider instanceof Cesium.CesiumTerrainProvider)) {
+    if (p.terrain && CESIUM_TOKEN && !(viewer.terrainProvider instanceof Cesium.CesiumTerrainProvider)) {
       try {
         if (Cesium.CesiumTerrainProvider && Cesium.CesiumTerrainProvider.fromIonAssetId) {
-          Cesium.CesiumTerrainProvider.fromIonAssetId(1).then(tp => { viewer.terrainProvider = tp; }).catch(() => {});
-        } else if (Cesium.createWorldTerrain) {
-          viewer.terrainProvider = Cesium.createWorldTerrain();
+          Cesium.CesiumTerrainProvider.fromIonAssetId(1)
+            .then(tp => { viewer.terrainProvider = tp; })
+            .catch(() => {});
         }
       } catch(e) {}
     }
@@ -784,7 +759,11 @@ async function showCountryPanel(name, iso3, geoProps) {
     if (r.ok) {
       const data = await r.json();
       if (data[1] && data[1][0] && data[1][0].value) {
-        gdp = '$' + (data[1][0].value / 1e9).toFixed(2) + ' B';
+        const v = data[1][0].value;
+        // FIX: sub-billion GDPs showed as "$0.50 B" — now formatted correctly
+        if (v >= 1e12)      gdp = '$' + (v / 1e12).toFixed(2) + ' T';
+        else if (v >= 1e9) gdp = '$' + (v / 1e9).toFixed(1) + ' B';
+        else               gdp = '$' + (v / 1e6).toFixed(0) + ' M';
       }
     }
   } catch(e) {}
@@ -793,8 +772,10 @@ async function showCountryPanel(name, iso3, geoProps) {
   const leaders = WORLD_LEADERS[iso3] || null;
   
   // Threat score (computed from name heuristic — in production would use GDELT)
-  const threatZones = {'UKR':85,'RUS':72,'ISR':78,'IRN':75,'PRK':70,'SYR':68,'YEM':65,'SDN':63,'MMR':60,'AFG':62,'IRQ':58,'LBY':55,'PAK':47,'CHN':45,'TWN':50};
-  const threatScore = threatZones[iso3] || Math.floor(Math.random() * 25 + 10);
+  // FIX: Math.random() caused different score each render — use deterministic hash of iso3
+  const threatZones = {'UKR':85,'RUS':72,'ISR':78,'IRN':75,'PRK':70,'SYR':68,'YEM':65,'SDN':63,'MMR':60,'AFG':62,'IRQ':58,'LBY':55,'PAK':47,'CHN':45,'TWN':50,'ROU':18,'POL':20,'BGR':16,'SRB':24,'HRV':14};
+  function stableHash(s) { let h=0; for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))>>>0; return h; }
+  const threatScore = threatZones[iso3] !== undefined ? threatZones[iso3] : (stableHash(iso3) % 25 + 8);
   const threatLevel = threatScore >= 70 ? ['CRITICAL','#FF4444'] : threatScore >= 50 ? ['ELEVATED','#FF8C00'] : threatScore >= 30 ? ['WATCH','#FFCC00'] : ['STABLE','#00CC44'];
   const stability = threatScore >= 70 ? 'CONFLICT' : threatScore >= 50 ? 'UNSTABLE' : 'STABLE';
   const stabColor = threatScore >= 70 ? '#FF4444' : threatScore >= 50 ? '#FF8C00' : '#00CC44';
@@ -802,17 +783,18 @@ async function showCountryPanel(name, iso3, geoProps) {
   let leadersHTML = '';
   if (leaders) {
     const [hos, hosTitle, hosImg, hog, hogTitle, hogImg] = leaders;
+    const fallbackImg = 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 56 56%22><rect fill=%22%23111%22 width=%2256%22 height=%2256%22/><text x=%2228%22 y=%2236%22 text-anchor=%22middle%22 fill=%22%23333%22 font-size=%2220%22>👤</text></svg>';
     if (hos) {
       leadersHTML += `<div class="cp-leader">
-        <img class="cp-leader-img" src="${hosImg || 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 56 56%22><rect fill=%22%23111%22 width=%2256%22 height=%2256%22/><text x=%2228%22 y=%2236%22 text-anchor=%22middle%22 fill=%22%23333%22 font-size=%2220%22>👤</text></svg>'}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 56 56%22><rect fill=%22%23111%22 width=%2256%22 height=%2256%22/><text x=%2228%22 y=%2236%22 text-anchor=%22middle%22 fill=%22%23333%22 font-size=%2220%22>👤</text></svg>'">
-        <div><div class="cp-leader-name">${hos}</div><div class="cp-leader-title">${hosTitle}</div></div>
+        <img class="cp-leader-img" src="${encodeURI(hosImg || fallbackImg)}" onerror="this.src='${fallbackImg}'">
+        <div><div class="cp-leader-name">${escHtml(hos)}</div><div class="cp-leader-title">${escHtml(hosTitle)}</div></div>
         <span class="cp-leader-badge">STATE</span>
       </div>`;
     }
     if (hog) {
       leadersHTML += `<div class="cp-leader">
-        <img class="cp-leader-img" src="${hogImg || 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 56 56%22><rect fill=%22%23111%22 width=%2256%22 height=%2256%22/><text x=%2228%22 y=%2236%22 text-anchor=%22middle%22 fill=%22%23333%22 font-size=%2220%22>👤</text></svg>'}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 56 56%22><rect fill=%22%23111%22 width=%2256%22 height=%2256%22/><text x=%2228%22 y=%2236%22 text-anchor=%22middle%22 fill=%22%23333%22 font-size=%2220%22>👤</text></svg>'">
-        <div><div class="cp-leader-name">${hog}</div><div class="cp-leader-title">${hogTitle}</div></div>
+        <img class="cp-leader-img" src="${encodeURI(hogImg || fallbackImg)}" onerror="this.src='${fallbackImg}'">
+        <div><div class="cp-leader-name">${escHtml(hog)}</div><div class="cp-leader-title">${escHtml(hogTitle)}</div></div>
         <span class="cp-leader-badge" style="border-color:#FF6600;color:#FF6600">GOV</span>
       </div>`;
     }
@@ -820,16 +802,16 @@ async function showCountryPanel(name, iso3, geoProps) {
 
   content.innerHTML = `
     <div class="cp-header">
-      <div><span class="cp-code">${iso3}</span> <span class="cp-status" style="border-color:${stabColor};color:${stabColor}">▶ ${stability}</span></div>
-      <div class="cp-name">${name}</div>
-      <div class="cp-time">LOCAL ${new Date().toLocaleTimeString('en-US',{hour12:false})} ${timezone}</div>
-      ${flagUrl ? `<img src="${flagUrl}" style="height:20px;margin-top:6px;border:1px solid #222;border-radius:2px">` : ''}
+      <div><span class="cp-code">${escHtml(iso3)}</span> <span class="cp-status" style="border-color:${stabColor};color:${stabColor}">▶ ${escHtml(stability)}</span></div>
+      <div class="cp-name">${escHtml(name)}</div>
+      <div class="cp-time">LOCAL ${new Date().toLocaleTimeString('en-US',{hour12:false})} ${escHtml(timezone)}</div>
+      ${flagUrl ? `<img src="${encodeURI(flagUrl)}" style="height:20px;margin-top:6px;border:1px solid #222;border-radius:2px">` : ''}
     </div>
     <div class="cp-threat">
       <div class="cp-threat-score" style="color:${threatLevel[1]}">${threatScore}</div>
       <div class="cp-threat-label">THREAT SCORE</div>
-      <div class="cp-threat-level" style="color:${threatLevel[1]}">▲ ${threatLevel[0]}</div>
-      <div class="cp-bar"><div class="cp-bar-fill" style="width:${threatScore}%;background:${threatLevel[1]}"></div></div>
+      <div class="cp-threat-level" style="color:${threatLevel[1]}">▲ ${escHtml(threatLevel[0])}</div>
+      <div class="cp-bar"><div class="cp-bar-fill" style="width:${Math.min(Math.max(threatScore,0),100)}%;background:${threatLevel[1]}"></div></div>
     </div>
     ${leadersHTML ? `<div class="cp-leaders">${leadersHTML}</div>` : ''}
     <div class="cp-tabs">
@@ -839,13 +821,13 @@ async function showCountryPanel(name, iso3, geoProps) {
       <div class="cp-tab" onclick="cpTab(this,'relations')">⊕ RELATIONS</div>
     </div>
     <div class="cp-stats" id="cp-tab-content">
-      <div class="cp-stat"><span class="cp-stat-label">CAPITAL</span><span class="cp-stat-val">${capital}</span></div>
-      <div class="cp-stat"><span class="cp-stat-label">POPULATION</span><span class="cp-stat-val" style="color:#00CCAA">${pop}</span></div>
-      <div class="cp-stat"><span class="cp-stat-label">LAND AREA</span><span class="cp-stat-val">${area}</span></div>
-      <div class="cp-stat"><span class="cp-stat-label">GDP</span><span class="cp-stat-val">${gdp || '—'}</span></div>
-      <div class="cp-stat"><span class="cp-stat-label">CURRENCY</span><span class="cp-stat-val" style="color:#FF8C00">${currency}</span></div>
-      <div class="cp-stat"><span class="cp-stat-label">LANGUAGES</span><span class="cp-stat-val">${languages}</span></div>
-      <div class="cp-stat"><span class="cp-stat-label">REGION</span><span class="cp-stat-val">${subregion || region}</span></div>
+      <div class="cp-stat"><span class="cp-stat-label">CAPITAL</span><span class="cp-stat-val">${escHtml(capital)}</span></div>
+      <div class="cp-stat"><span class="cp-stat-label">POPULATION</span><span class="cp-stat-val" style="color:#00CCAA">${escHtml(pop)}</span></div>
+      <div class="cp-stat"><span class="cp-stat-label">LAND AREA</span><span class="cp-stat-val">${escHtml(area)}</span></div>
+      <div class="cp-stat"><span class="cp-stat-label">GDP</span><span class="cp-stat-val">${escHtml(gdp || '—')}</span></div>
+      <div class="cp-stat"><span class="cp-stat-label">CURRENCY</span><span class="cp-stat-val" style="color:#FF8C00">${escHtml(currency)}</span></div>
+      <div class="cp-stat"><span class="cp-stat-label">LANGUAGES</span><span class="cp-stat-val">${escHtml(languages)}</span></div>
+      <div class="cp-stat"><span class="cp-stat-label">REGION</span><span class="cp-stat-val">${escHtml(subregion || region)}</span></div>
     </div>`;
 }
 
@@ -866,7 +848,7 @@ function showInfraCard(entity, pos) {
   document.getElementById('ic-title').textContent = entity._sentinelLabel || '';
   document.getElementById('ic-body').textContent = entity._sentinelBody || '';
   const tags = entity._sentinelTags || [];
-  document.getElementById('ic-tags').innerHTML = tags.map(t => `<span class="ic-tag">${t}</span>`).join('');
+  document.getElementById('ic-tags').innerHTML = tags.map(t => `<span class="ic-tag">${escHtml(t)}</span>`).join('');
   card.style.borderLeftColor = entity._sentinelColor || '#FF6600';
   card.style.left = Math.min(pos.x + 16, window.innerWidth - 320) + 'px';
   card.style.top = Math.max(pos.y - 20, 50) + 'px';
@@ -1050,9 +1032,9 @@ function loadConflictHotspots() {
       position: Cesium.Cartesian3.fromDegrees(lon, lat),
       billboard: { image: makeIcon('◆','#FF4444'), width:16, height:16, disableDepthTestDistance: Number.POSITIVE_INFINITY },
     });
-    e._sentinelType = 'conflict'; e._sentinelLabel = ev.name || 'CONFLICT'; e._sentinelColor = '#FF4444';
+    e._sentinelType = 'conflict'; e._sentinelLabel = String(ev.name || 'CONFLICT').substring(0,100); e._sentinelColor = '#FF4444';
     e._sentinelCategory = 'CONFLICT EVENT — GDELT';
-    e._sentinelBody = ev.name || 'Conflict event detected by GDELT';
+    e._sentinelBody = String(ev.name || 'Conflict event detected by GDELT').substring(0,500);
     e._sentinelTags = ['GDELT','LIVE','CONFLICT'];
   });
   // Also add static hotspots from GDELT queries (auto-fetch)
@@ -1122,20 +1104,34 @@ async function loadSatelliteEntities() {
   const limit = PRESETS[currentPreset]?.satLim || 2000;
   const groups = ['stations','visual','military'];
   let total = 0;
+  let tleErrors = 0;
   for (const gid of groups) {
     if (total >= limit) break;
     try {
       const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 8000);
       const r = await fetch(`https://celestrak.org/pub/TLE/${gid}.txt`, {signal:ctrl.signal});
-      if (!r.ok) continue;
+      if (!r.ok) { console.warn(`[Sentinel] CelesTrak ${gid} HTTP ${r.status}`); continue; }
       const text = await r.text();
       const lines = text.trim().split('\n').map(l=>l.trim()).filter(l=>l);
+      // Validate TLE format: lines should come in groups of 3
+      if (lines.length < 3) { console.warn(`[Sentinel] CelesTrak ${gid}: too few lines (${lines.length})`); continue; }
       for (let i = 0; i+2 < lines.length && total < limit; i += 3) {
         const name = lines[i].replace(/^0 /,'');
         const tle1 = lines[i+1], tle2 = lines[i+2];
-        if (!tle1.startsWith('1 ') || !tle2.startsWith('2 ')) continue;
+        // Validate TLE line format before parsing
+        if (!tle1.startsWith('1 ') || !tle2.startsWith('2 ')) {
+          tleErrors++;
+          console.warn(`[Sentinel] Malformed TLE at line ${i}: missing 1/2 prefix`);
+          continue;
+        }
+        if (tle1.length < 69 || tle2.length < 69) {
+          tleErrors++;
+          console.warn(`[Sentinel] TLE line too short for ${name}`);
+          continue;
+        }
         try {
           const satrec = satellite.twoline2satrec(tle1, tle2);
+          if (!satrec || satrec.error !== 0) { tleErrors++; continue; }
           const now = new Date();
           const pv = satellite.propagate(satrec, now);
           if (!pv.position) continue;
@@ -1150,14 +1146,20 @@ async function loadSatelliteEntities() {
             position: Cesium.Cartesian3.fromDegrees(lon, lat, (alt||400)*1000),
             point: { pixelSize:4, color: Cesium.Color.fromCssColorString(col), disableDepthTestDistance: Number.POSITIVE_INFINITY },
           });
-          e._sentinelType = 'satellite'; e._sentinelLabel = name; e._sentinelColor = col;
+          e._sentinelType = 'satellite'; e._sentinelLabel = String(name).substring(0,80); e._sentinelColor = col;
           e._sentinelCategory = `◉ SATELLITE — ${gid.toUpperCase()}`;
-          e._sentinelBody = `NAME: ${name}\nALT: ${Math.round(alt||400)} KM\nGROUP: ${gid}`;
+          e._sentinelBody = `NAME: ${String(name).substring(0,80)}\nALT: ${Math.round(alt||400)} KM\nGROUP: ${gid}`;
           e._sentinelTags = [gid.toUpperCase(), 'SAT'];
           total++;
-        } catch(e){}
+        } catch(e){ tleErrors++; console.warn(`[Sentinel] TLE parse error for ${name}:`, e.message); }
       }
-    } catch(e){}
+    } catch(e){ console.warn(`[Sentinel] CelesTrak fetch error for ${gid}:`, e.message); }
+  }
+  // Show TLE error count to user
+  if (tleErrors > 0) {
+    console.warn(`[Sentinel] ${tleErrors} TLE(s) failed to parse — check console`);
+    const badge = document.getElementById('sat-status');
+    if (badge) badge.innerHTML = `<span class="hd" style="background:#FFCC00;animation:pb 3s infinite"></span>SAT <span style="color:#FFCC00;font-size:8px">(⚠${tleErrors})</span>`;
   }
 }
 
@@ -1223,18 +1225,22 @@ async function loadRainRadar() {
     const data = await r.json();
     const timestamps = (data.radar?.past || []).concat(data.radar?.nowcast || []);
     radarLayers = [];
-    timestamps.forEach((ts, i) => {
-      const layer = viewer.imageryLayers.addImageryProvider(
-        new Cesium.UrlTemplateImageryProvider({
-          url: `https://tilecache.rainviewer.com${ts.path}/256/{z}/{x}/{y}/4/1_1.png`,
-          minimumLevel: 1, maximumLevel: 12,
-          credit: 'RainViewer'
-        })
-      );
-      layer.alpha = 0;
-      layer.show = false;
-      radarLayers.push({ layer, time: ts.time });
-    });
+    // FIX: addImageryProvider() is deprecated in Cesium 1.120+
+    // Use ImageryLayer.fromProviderAsync + imageryLayers.add() instead
+    const addRadarLayer = async (ts) => {
+      const provider = await Cesium.UrlTemplateImageryProvider.fromUrl(
+        `https://tilecache.rainviewer.com${ts.path}/256/{z}/{x}/{y}/4/1_1.png`,
+        { minimumLevel: 1, maximumLevel: 12, credit: 'RainViewer' }
+      ).catch(() => new Cesium.UrlTemplateImageryProvider({
+        url: `https://tilecache.rainviewer.com${ts.path}/256/{z}/{x}/{y}/4/1_1.png`,
+        minimumLevel: 1, maximumLevel: 12
+      }));
+      const layer = new Cesium.ImageryLayer(provider, { alpha: 0, show: false });
+      viewer.imageryLayers.add(layer);
+      return { layer, time: ts.time };
+    };
+    const layerPromises = timestamps.map(ts => addRadarLayer(ts).catch(() => null));
+    radarLayers = (await Promise.all(layerPromises)).filter(Boolean);
     if (radarLayers.length > 0) {
       radarIdx = radarLayers.length - 1;
       showRadarFrame(radarIdx);
@@ -1302,9 +1308,11 @@ async function fetchGDELTNews() {
       const seen = new Set(), dedup = [];
       for (const a of arts) { const k = (a.title||'').toLowerCase().trim().substring(0,50); if(!seen.has(k)){seen.add(k);dedup.push(a);} if(dedup.length>=4) break; }
       nf.innerHTML = dedup.map(a => {
-        const dom = (a.domain||'GDELT').replace('www.','');
+        const dom = escHtml((a.domain||'GDELT').replace('www.',''));
+        const safeUrl = escHtml(a.url||'#');
+        const safeTitle = escHtml((a.title||'').substring(0,100));
         return `<div style="background:rgba(0,0,0,.85);border-left:3px solid #FF6600;padding:6px 10px;margin:3px 0">
-          <a href="${a.url}" target="_blank" style="color:#DDD;text-decoration:none;font-size:12px;font-weight:600;line-height:1.4">${(a.title||'').substring(0,100)}</a>
+          <a href="${safeUrl}" target="_blank" rel="noopener noreferrer" style="color:#DDD;text-decoration:none;font-size:12px;font-weight:600;line-height:1.4">${safeTitle}</a>
           <div style="color:#555;font-size:9px;margin-top:3px">${dom}</div></div>`;
       }).join('');
       return;

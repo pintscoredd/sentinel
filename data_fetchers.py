@@ -16,15 +16,12 @@ import logging
 from datetime import datetime, timedelta, time as dtime
 import pytz
 from collections import OrderedDict
-# skyfield.Topos removed — not used anywhere in this module
 
-# ── Newly Integrated Libraries ──
 import pandas_market_calendars as mcal
-# For Black-Scholes Greeks Engine
 from scipy.stats import norm
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
-# Issue #4: orjson.dumps() returns bytes, not str — only alias loads()
+# orjson.loads for speed if available, stdlib json as fallback
 import json as _stdlib_json
 try:
     from orjson import loads as _json_loads
@@ -47,12 +44,12 @@ except ImportError:
 logger = logging.getLogger("sentinel.data")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# ── Module-level timezone objects (avoids repeated construction) ──
+
 TZ_PACIFIC = pytz.timezone("US/Pacific")
 TZ_EASTERN = pytz.timezone("US/Eastern")
 TZ_UTC = pytz.utc
 
-# ── Named constants ──
+
 TRADING_DAYS_PER_YEAR: int = 252
 CALENDAR_DAYS_PER_YEAR: int = 365
 DEFAULT_RISK_FREE_RATE: float = 0.045
@@ -66,9 +63,7 @@ _YAHOO_UAS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 ]
 
-# ── Yahoo Finance Global Rate Limiter ─────────────────────────────
-# Uses a BoundedSemaphore (3 slots) instead of a single Lock so
-# independent requests can overlap while still preventing 429s.
+# ── Yahoo Finance Rate Limiter ──
 import threading as _threading
 import time as _time
 
@@ -80,17 +75,9 @@ _YF_CACHE_TTL = 120          # reuse Ticker objects for 2 minutes
 _YF_CACHE_MAX_SIZE = 200     # max tickers to cache — prevents unbounded memory growth
 
 
-# ── Feature #15: Proper LRU Cache for Tickers ─────────────────────
-# Uses collections.OrderedDict for O(1) LRU operations with bounded
-# memory. The 200 most recently used tickers stay in memory; obscure
-# one-off lookups are evicted automatically. Thread-safe via _yf_lock.
-class _LRUTickerCache:
-    """Thread-safe LRU cache for yfinance Ticker objects.
 
-    Uses OrderedDict.move_to_end() for O(1) access promotion.
-    Bounded to maxsize entries; oldest entries are evicted on insert.
-    Each entry has a TTL — stale entries are treated as cache misses.
-    """
+class _LRUTickerCache:
+    """Thread-safe LRU cache for yfinance Ticker objects with TTL eviction."""
     __slots__ = ("_cache", "_maxsize", "_ttl", "_hits", "_misses")
 
     def __init__(self, maxsize=200, ttl=120):
@@ -101,7 +88,7 @@ class _LRUTickerCache:
         self._misses = 0
 
     def get(self, key):
-        """Return cached Ticker if present and fresh, else None. O(1)."""
+        """Return cached Ticker if present and fresh, else None."""
         entry = self._cache.get(key)
         if entry is None:
             self._misses += 1
@@ -112,17 +99,15 @@ class _LRUTickerCache:
             del self._cache[key]
             self._misses += 1
             return None
-        # Promote to most-recently-used
         self._cache.move_to_end(key)
         self._hits += 1
         return obj
 
     def put(self, key, obj):
-        """Insert/update a cache entry, evicting LRU if over capacity. O(1)."""
+        """Insert/update a cache entry, evicting LRU if over capacity."""
         if key in self._cache:
             self._cache.move_to_end(key)
         self._cache[key] = (obj, _time.time())
-        # Evict oldest entries if over max size
         while len(self._cache) > self._maxsize:
             self._cache.popitem(last=False)  # pop oldest (LRU)
 
@@ -147,32 +132,20 @@ _yf_ticker_cache = _LRUTickerCache(maxsize=_YF_CACHE_MAX_SIZE, ttl=_YF_CACHE_TTL
 
 
 def get_yf_ticker(ticker):
-    """Return a yfinance Ticker with global rate limiting.
-
-    Uses a BoundedSemaphore(3) so up to 3 independent Yahoo requests
-    can run concurrently, while a gap-lock still enforces a minimum
-    0.35 s between request *starts* to avoid 429s.
-
-    Feature #15: Cache is now a proper LRU (OrderedDict-based) bounded
-    to _YF_CACHE_MAX_SIZE entries with O(1) eviction. The 200 most
-    popular tickers (SPY, QQQ, etc.) stay warm; obscure lookups are
-    automatically evicted when capacity is reached.
-
-    Issue #2 fix: sleep is performed OUTSIDE the gap lock so cache hits
-    on other threads are not blocked while one thread waits.
-    """
+    """Return a yfinance Ticker with LRU caching and rate limiting."""
     if yf is None: return None
     global _yf_last_request
 
-    # Fast path: return cached Ticker without acquiring semaphore
+    # Fast path: cached
     with _yf_lock:
         cached = _yf_ticker_cache.get(ticker)
         if cached is not None:
             return cached
 
-    # Slow path: acquire one of 3 semaphore slots, then enforce gap
-    with _yf_semaphore:
-        # Re-check cache after acquiring semaphore (another thread may have populated it)
+    # Slow path: acquire semaphore, enforce gap (try/finally prevents slot leak)
+    _yf_semaphore.acquire()
+    try:
+        # Double-check cache after semaphore acquisition
         with _yf_lock:
             cached = _yf_ticker_cache.get(ticker)
             if cached is not None:
@@ -181,8 +154,7 @@ def get_yf_ticker(ticker):
             need_sleep = max(0, _YF_MIN_GAP - elapsed)
             _yf_last_request = _time.time()  # record NOW, not future
 
-        # Issue #2: Sleep OUTSIDE the gap lock so other threads can
-        # still check the cache and reserve their own slots.
+        # Sleep outside lock so other threads aren't blocked
         if need_sleep > 0:
             _time.sleep(need_sleep)
 
@@ -192,23 +164,16 @@ def get_yf_ticker(ticker):
             _yf_last_request = _time.time()  # update to actual completion time
             _yf_ticker_cache.put(ticker, tk)
         return tk
+    finally:
+        _yf_semaphore.release()
 
 
-# ── Feature #18: Connection Pooling ───────────────────────────────
-# Reuses "warm" TCP connections with TLS session resumption.
-# Eliminates ~30-50ms TLS handshake overhead on subsequent requests.
-# Also prevents ephemeral port exhaustion during heavy fetch cycles.
+# ── Connection Pooling ──
 _http_session = None
 _http_session_lock = _threading.Lock()
 
 def _get_http_session():
-    """Return a shared requests.Session with connection pooling.
-
-    Thread-safe singleton. The session is configured with:
-    - pool_connections=10: up to 10 unique hosts keep warm connections
-    - pool_maxsize=20: up to 20 concurrent connections per host
-    - Automatic retry on 429/500/502/503/504 with backoff
-    """
+    """Return a shared requests.Session with connection pooling and auto-retry."""
     global _http_session
     if _http_session is not None:
         return _http_session
@@ -238,9 +203,7 @@ def _get_http_session():
         return _http_session
 
 
-# ── Feature #14: Request Metrics Tracking ─────────────────────────
-# Tracks per-API latency, request counts, and error rates.
-# Access via get_request_metrics() for data-driven cache tuning.
+# ── Request Metrics Tracking ──
 _metrics_lock = _threading.Lock()
 _request_metrics = {}  # api_domain → {"count", "errors", "total_ms", "min_ms", "max_ms"}
 
@@ -261,16 +224,7 @@ def _record_metric(api_domain, latency_ms, is_error=False):
             m["errors"] += 1
 
 def get_request_metrics():
-    """Return a snapshot of per-API request metrics.
-
-    Returns dict mapping api_domain → {
-        count, errors, avg_ms, min_ms, max_ms, error_rate_pct
-    }
-
-    Use this to identify API bottlenecks and tune @st.cache_data TTLs.
-    Example: if Yahoo averages 800ms and Finnhub averages 120ms, you
-    know exactly where to invest in caching.
-    """
+    """Return per-API request metrics snapshot."""
     with _metrics_lock:
         snapshot = {}
         for domain, m in _request_metrics.items():
@@ -305,12 +259,7 @@ def reset_request_metrics():
 
 
 def _safe_float(v, default=None):
-    """Convert to float, returning default for invalid/missing values.
-
-    Issue #11 fix: default is now None instead of 0.0 so callers can
-    distinguish 'data unavailable' from 'actual value is zero'.
-    Legacy callers that passed an explicit default=0.0 are unaffected.
-    """
+    """Convert to float, returning default for invalid/missing values."""
     if v is None:
         return default
     try:
@@ -344,12 +293,7 @@ def pct_color(v) -> str:
     return "#00CC44" if v >= 0 else "#FF4444"
 
 def _is_english(text: str) -> bool:
-    """Heuristic: reject text where >15% of characters are non-ASCII.
-
-    Raising the threshold to 0.85 filters accented-heavy European text
-    (French, Spanish, Portuguese) and non-Latin scripts (CJK, Arabic,
-    Cyrillic) that can slip through GDELT's sourcelang:english filter.
-    """
+    """Heuristic: reject text where >15% of characters are non-ASCII."""
     if not text: return False
     return sum(1 for c in text if ord(c) < 128) / max(len(text), 1) > 0.85
 
@@ -365,11 +309,8 @@ def _should_retry_http_error(exc):
         return True
     return False
 
-# Issue #3 fix: The circuit breaker in _fetch_robust_json handles
-# retry/backoff logic. This inner function is called once per attempt —
-# no need for a tenacity @retry wrapper here.
 def _do_fetch_robust_json(url, params=None, headers=None, timeout=10):
-    """Low-level fetch with connection pooling (Feature #18) and metrics (Feature #14)."""
+    """Low-level JSON fetch with pooling, metrics, rate limiting, and sanitized errors."""
     session = _get_http_session()
     req_headers = dict(session.headers)  # start with session defaults
     if headers:
@@ -381,35 +322,63 @@ def _do_fetch_robust_json(url, params=None, headers=None, timeout=10):
     api_domain = urlparse(url).netloc
     t0 = _time.time()
 
+    _enforce_api_rate_limit(api_domain)
+
     try:
         r = session.get(url, params=params, headers=req_headers, timeout=timeout)
         latency_ms = (_time.time() - t0) * 1000
         _record_metric(api_domain, latency_ms, is_error=(r.status_code >= 400))
         r.raise_for_status()
         return _json_loads(r.content)
-    except Exception:
+    except Exception as exc:
         latency_ms = (_time.time() - t0) * 1000
         _record_metric(api_domain, latency_ms, is_error=True)
-        raise
+        # Sanitize exception to prevent API key leakage
+        _sanitized_msg = _sanitize_error(str(exc))
+        raise RuntimeError(f"API request failed ({api_domain}): {_sanitized_msg}") from None
 
-# Thread-safe circuit breaker — prevents race conditions on concurrent
-# Streamlit sessions mutating failure counts across two bytecodes.
+
+# ── Per-domain rate limiting ──
+_api_rate_limits_lock = _threading.Lock()
+_api_rate_limits = {}  # domain → last_request_time
+_API_RATE_LIMIT_DEFAULTS = {
+    "api.gdeltproject.org": 1.0,      # 1 req/sec
+    "api.coingecko.com": 1.5,         # conservative for free tier
+    "gamma-api.polymarket.com": 1.0,
+    "clob.polymarket.com": 1.0,
+    "api.rainviewer.com": 2.0,
+    "eonet.gsfc.nasa.gov": 2.0,
+}
+_API_RATE_LIMIT_DEFAULT = 0.5  # 500ms default gap
+
+def _enforce_api_rate_limit(domain):
+    """Enforce per-domain minimum gap between requests (thread-safe)."""
+    min_gap = _API_RATE_LIMIT_DEFAULTS.get(domain, _API_RATE_LIMIT_DEFAULT)
+    with _api_rate_limits_lock:
+        last = _api_rate_limits.get(domain, 0.0)
+        elapsed = _time.time() - last
+        need_sleep = max(0, min_gap - elapsed)
+        _api_rate_limits[domain] = _time.time() + need_sleep
+    if need_sleep > 0:
+        _time.sleep(need_sleep)
+
+# ── Error sanitization ──
+_KEY_PATTERN = re.compile(
+    r'(api[_-]?key|apikey|token|secret|password|authorization)'
+    r'[=:]\s*["\']?([A-Za-z0-9_\-]{8,})["\']?',
+    re.IGNORECASE
+)
+
+def _sanitize_error(msg):
+    """Strip potential API keys from error messages before logging/display."""
+    return _KEY_PATTERN.sub(r'\1=***REDACTED***', msg)
+
+# ── Circuit breaker ──
 _cb_lock = _threading.Lock()
 _API_CIRCUIT_BREAKERS = {}
 
 def _fetch_robust_json(url, params=None, headers=None, timeout=10):
-    """Centralized, robust external fetcher using exponential backoff and fast JSON parsing.
-    
-    Feature #18: Uses connection pooling via _get_http_session() to reuse
-    warm TCP connections, eliminating ~30-50ms TLS handshake per request.
-
-    Feature #14: Every request is metered via _record_metric() — access
-    aggregate latency/error data with get_request_metrics().
-
-    Circuit breaker is protected by _cb_lock to prevent race conditions
-    where concurrent threads read stale failure counts and either trip
-    too late or reset prematurely.
-    """
+    """Centralized JSON fetcher with circuit breaker, pooling, and metrics."""
     from urllib.parse import urlparse
     import time
     
@@ -436,9 +405,7 @@ def _fetch_robust_json(url, params=None, headers=None, timeout=10):
         return None
 
 
-# ── Persistent event loop for async operations ──────────────────
-# Avoids creating/tearing down a new loop on every call (asyncio.run overhead).
-# Uses a lock to prevent duplicate loop/thread creation on Streamlit hot-reload.
+# ── Persistent async event loop ──
 _async_loop = None
 _async_thread = None
 _async_loop_lock = _threading.Lock()
@@ -476,12 +443,7 @@ def _get_persistent_loop():
         return _async_loop
 
 def run_async(coro):
-    """Run an async coroutine using a persistent event loop.
-    
-    Uses a dedicated background thread with a long-lived event loop,
-    avoiding the overhead of asyncio.run() creating/destroying loops
-    on every call — critical in multi-threaded Streamlit environments.
-    """
+    """Run an async coroutine on the persistent event loop."""
     loop = _get_persistent_loop()
     future = asyncio.run_coroutine_threadsafe(coro, loop)
     return future.result(timeout=60)
@@ -536,11 +498,7 @@ def is_0dte_market_open():
 
 @st.cache_data(ttl=60)
 def yahoo_quote(ticker: str):
-    """Fetch a single Yahoo Finance quote with price, change, pct, and volume.
-
-    Issue #7 fix: Uses only tk.history(period='5d') instead of both
-    fast_info AND history, eliminating one redundant API call per ticker.
-    """
+    """Fetch a single Yahoo Finance quote with price, change, pct, and volume."""
     TICKER_MAP = {"DXY": "DX-Y.NYB", "$DXY": "DX-Y.NYB"}
     t = TICKER_MAP.get(ticker, ticker)
     try:
@@ -551,8 +509,6 @@ def yahoo_quote(ticker: str):
         prev = None
         vol = 0
 
-        # Issue #7: Use ONLY history() — fast_info was a wasted API call
-        # since previous_close was unreliable and history was always fetched anyway.
         try:
             h = tk.history(period="5d")
             if not h.empty:
@@ -657,9 +613,6 @@ def get_heatmap_data():
         else:
             closes = data["Close"] if "Close" in data.columns else data
 
-        # Issue #6 & #12 fix: Use batch yf.Tickers() for market caps.
-        # Issue #12: Stocks with failed mcap lookups are excluded from heatmap
-        # instead of defaulting to $1B which distorts visual weight.
         mcaps = {}
         import concurrent.futures
         def _get_mcap(tk_sym):
@@ -671,7 +624,7 @@ def get_heatmap_data():
                         return tk_sym, cap
             except Exception:
                 pass
-            return tk_sym, None  # Issue #12: None instead of $1B fallback
+            return tk_sym, None
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
             futures = [executor.submit(_get_mcap, t) for t in tickers]
@@ -691,7 +644,7 @@ def get_heatmap_data():
                 pct = (chg / prev) * 100 if prev else 0.0
                 mcap = mcaps.get(tkr)
                 if mcap is None:
-                    continue  # Issue #12: exclude stocks with missing market cap
+                    continue  # skip stocks with missing market cap
                 rows.append({"ticker": tkr, "sector": sector, "pct": pct, "price": price, "change": chg, "market_cap": float(mcap)})
         return rows
     except Exception as e:
@@ -700,12 +653,8 @@ def get_heatmap_data():
 
 @st.cache_data(ttl=60)
 def multi_quotes(tickers):
-    """Fetch quotes for multiple tickers using async batching.
-
-    Issue #5 fix: Uses the async batcher instead of sequential yahoo_quote().
-    Issue #14 fix: TTL aligned to 60s to match yahoo_quote's TTL.
-    """
-    # Deduplicate while preserving caller's insertion order (e.g. watchlist)
+    """Fetch quotes for multiple tickers using async batching."""
+    # Deduplicate preserving insertion order
     seen = set()
     unique = []
     for t in tickers:
@@ -757,7 +706,7 @@ def get_vix_full():
         elif pct_1y < 65: posture = "NEUTRAL"
         else:             posture = "RISK-OFF"
         
-        # FIX-10: Regime divergence flag — 1Y says fear but 3Y says normal
+        # Regime divergence: 1Y elevated but 3Y normal
         if pct_1y > 70 and pct_3y < 50:
             posture += " (REGIME: structurally normal)"
         
@@ -1235,12 +1184,7 @@ def get_finra_short_volume(ticker):
 
 @st.cache_data(ttl=3600)
 def stat_arb_screener(pairs=None):
-    """Statistical Arbitrage Screener using Engle-Granger Cointegration & OLS Half-Life.
-    
-    FIX-07: Tests cointegration in both directions, keeps lower p-value.
-    FIX-08: Uses OU equilibrium mean instead of biased full-window average.
-    FIX-09: Scales entry thresholds by half-life.
-    """
+    """Statistical Arbitrage Screener using Engle-Granger Cointegration & OLS Half-Life."""
     try:
         import statsmodels.api as sm
         from statsmodels.tsa.stattools import coint
@@ -1255,8 +1199,7 @@ def stat_arb_screener(pairs=None):
     end = datetime.today()
     start = end - timedelta(days=252)
     
-    # Issue #13 fix: Use a separate semaphore acquisition for bulk downloads
-    # to prevent bypassing rate limiting and causing 429 cascades.
+    # Bulk download to avoid individual rate-limited requests
     all_tickers = list(set([t for pair in pairs for t in pair]))
     try:
         with _yf_semaphore:
@@ -1279,7 +1222,7 @@ def stat_arb_screener(pairs=None):
             if len(df) < 100:
                 continue
             
-            # FIX-07: Test cointegration in both directions, keep lower p-value
+            # Test cointegration in both directions, keep lower p-value
             _, pvalue_fwd, _ = coint(df[t1], df[t2])
             _, pvalue_rev, _ = coint(df[t2], df[t1])
             
@@ -1311,7 +1254,7 @@ def stat_arb_screener(pairs=None):
             ou_lambda = -ou_model.params.iloc[1]
             half_life = np.log(2) / ou_lambda if ou_lambda > 0 else float('inf')
             
-            # FIX-08: Use OU equilibrium mean instead of biased full-window mean
+            # OU equilibrium mean (unbiased)
             if ou_lambda > 0:
                 eq_mean = ou_intercept / ou_lambda
             else:
@@ -1319,7 +1262,7 @@ def stat_arb_screener(pairs=None):
             
             z_score = (spread.iloc[-1] - eq_mean) / std_spread if std_spread > 0 else 0.0
             
-            # FIX-09: Scale entry thresholds by half-life
+            # Scale entry thresholds by half-life
             # Fast-reverting (3-day HL) → tight thresholds (~1.0)
             # Slow-reverting (60-day HL) → wide thresholds (~2.5)
             clamped_hl = max(3.0, min(float(half_life), 60.0))
@@ -1353,11 +1296,7 @@ def stat_arb_screener(pairs=None):
 
 @st.cache_data(ttl=600)
 def sector_etfs():
-    """Fetch sector ETF performance.
-
-    Issue #8 fix: Uses multi_quotes (async batcher) instead of 11
-    sequential yahoo_quote() calls, reducing latency from ~3.85s to ~0.5s.
-    """
+    """Fetch sector ETF performance using async batching."""
     S = {"Technology": "XLK", "Financials": "XLF", "Energy": "XLE", "Healthcare": "XLV",
          "Consumer Staples": "XLP", "Utilities": "XLU", "Consumer Discretionary": "XLY", "Materials": "XLB",
          "Communication Services": "XLC", "Real Estate": "XLRE", "Industrials": "XLI"}
@@ -1372,12 +1311,7 @@ def sector_etfs():
 
 @st.cache_data(ttl=300)
 def top_movers():
-    """Find top gainers/losers from a universe of ~120 stocks.
-
-    Issue #19 fix: Uses yf.download bulk API instead of creating 150+
-    async futures that all block on BoundedSemaphore(3). The bulk download
-    is a single HTTP request to Yahoo, dramatically faster than 150 individual ones.
-    """
+    """Find top gainers/losers from a universe of ~120 stocks via bulk download."""
     UNIVERSE = [
         "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","AVGO","ORCL","CRM",
         "AMD","INTC","QCOM","TXN","ADI","AMAT","LRCX","KLAC","MRVL","SNPS","CDNS",
@@ -1397,8 +1331,6 @@ def top_movers():
     UNIVERSE = [x for x in UNIVERSE if not (x in seen or seen.add(x))]
 
     try:
-        # Issue #19: Use yf.download for bulk price fetching — single HTTP request
-        # instead of 150 individual requests through BoundedSemaphore(3)
         with _yf_semaphore:
             data = yf.download(UNIVERSE, period="5d", progress=False, threads=True, auto_adjust=True)
 
@@ -1431,18 +1363,12 @@ def top_movers():
 
 
 def calc_stock_fear_greed():
-    """5-signal Fear & Greed: VIX, Momentum, Safe Haven, PCR, Junk Demand.
-
-    Issue #15 fix: Uses get_vix_cached() via st.session_state import
-    to share VIX data with the render-cycle cache instead of calling
-    get_vix_full() directly.
-    """
+    """5-signal Fear & Greed: VIX, Momentum, Safe Haven, PCR, Junk Demand."""
     try:
         scores = []
 
         # --- Signal 1: VIX Level — 1-year rolling percentile rank (self-calibrating) ---
-        # Issue #15: Use the cached function from st.cache_data instead of direct call
-        vix_info = get_vix_full()  # @st.cache_data handles dedup
+        vix_info = get_vix_full()
         if vix_info and vix_info[0] is not None:
             vix, pct_1y, _ = vix_info
             vix_score = 100 - pct_1y
@@ -1583,7 +1509,7 @@ def build_brief_context(geo_watch=""):
         except Exception:
             return []
 
-    # Issue #10 fix: Fetch both GDELT queries in parallel instead of sequentially
+    # Fetch both GDELT queries in parallel
     # (worst case was 16s for two sequential 8s-timeout calls)
     import concurrent.futures
     base = market_snapshot_str()
@@ -1644,7 +1570,7 @@ def fred_series(series_id, key, limit=36):
 # POLYMARKET
 # ════════════════════════════════════════════════════════════════════
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=180)
 def polymarket_events(limit=60):
     try:
         return _fetch_robust_json("https://gamma-api.polymarket.com/events",
@@ -1653,7 +1579,7 @@ def polymarket_events(limit=60):
         logger.debug(f"polymarket_events: {exc}")
         return []
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=180)
 def polymarket_markets(limit=60):
     try:
         return _fetch_robust_json("https://gamma-api.polymarket.com/markets",
@@ -1718,7 +1644,7 @@ def crypto_global():
 # NEWS
 # ════════════════════════════════════════════════════════════════════
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=180)
 def gdelt_news(query, max_rec=15):
     # Both endpoints enforce sourcelang:english at the API level.
     # The 168h fallback widens the time window (not the language) when
@@ -2303,7 +2229,7 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
 
     # ──────────────────────────────────────────────────────────
     # SIGNAL 3: Typical Price vs Average (weight: 2.5)
-    # FIX-11: Renamed from "VWAP Position" — (H+L+C)/3 is Typical Price, not VWAP
+    # Typical Price position, not VWAP
     # Price > typical price average = buyers in control
     # Price < typical price average = sellers in control
     # ──────────────────────────────────────────────────────────
@@ -2374,7 +2300,7 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
 
     # ──────────────────────────────────────────────────────────
     # SIGNAL 6: Vol Regime (weight: 2.0)
-    # FIX-06: Collapsed VIX Term Structure + VIX Level into a single signal
+    # Combined VIX Term Structure + VIX Level into single signal
     # to avoid double-counting volatility. Uses a 2×2 grid:
     #   contango + low vol  = +1.5 (bullish)
     #   contango + elevated = +0.5 (neutral-ish)
@@ -4418,7 +4344,7 @@ def fetch_btc_etf_flows():
                 if prev_close <= 0 or curr_close <= 0: continue
                 vwap = (curr_high + curr_low + curr_close) / 3.0
                 direction = 1.0 if (curr_close - prev_close) >= 0 else -1.0
-                # FIX-13: Removed arbitrary 0.10 multiplier; express in billions
+                # Express in billions (raw value)
                 ticker_flows[_pd.Timestamp.fromtimestamp(ts).normalize()] = round((volume * vwap * direction) / 1e9, 4)
             if ticker_flows: all_flows[ticker] = ticker_flows
             _time.sleep(1.0)
@@ -4448,7 +4374,7 @@ def fetch_btc_etf_flows_fallback():
                 prev_close = hist["Close"].shift(1)
                 vwap = (hist["High"] + hist["Low"] + hist["Close"]) / 3.0
                 direction = np.where((hist["Close"] - prev_close) >= 0, 1.0, -1.0)
-                # FIX-13: Removed arbitrary 0.10 multiplier; express in billions
+                # Express in billions (raw value)
                 all_data[ticker] = ((hist["Volume"] * vwap * direction) / 1e9).iloc[1:]
             except Exception as e:
                 logger.error("BTC ETF Fallback flow error for %s: %s", ticker, str(e))
@@ -5390,7 +5316,7 @@ def get_gamma_squeeze_scanner():
         return None
 
     # Universe of meme/squeeze-prone stocks + high SI names
-    # FIX-01: Removed BBBY, WISH, GOEV — all delisted; yf.download returns empty data
+    # Removed delisted tickers (BBBY, WISH, GOEV)
     SCAN_UNIVERSE = [
         "GME", "AMC", "KOSS", "BB", "NOK", "PLTR", "SOFI",
         "RIVN", "LCID", "MARA", "RIOT", "COIN", "CVNA", "UPST",

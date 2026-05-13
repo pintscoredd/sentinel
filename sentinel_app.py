@@ -526,12 +526,27 @@ def _load_watchlist():
     return ["SPY","QQQ","NVDA","AAPL","GLD","TLT","BTC-USD"]
 
 def _save_watchlist(wl):
-    """Persist watchlist to a JSON file so changes survive page refreshes."""
+    """Persist watchlist atomically to prevent corruption from concurrent writes."""
     import json as _json
+    import tempfile
+    import os
     _wl_path = pathlib.Path(__file__).parent / ".sentinel_watchlist.json"
     try:
-        with open(_wl_path, "w") as f:
-            _json.dump(wl, f)
+        # Write to temp file in same directory, then atomically rename
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(_wl_path.parent), suffix=".tmp", prefix=".wl_"
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                _json.dump(wl, f)
+            os.replace(tmp_path, str(_wl_path))
+        except Exception:
+            # Clean up temp file on failure
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
     except Exception:
         pass
 
@@ -551,17 +566,12 @@ for k,v in DEFAULTS.items():
     if k not in st.session_state: st.session_state[k]=v
 
 def warm_caches_on_startup(watchlist):
-    """Fire-and-forget background cache warming — NOT cached since it spawns threads.
-    Uses a module-level guard to ensure it only runs once per process.
-
-    Issue #16 fix: Uses ThreadPoolExecutor to parallelize independent
-    cache warming calls instead of running them sequentially."""
+    """Fire-and-forget background cache warming using parallel threads."""
     import threading
     import concurrent.futures
     def _warm():
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-                # All 6 operations are independent — run in parallel
                 futures = [
                     pool.submit(get_vix_full),
                     pool.submit(sector_etfs),
@@ -570,7 +580,6 @@ def warm_caches_on_startup(watchlist):
                     pool.submit(multi_quotes, watchlist),
                     pool.submit(stat_arb_screener),
                 ]
-                # Wait for all to complete, ignore individual failures
                 for f in concurrent.futures.as_completed(futures):
                     try:
                         f.result()
@@ -585,24 +594,14 @@ if "_caches_warmed" not in st.session_state:
     warm_caches_on_startup(st.session_state.watchlist)
     st.session_state._caches_warmed = True
 
-# ── Per-render-cycle data cache ──
-# Avoids duplicate API calls within the same Streamlit rerun.
-# get_vix_full() is called from brief header, F&G, posture, and 0DTE —
-# this ensures it's fetched at most once per render.
-#
-# Issue #1 fix: id(st.session_state) returns the same memory address
-# across reruns (Streamlit reuses the dict object). Use a monotonic
-# counter so the cache is invalidated on every rerun.
-_render_cycle_id = time.monotonic()  # always unique per rerun
+# Per-render-cycle data cache — monotonic counter ensures invalidation each rerun
+_render_cycle_id = time.monotonic()
 if st.session_state.get("_render_id") != _render_cycle_id:
     st.session_state._render_id = _render_cycle_id
     st.session_state._vix_cache = None
     st.session_state._spy_hist_cache = None
 
-# Issue #18 fix: Lock to protect session_state mutations from concurrent
-# @st.fragment executions (alert monitor at 30s, brief header at 60s).
-# Stored in session_state so each Streamlit session gets its own lock,
-# avoiding cross-worker interference when multiple users share a process.
+# Per-session lock for protecting session_state from concurrent @st.fragment writes
 import threading
 if "_session_state_lock" not in st.session_state:
     st.session_state._session_state_lock = threading.Lock()
@@ -612,8 +611,7 @@ def _get_session_lock():
     return st.session_state._session_state_lock
 
 def get_vix_cached():
-    """Return VIX data, fetching at most once per render cycle.
-    Thread-safe: uses per-session lock to prevent concurrent fragment corruption."""
+    """Return VIX data, fetching at most once per render cycle."""
     lock = _get_session_lock()
     with lock:
         if st.session_state._vix_cache is None:
@@ -621,8 +619,7 @@ def get_vix_cached():
         return st.session_state._vix_cache
 
 def get_spy_history_cached():
-    """Return SPY history, fetching at most once per render cycle.
-    Thread-safe: uses per-session lock to prevent concurrent fragment corruption."""
+    """Return SPY history, fetching at most once per render cycle."""
     lock = _get_session_lock()
     with lock:
         if st.session_state._spy_hist_cache is None:
@@ -757,8 +754,7 @@ with st.sidebar:
                 unsafe_allow_html=True)
 
     # ── Alert Fragment (runs in background every 30s) ──
-    # Feature #17: Alert History Logging — persistent, timestamped log file
-    # for audit trails and threshold backtesting.
+    # Alert History Logging
     import logging as _alert_logging
     from logging.handlers import RotatingFileHandler as _RotatingFileHandler
 
@@ -778,14 +774,7 @@ with st.sidebar:
         _alert_logger.addHandler(_alert_fh)
 
     def _log_alert(alert_type, message, threshold=None, actual_value=None):
-        """Log an alert event to sentinel_alerts.log for audit/backtesting.
-
-        Args:
-            alert_type: Category string (e.g. 'VIX', 'PCR', 'TICKER_AAPL')
-            message: Human-readable alert message
-            threshold: The threshold that was exceeded
-            actual_value: The actual value that triggered the alert
-        """
+        """Log an alert event to sentinel_alerts.log for audit/backtesting."""
         extra_info = ""
         if threshold is not None and actual_value is not None:
             extra_info = f" | threshold={threshold} | actual={actual_value}"
@@ -810,7 +799,7 @@ with st.sidebar:
                     try:
                         import requests
                         import logging
-                        # Issue #20: Block non-HTTPS webhooks entirely
+                        # Block non-HTTPS webhooks
                         if not url.startswith("https://"):
                             logging.getLogger("sentinel.app").error(
                                 "Webhook URL rejected: must use HTTPS. "
@@ -832,17 +821,13 @@ with st.sidebar:
                         _send_webhook(_msg)
                         _mark_fired("vix")
                         _alerts_fired.append(_msg)
-                        # Feature #17: Log to persistent alert history
                         _log_alert("VIX", _msg,
                                    threshold=st.session_state.alert_vix_threshold,
                                    actual_value=_v[0])
             except Exception:
                 pass
 
-            # PCR check — Issue #9 fix: Reuse the 0DTE chain data from
-            # st.cache_data rather than fetching a fresh options chain.
-            # The fetch functions already have @st.cache_data(ttl=120)
-            # which prevents redundant API calls.
+            # PCR check
             try:
                 _0c, _ = fetch_0dte_chain("SPY") if bool(_get_secret("ALPACA_API_KEY")) else (None, None)
                 _pcr_val = compute_pcr(_0c) if _0c else None
@@ -856,7 +841,6 @@ with st.sidebar:
                         _send_webhook(_msg)
                         _mark_fired("pcr")
                         _alerts_fired.append(_msg)
-                        # Feature #17: Log to persistent alert history
                         _log_alert("PCR", _msg,
                                    threshold=st.session_state.alert_pcr_threshold,
                                    actual_value=_pcr_val)
@@ -880,7 +864,6 @@ with st.sidebar:
                             _send_webhook(_msg)
                             _mark_fired(_ak)
                             _alerts_fired.append(_msg)
-                            # Feature #17: Log to persistent alert history
                             _log_alert(f"TICKER_{t}", _msg,
                                        threshold=_thresh,
                                        actual_value=_q["price"])
@@ -3715,7 +3698,7 @@ with tabs[4]:
                 'volume × price action. Actual fund flow data from Farside Investors was unavailable.</div>',
                 unsafe_allow_html=True
             )
-        # FIX-13: Clarification caption
+        # Data source disclaimer
         st.markdown(
             '<div style="background:#050505;border-left:3px solid #555;padding:6px 12px;'
             'font-family:monospace;font-size:9px;color:#666;margin-top:4px">'

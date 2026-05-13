@@ -2,11 +2,11 @@
 """SENTINEL — Advanced Static Analysis (AST-based Linter)
 
 Features:
-  1. Undefined variable detection (original)
-  2. Unused variable detection (#9)
-  3. Builtin shadowing detection (#10)
-  4. Type annotation checking (#20)
-  5. CLI with glob support (#11)
+  1. Undefined variable detection
+  2. Unused variable detection
+  3. Builtin shadowing detection
+  4. Type annotation checking
+  5. CLI with glob support
 
 Usage:
   python lint_ast.py                           # Lint default project files
@@ -88,16 +88,13 @@ def check(file_path, *, enable_unused=True, enable_shadow=True, enable_annotatio
             self.errors = []
             self.scopes = [self.defined]
 
-            # Feature #9: Track (name, line, scope_depth, is_import, is_method) for unused detection
             self.assignments = []  # [(name, lineno, scope_depth, is_import, is_method)]
             self.usages = set()    # set of name strings that were read (Load ctx)
             self._in_class_depth = 0  # tracks nesting inside class bodies
 
-            # Feature #10: Track builtin shadows
-            self.shadow_warnings = []  # [(lineno, name)]
+            self.shadow_warnings = []
 
-            # Feature #20: Track annotation references
-            self.annotation_errors = []  # [(lineno, name)]
+            self.annotation_errors = []
             self._in_annotation = False
 
         def _record_def(self, name, lineno, is_import=False, is_method=False):
@@ -106,7 +103,6 @@ def check(file_path, *, enable_unused=True, enable_shadow=True, enable_annotatio
             scope_depth = len(self.scopes) - 1
             self.assignments.append((name, lineno, scope_depth, is_import, is_method))
 
-            # Feature #10: Check for builtin shadowing
             if enable_shadow and name in _DANGEROUS_BUILTINS:
                 self.shadow_warnings.append((lineno, name))
 
@@ -140,7 +136,6 @@ def check(file_path, *, enable_unused=True, enable_shadow=True, enable_annotatio
                 self.visit(node.value)
             if isinstance(node.target, ast.Name):
                 self._record_def(node.target.id, node.lineno)
-            # Feature #20: Visit annotation in annotation context
             if node.annotation:
                 self._visit_annotation(node.annotation)
 
@@ -265,7 +260,7 @@ def check(file_path, *, enable_unused=True, enable_shadow=True, enable_annotatio
             for dec in node.decorator_list:
                 self.visit(dec)
 
-            # Feature #20: Visit return annotation and argument annotations
+            # Visit return and argument annotations
             if enable_annotations:
                 if node.returns:
                     self._visit_annotation(node.returns)
@@ -306,7 +301,6 @@ def check(file_path, *, enable_unused=True, enable_shadow=True, enable_annotatio
             elif isinstance(node.ctx, ast.Store):
                 self.scopes[-1].add(node.id)
 
-        # ── Feature #20: Type annotation visitor ──
         def _visit_annotation(self, node):
             """Walk a type annotation subtree, checking that all Name references resolve."""
             if isinstance(node, ast.Name):
@@ -352,7 +346,7 @@ def check(file_path, *, enable_unused=True, enable_shadow=True, enable_annotatio
         for line, name in sorted(set(checker.errors)):
             results["undefined"].append((line, name, "possibly undefined"))
 
-    # ── Feature #9: Unused variable detection ──
+    # Unused variable detection
     if enable_unused:
         used_names = checker.usages
         for name, lineno, scope_depth, is_import, is_method in checker.assignments:
@@ -375,12 +369,12 @@ def check(file_path, *, enable_unused=True, enable_shadow=True, enable_annotatio
             if name not in used_names:
                 results["unused"].append((lineno, name, "assigned but never used"))
 
-    # ── Feature #10: Builtin shadowing warnings ──
+    # Builtin shadowing warnings
     if enable_shadow and checker.shadow_warnings:
         for line, name in sorted(set(checker.shadow_warnings)):
             results["shadow"].append((line, name, f"shadows builtin '{name}'"))
 
-    # ── Feature #20: Annotation errors ──
+    # Annotation errors
     if enable_annotations and checker.annotation_errors:
         for line, name in sorted(set(checker.annotation_errors)):
             # Don't double-report if already in undefined
