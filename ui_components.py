@@ -1530,7 +1530,8 @@ def render_geo_tab():
         "vessels": _geo_vessels,
         "infra":   _geo_infra,
     }, default=str, ensure_ascii=True)
-    # Base64-encode to prevent </script> breakout (only [A-Za-z0-9+/=] in output)\n    _sentinel_b64 = _b64.b64encode(_sentinel_data_json.encode('utf-8')).decode('ascii')
+    # Base64-encode to prevent </script> breakout
+    _sentinel_b64 = _b64.b64encode(_sentinel_data_json.encode('utf-8')).decode('ascii')
     _inject_script = (
         f'<script>window.__SENTINEL_DATA__ = JSON.parse(atob("{_sentinel_b64}"));</script>\n'
     )
