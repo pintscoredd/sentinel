@@ -1532,8 +1532,21 @@ def render_geo_tab():
     }, default=str, ensure_ascii=True)
     # Base64-encode to prevent </script> breakout
     _sentinel_b64 = _b64.b64encode(_sentinel_data_json.encode('utf-8')).decode('ascii')
+
+    # Inject Cesium Ion token if available (from secrets.toml or sidebar override)
+    _cesium_token = ""
+    try:
+        _cesium_token = st.session_state.cesium_ion_token.get_secret_value()
+    except Exception:
+        pass
+    _cesium_inject = ""
+    if _cesium_token:
+        # Base64-encode the token to avoid XSS via malicious token values
+        _cesium_b64 = _b64.b64encode(_cesium_token.encode('utf-8')).decode('ascii')
+        _cesium_inject = f'window.__CESIUM_ION_TOKEN__ = atob("{_cesium_b64}");'
+
     _inject_script = (
-        f'<script>window.__SENTINEL_DATA__ = JSON.parse(atob("{_sentinel_b64}"));</script>\n'
+        f'<script>{_cesium_inject}window.__SENTINEL_DATA__ = JSON.parse(atob("{_sentinel_b64}"));</script>\n'
     )
 
     # Read globe.html from disk and prepend injected data

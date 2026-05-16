@@ -556,6 +556,7 @@ DEFAULTS = {
     "finnhub_key": _get_secret("FINNHUB_API_KEY"),
     "newsapi_key": _get_secret("NEWSAPI_KEY"),
     "cftc_key": _get_secret("CFTC_API_KEY"),
+    "cesium_ion_token": _get_secret("CESIUM_ION_TOKEN"),
     "chat_history":[],
     "watchlist": _load_watchlist(),
     "macro_theses":"", "geo_watch":"",
@@ -649,6 +650,7 @@ with st.sidebar:
         ("Finnhub",       bool(st.session_state.finnhub_key.get_secret_value()), "FINNHUB_API_KEY"),
         ("NewsAPI",       bool(st.session_state.newsapi_key.get_secret_value()), "NEWSAPI_KEY"),
         ("Gemini AI",     bool(st.session_state.gemini_key.get_secret_value()), "GEMINI_API_KEY"),
+        ("Cesium Globe",  bool(st.session_state.cesium_ion_token.get_secret_value()), "CESIUM_ION_TOKEN"),
         ("AISstream",     bool(_get_secret("AISSTREAM_API_KEY")), "AISSTREAM_API_KEY"),
         ("Marinesia",     bool(_get_secret("MARINESIA_API_KEY")), "MARINESIA_API_KEY"),
     ]
@@ -666,10 +668,12 @@ with st.sidebar:
         _fred_input = st.text_input("FRED API Key", value="", type="password", placeholder="paste key to override…")
         _finnhub_input = st.text_input("Finnhub Key", value="", type="password", placeholder="paste key to override…")
         _cftc_input = st.text_input("CFTC API Key", value="", type="password", placeholder="optional — CSV is free")
+        _cesium_input = st.text_input("Cesium Ion Token", value="", type="password", placeholder="ion.cesium.com/tokens")
         if st.form_submit_button("Update Keys"):
             if _fred_input: st.session_state.fred_key = SecretStr(_fred_input.strip())
             if _finnhub_input: st.session_state.finnhub_key = SecretStr(_finnhub_input.strip())
             if _cftc_input: st.session_state.cftc_key = SecretStr(_cftc_input.strip())
+            if _cesium_input: st.session_state.cesium_ion_token = SecretStr(_cesium_input.strip())
             st.rerun()
 
     st.markdown('<hr style="border-top:1px solid #222;margin:8px 0">', unsafe_allow_html=True)

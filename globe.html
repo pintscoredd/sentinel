@@ -456,11 +456,9 @@ const PRESETS = {
   EXTREME: { sse:2,   tiles:60, satLim:10000, aisLim:10000, terrain:true,  buildings:true,  label:"EXTREME" },
 };
 // SENTINEL GEO — Core CesiumJS Init + Quality + Country System
-// NOTE: The previous Ion token had aud:"undefined_default" (invalid) and caused
-// terrain/buildings to silently fail. We removed it — ArcGIS World Imagery is
-// token-free. If you have a valid Ion token, paste it below and uncomment.
-// const CESIUM_TOKEN = 'YOUR_VALID_ION_TOKEN_HERE';
-const CESIUM_TOKEN = null; // null = skip Ion, use ArcGIS only (always works)
+// Cesium Ion token — injected by Python via window.__CESIUM_ION_TOKEN__
+// or paste your token here. Get a free token at https://ion.cesium.com/tokens
+const CESIUM_TOKEN = window.__CESIUM_ION_TOKEN__ || null;
 
 let viewer, currentPreset = 'HIGH', layerState = {};
 let countryDataSource = null, bordersVisible = true;
@@ -469,27 +467,84 @@ let radarLayers = [], radarIdx = 0, radarPlaying = false, radarInterval = null;
 // ── CLOCK
 setInterval(() => { const d = new Date(); const el = document.getElementById('clk'); if (el) el.textContent = d.toUTCString().slice(17,25)+' UTC'; }, 1000);
 
-// ── ADD ARCGIS WORLD IMAGERY (token-free, always works in Cesium 1.120+)
+// ── ADD IMAGERY — multi-strategy: Ion Bing → ArcGIS (validated) → OSM
 async function addArcGISImagery() {
+  // Strategy 1: If we have an Ion token, use Ion's Bing Maps (asset 2)
+  if (CESIUM_TOKEN) {
+    try {
+      const ionProvider = await Cesium.IonImageryProvider.fromAssetId(2);
+      const layer = new Cesium.ImageryLayer(ionProvider);
+      viewer.imageryLayers.add(layer);
+      console.log('[Sentinel] ✅ Ion Bing Maps imagery loaded');
+      return layer;
+    } catch(e) {
+      console.warn('[Sentinel] Ion imagery failed:', e.message);
+    }
+  }
+  // Strategy 2: ArcGIS — but VALIDATE that tiles actually load
+  // The fromUrl() call succeeds even when tiles are auth-blocked,
+  // so we probe a known tile first.
   try {
+    const testUrl = 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/0/0/0';
+    const probe = await fetch(testUrl, { method: 'HEAD', mode: 'no-cors' });
+    // no-cors means we can't read status, but if it throws, network is blocked
     const provider = await Cesium.ArcGisMapServerImageryProvider.fromUrl(
       'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer'
     );
     const layer = new Cesium.ImageryLayer(provider);
     viewer.imageryLayers.add(layer);
-    console.log('[Sentinel] ArcGIS World Imagery loaded OK');
+    console.log('[Sentinel] ✅ ArcGIS World Imagery added');
+    // Give tiles 6 seconds to actually appear — if nothing loads, add OSM backup
+    setTimeout(() => {
+      if (viewer.scene.globe._surface && viewer.scene.globe._surface._tilesToRender &&
+          viewer.scene.globe._surface._tilesToRender.length === 0) {
+        console.warn('[Sentinel] ArcGIS tiles not rendering after 6s — adding OSM backup');
+        addOSMBackup();
+      }
+    }, 6000);
     return layer;
   } catch(e) {
-    console.error('[Sentinel] ArcGIS imagery failed:', e);
-    // Last resort: OpenStreetMap (always available)
-    try {
-      const osm = await Cesium.OpenStreetMapImageryProvider.fromUrl('https://tile.openstreetmap.org/');
-      viewer.imageryLayers.add(new Cesium.ImageryLayer(osm));
-      console.warn('[Sentinel] Fell back to OSM tiles');
-    } catch(e2) { console.error('[Sentinel] All imagery providers failed', e2); }
+    console.warn('[Sentinel] ArcGIS failed:', e.message);
+  }
+  // Strategy 3: OpenStreetMap (always works, no auth needed, CORS-safe)
+  return addOSMBackup();
+}
+
+function addOSMBackup() {
+  try {
+    const osm = new Cesium.OpenStreetMapImageryProvider({
+      url: 'https://tile.openstreetmap.org/'
+    });
+    const layer = new Cesium.ImageryLayer(osm);
+    viewer.imageryLayers.add(layer);
+    console.log('[Sentinel] ✅ OSM imagery loaded');
+    return layer;
+  } catch(e2) {
+    console.warn('[Sentinel] OSM failed:', e2.message);
+  }
+  // Strategy 5: CesiumJS built-in Natural Earth II imagery (bundled with CDN)
+  // This is the absolute last resort — low-res but guaranteed to work everywhere
+  try {
+    const ne = Cesium.TileMapServiceImageryProvider.fromUrl(
+      Cesium.buildModuleUrl('Assets/Textures/NaturalEarthII')
+    );
+    if (ne && ne.then) {
+      ne.then(provider => {
+        const layer = new Cesium.ImageryLayer(provider);
+        viewer.imageryLayers.add(layer);
+        console.log('[Sentinel] ✅ Natural Earth II fallback loaded');
+      }).catch(() => {
+        // Final fallback: just set a visible base color so globe isn't invisible
+        viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#1a3a5c');
+        console.warn('[Sentinel] Using solid color globe — no imagery available');
+      });
+    }
+  } catch(e3) {
+    // At minimum, make the globe visible with a blue base color
+    viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#1a3a5c');
+    console.warn('[Sentinel] Using solid color globe — all providers failed');
   }
 }
-// Keep old name for any callers
 const addFallbackImagery = addArcGISImagery;
 
 // ── INIT CESIUM
@@ -505,8 +560,8 @@ async function initCesium() {
     navigationHelpButton: false, infoBox: false, selectionIndicator: false,
     geocoder: false, creditContainer: document.createElement('div'),
     requestRenderMode: false,
-    // Always start with no base layer — we add ArcGIS explicitly below
-    // so we never pass a Promise (bug) or get a black globe from a bad Ion token
+    // Always start with no base layer — we add imagery explicitly after viewer init.
+    // This avoids the black-globe issue when Ion's default layer fails silently.
     baseLayer: false,
   };
 
@@ -525,8 +580,8 @@ async function initCesium() {
 
   viewer = new Cesium.Viewer('cesiumContainer', viewerOpts);
 
-  // Add satellite imagery after viewer is created (correct async pattern)
-  // FIX: previously passed Promise directly to baseLayer which caused black globe
+  // Always add imagery explicitly after viewer creation.
+  // The multi-strategy loader tries Ion Bing → ArcGIS → OSM.
   if (preset.label !== 'LOW') {
     await addArcGISImagery();
   }

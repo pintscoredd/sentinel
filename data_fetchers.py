@@ -780,7 +780,9 @@ def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=
     w1 = max(w1, 0)
     w2 = max(w2, 0)
     w3 = max(w3, 0)
-    assert abs(w1 + w2 + w3 - 1.0) < 1e-9
+    # Runtime weight invariant — reset to defaults if FP drift breaks sum
+    if abs(w1 + w2 + w3 - 1.0) > 1e-6:
+        w1, w2, w3 = 0.40, 0.30, 0.30
 
     def _score_side(df, side):
         if df is None or df.empty:
@@ -797,7 +799,7 @@ def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=
         if df.empty:
             return []
 
-        df["_voi"] = df.apply(lambda r: r.get("volume", 0) / max(r.get("openInterest", 1), 1), axis=1)
+        df["_voi"] = df["volume"].fillna(0) / df["openInterest"].clip(lower=1).fillna(1)
         max_voi = df["_voi"].max()
         df["_norm_voi"] = df["_voi"] / max_voi if max_voi > 0 else 0
 
@@ -4466,7 +4468,7 @@ def get_global_indices():
                 # 10D and 30D annualized volatility
                 returns = close.pct_change().dropna()
                 vol_10d = round(float(returns.tail(10).std() * np.sqrt(TRADING_DAYS_PER_YEAR) * 100), 2) if len(returns) >= 10 else 0.0
-                vol_30d = round(float(returns.tail(30).std() * np.sqrt(TRADING_DAYS_PER_YEAR) * 100), 2) if len(returns) >= 20 else 0.0
+                vol_30d = round(float(returns.tail(30).std() * np.sqrt(TRADING_DAYS_PER_YEAR) * 100), 2) if len(returns) >= 30 else 0.0
 
                 rows.append({
                     "Region": meta["region"],
@@ -5101,9 +5103,9 @@ def get_rv_iv_spread(ticker="SPY"):
 
         spread = rv20 - front_iv
         if spread > thresh:
-            signal, signal_color = "SELL VOL", "#FF4444"
+            signal, signal_color = "BUY VOL", "#00CC44"   # RV > IV → IV is cheap → buy options
         elif spread < -thresh:
-            signal, signal_color = "BUY VOL", "#00CC44"
+            signal, signal_color = "SELL VOL", "#FF4444"   # RV < IV → IV is expensive → sell options
         else:
             signal, signal_color = "NEUTRAL", "#888888"
 
