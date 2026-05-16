@@ -1474,8 +1474,7 @@ def render_geo_tab():
     Sections:
       1. 3D Globe (globe.html — military air / satellites / conflict events / infra)
       2. Live Network Selector (toggle between news networks)
-      3. Live Webcam Grid (toggle by region)
-      4. GDELT theater intel feed + commodity/currency impact radar
+      3. GDELT theater intel feed + commodity/currency impact radar
     """
     import streamlit.components.v1 as _components
     import pathlib as _pathlib
@@ -1487,7 +1486,7 @@ def render_geo_tab():
     )
     st.markdown(
         '<div style="color:#555;font-family:monospace;font-size:10px;margin-bottom:6px">'
-        'Refreshes on tab visit · Data cached 5 min · Toggle networks and webcam regions below'
+        'Refreshes on tab visit · Data cached 5 min · Toggle networks below'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -1584,37 +1583,6 @@ def render_geo_tab():
     _components.html(_geo_network_embed_html(net_obj), height=1000, scrolling=True)
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-    # ── 3. Live Webcam Grid — Toggle by Region ────────────────────────────────
-    st.markdown(
-        '<div class="bb-ph">🌍 LIVE GLOBAL CAMS</div>',
-        unsafe_allow_html=True,
-    )
-
-    # Build unique ordered region list
-    seen_regions = []
-    for cam in GEO_WEBCAM_FEEDS:
-        r = cam.get("region", "Other")
-        if r not in seen_regions:
-            seen_regions.append(r)
-
-    selected_region = st.radio(
-        "Select Region",
-        seen_regions,
-        horizontal=True,
-        key="geo_webcam_region",
-        label_visibility="collapsed",
-    )
-
-    region_cams = [cam for cam in GEO_WEBCAM_FEEDS if cam.get("region") == selected_region]
-    if region_cams:
-        _components.html(_geo_webcam_region_html(region_cams), height=780, scrolling=True)
-    else:
-        st.markdown(
-            '<div style="color:#555;font-family:monospace;font-size:11px">'
-            'No webcams available for this region.</div>',
-            unsafe_allow_html=True,
-        )
 
     st.markdown(
         '<div style="margin:4px 0;border-top:1px solid #111"></div>',

@@ -908,7 +908,7 @@ with tabs[0]:
                     multi_quotes, get_vix_full, get_futures,
                     yahoo_quote, sector_etfs, calc_stock_fear_greed,
                     gdelt_news, polymarket_events,
-                    get_spy_history, get_heatmap_data,
+                    get_spy_history,
                 ]:
                     try: _cache_fn.clear()
                     except Exception: pass
@@ -2308,71 +2308,6 @@ with tabs[1]:
         )
         st.plotly_chart(fig_skew, use_container_width=True)
 
-    st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-
-    st.markdown('<div class="bb-ph">🗺 S&P 500 MARKET HEATMAP — FINVIZ STYLE</div>', unsafe_allow_html=True)
-    with st.status("Building heatmap (scanning ~120 stocks)…", expanded=False) as _hm_status:
-        st.write("Downloading sector stock data…")
-        hm_data = get_heatmap_data()
-        _hm_status.update(label="Heatmap ready", state="complete", expanded=False)
-    if hm_data:
-        hm_df = pd.DataFrame(hm_data)
-        hm_df["pct_capped"] = hm_df["pct"].clip(-5, 5)
-        hm_df["label"] = hm_df.apply(lambda r: f"{r['ticker']}<br>${r['price']:.2f}<br>{r['pct']:+.2f}%", axis=1)
-
-        sectors = hm_df["sector"].unique().tolist()
-        sec_rows = pd.DataFrame({
-            "label": sectors, "sector": [""] * len(sectors),
-            "pct_capped": [0]*len(sectors), "values": [0]*len(sectors),
-            "ticker": sectors, "price": [0]*len(sectors),
-            "pct": [0]*len(sectors), "change": [0]*len(sectors),
-        })
-        stock_rows = hm_df.copy()
-        stock_rows["values"] = stock_rows["market_cap"].clip(lower=1e9)
-
-        all_labels    = list(sec_rows["label"]) + list(stock_rows["label"])
-        all_parents   = list(sec_rows["sector"]) + list(stock_rows["sector"])
-        sec_rows["values"] = stock_rows.groupby("sector")["values"].sum().reindex(sectors).fillna(1e9).values
-        all_values    = list(sec_rows["values"]) + list(stock_rows["values"])
-        all_colors    = [0.0]*len(sec_rows) + list(stock_rows["pct_capped"])
-        all_custom    = [[r, 0, 0, 0, r] for r in sectors] + list(stock_rows[["ticker","price","pct","change","sector"]].values.tolist())
-
-        fig_hm = go.Figure(go.Treemap(
-            labels=all_labels, parents=all_parents, values=all_values,
-            customdata=all_custom,
-            hovertemplate="<b>%{customdata[0]}</b><br>Price: $%{customdata[1]:.2f}<br>Change: %{customdata[2]:+.2f}%<br>$Change: %{customdata[3]:+.2f}<extra></extra>",
-            marker=dict(
-                colors=all_colors,
-                colorscale=[
-                    [0.0,  "#FF4444"],
-                    [0.46, "#441111"],
-                    [0.49, "#111111"],
-                    [0.51, "#111111"],
-                    [0.54, "#114411"],
-                    [1.0,  "#00CC44"],
-                ],
-                cmid=0, cmin=-5, cmax=5,
-                showscale=True,
-                colorbar=dict(
-                    title=dict(text="% CHG", font=dict(color="#FF6600",size=10)),
-                    tickfont=dict(color="#888",size=9),
-                    thickness=10, len=0.6, bgcolor="#050505", bordercolor="#333",
-                ),
-                line=dict(width=1, color="#1a1a1a"),
-            ),
-            textfont=dict(color="#FFFFFF", size=11),
-            tiling=dict(squarifyratio=1.618),
-            pathbar=dict(visible=False),
-        ))
-        fig_hm.update_layout(
-            paper_bgcolor="#000000", plot_bgcolor="#000000",
-            font=dict(color="#FF8C00", family="IBM Plex Mono"),
-            height=580, margin=dict(l=0,r=0,t=10,b=0),
-        )
-        st.plotly_chart(fig_hm, use_container_width=True)
-    else:
-        st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Heatmap data loading…</p>', unsafe_allow_html=True)
-
     if st.session_state.finnhub_key.get_secret_value():
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
         st.markdown('<div class="bb-ph">📰 MARKET NEWS — FINNHUB LIVE</div>', unsafe_allow_html=True)
@@ -3215,69 +3150,84 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">DXY data unavailable</p>', unsafe_allow_html=True)
 
         # ════════════════════════════════════════════════════════════════════
-        # SOVEREIGN 10Y BOND YIELDS BY COUNTRY
+        # US TREASURY RATES + GLOBAL SOVEREIGN 10Y YIELDS
         # ════════════════════════════════════════════════════════════════════
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-        _sov_left, _sov_right = st.columns([1, 1])
+        st.markdown('<div class="bb-ph">🇺🇸 US TREASURY RATES</div>', unsafe_allow_html=True)
 
-        with _sov_left:
-            st.markdown('<div class="bb-ph">🏛️ GLOBAL SOVEREIGN 10Y YIELDS — HIGHEST FIRST</div>', unsafe_allow_html=True)
-            with st.spinner("Loading sovereign yields…"):
-                _sov_yields = get_sovereign_10y_yields()
-            if _sov_yields:
-                # Header
-                st.markdown(
-                    '<div style="display:grid;grid-template-columns:30px 1fr 80px 70px;gap:8px;'
-                    'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
-                    'font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
-                    '<span></span><span>COUNTRY</span><span>YIELD</span><span>CHG</span></div>',
-                    unsafe_allow_html=True)
-                for sy in _sov_yields:
-                    _yld_c = "#FF4444" if sy["yield_pct"] > 5.0 else "#FF8C00" if sy["yield_pct"] > 3.5 else "#FFCC00" if sy["yield_pct"] > 2.0 else "#00CC44"
-                    _chg_c = "#00CC44" if sy["change"] <= 0 else "#FF4444"
-                    _chg_sign = "+" if sy["change"] > 0 else ""
-                    st.markdown(
-                        f'<div style="display:grid;grid-template-columns:30px 1fr 80px 70px;gap:8px;'
-                        f'padding:5px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:12px">'
-                        f'<span style="font-size:16px">{sy["flag"]}</span>'
-                        f'<span style="color:#FFF;font-weight:600">{sy["country"]}</span>'
-                        f'<span style="color:{_yld_c};font-weight:700">{sy["yield_pct"]:.3f}%</span>'
-                        f'<span style="color:{_chg_c}">{_chg_sign}{sy["change"]:.3f}</span></div>',
-                        unsafe_allow_html=True)
-            else:
-                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Sovereign yield data loading…</p>', unsafe_allow_html=True)
+        _us_10y_q = yahoo_quote("^TNX")
+        _us_2y_q = yahoo_quote("2YY=F")
+        _us_30y_q = yahoo_quote("^TYX")
 
-        with _sov_right:
-            st.markdown('<div class="bb-ph">⚠️ SOVEREIGN CREDIT RISK — ETF PROXY</div>', unsafe_allow_html=True)
-            with st.spinner("Loading sovereign CDS…"):
-                _sov_cds = get_sovereign_cds_proxy()
-            if _sov_cds:
-                # Header
-                st.markdown(
-                    '<div style="display:grid;grid-template-columns:30px 1fr 70px 70px 80px;gap:8px;'
-                    'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
-                    'font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
-                    '<span></span><span>COUNTRY/ETF</span><span>PRICE</span><span>%CHG</span><span>RISK</span></div>',
-                    unsafe_allow_html=True)
-                for sc in _sov_cds:
-                    _pct_c = "#00CC44" if sc["pct"] >= 0 else "#FF4444"
-                    _pct_sign = "+" if sc["pct"] >= 0 else ""
+        _us_bonds = []
+        if _us_10y_q:
+            _us_bonds.append(("10Y YIELD", _us_10y_q))
+        if _us_2y_q:
+            _us_bonds.append(("2Y YIELD", _us_2y_q))
+        if _us_30y_q:
+            _us_bonds.append(("30Y YIELD", _us_30y_q))
+
+        if _us_bonds:
+            _us_cols = st.columns(len(_us_bonds))
+            for _uc, (_ulbl, _uq) in zip(_us_cols, _us_bonds):
+                _uy_c = "#FF4444" if _uq["pct"] > 0 else "#00CC44"
+                _uy_sign = "+" if _uq["pct"] >= 0 else ""
+                with _uc:
                     st.markdown(
-                        f'<div style="display:grid;grid-template-columns:30px 1fr 70px 70px 80px;gap:8px;'
-                        f'padding:5px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px;'
-                        f'border-left:3px solid {sc["risk_color"]}">'
-                        f'<span style="font-size:14px">{sc["flag"]}</span>'
-                        f'<span style="color:#CCC;font-weight:600">{sc["label"]}</span>'
-                        f'<span style="color:#888">${sc["price"]:.2f}</span>'
-                        f'<span style="color:{_pct_c};font-weight:600">{_pct_sign}{sc["pct"]:.2f}%</span>'
-                        f'<span style="color:{sc["risk_color"]};font-weight:700;font-size:9px">{sc["risk_signal"]}</span></div>',
+                        f'<div style="background:#0D0D0D;border:1px solid #222;border-top:2px solid #FF6600;'
+                        f'padding:14px;font-family:monospace;text-align:center">'
+                        f'<div style="color:#FF6600;font-size:10px;letter-spacing:1px">{_ulbl}</div>'
+                        f'<div style="color:#FFF;font-size:28px;font-weight:700;margin-top:4px">{_uq["price"]:.3f}%</div>'
+                        f'<div style="color:{_uy_c};font-size:14px;font-weight:600;margin-top:2px">'
+                        f'{_uy_sign}{_uq["pct"]:.2f}% ({_uy_sign}{_uq["change"]:.3f})</div></div>',
                         unsafe_allow_html=True)
+
+            # 10Y-2Y spread (recession indicator)
+            if _us_10y_q and _us_2y_q:
+                _spread = _us_10y_q["price"] - _us_2y_q["price"]
+                _inv = _spread < 0
+                _sp_c = "#FF4444" if _inv else "#00CC44"
+                _sp_lbl = "INVERTED ⚠️" if _inv else ("FLAT" if abs(_spread) < 0.10 else "NORMAL ✅")
                 st.markdown(
-                    '<div style="color:#444;font-size:8px;font-family:monospace;margin-top:4px">'
-                    'Proxy: ETF performance as CDS proxy. Negative returns signal higher sovereign stress. '
-                    'Real CDS spreads require Bloomberg terminal.</div>', unsafe_allow_html=True)
-            else:
-                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Sovereign CDS proxy data loading…</p>', unsafe_allow_html=True)
+                    f'<div style="background:#050505;border:1px solid #1A1A1A;border-left:3px solid {_sp_c};'
+                    f'padding:10px 14px;margin-top:6px;font-family:monospace;font-size:12px;'
+                    f'display:flex;justify-content:space-between;align-items:center">'
+                    f'<span style="color:#888">10Y – 2Y SPREAD (Recession Signal)</span>'
+                    f'<span style="color:{_sp_c};font-weight:700;font-size:16px">'
+                    f'{_spread:+.3f}% — {_sp_lbl}</span></div>',
+                    unsafe_allow_html=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">US Treasury data loading…</p>', unsafe_allow_html=True)
+
+        # ── Global Sovereign 10Y Yields ──────────────────────────────
+        st.markdown('<div class="bb-ph" style="margin-top:10px">🏛️ GLOBAL SOVEREIGN 10Y YIELDS — HIGHEST FIRST</div>', unsafe_allow_html=True)
+        with st.spinner("Loading sovereign yields…"):
+            _sov_yields = get_sovereign_10y_yields()
+        if _sov_yields:
+            # Header
+            st.markdown(
+                '<div style="display:grid;grid-template-columns:30px 1fr 80px 70px;gap:8px;'
+                'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
+                'font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
+                '<span></span><span>COUNTRY</span><span>YIELD</span><span>CHG</span></div>',
+                unsafe_allow_html=True)
+            for sy in _sov_yields:
+                _yld_c = "#FF4444" if sy["yield_pct"] > 5.0 else "#FF8C00" if sy["yield_pct"] > 3.5 else "#FFCC00" if sy["yield_pct"] > 2.0 else "#00CC44"
+                _chg_c = "#00CC44" if sy["change"] <= 0 else "#FF4444"
+                _chg_sign = "+" if sy["change"] > 0 else ""
+                # Highlight US row
+                _row_bg = "background:rgba(255,102,0,0.06);" if sy["country"] == "United States" else ""
+                st.markdown(
+                    f'<div style="display:grid;grid-template-columns:30px 1fr 80px 70px;gap:8px;'
+                    f'padding:5px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:12px;{_row_bg}">'
+                    f'<span style="font-size:16px">{sy["flag"]}</span>'
+                    f'<span style="color:#FFF;font-weight:600">{sy["country"]}</span>'
+                    f'<span style="color:{_yld_c};font-weight:700">{sy["yield_pct"]:.3f}%</span>'
+                    f'<span style="color:{_chg_c}">{_chg_sign}{sy["change"]:.3f}</span></div>',
+                    unsafe_allow_html=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Sovereign yield data loading…</p>', unsafe_allow_html=True)
+
 
         # ════════════════════════════════════════════════════════════════════
         # CENTRAL BANK RATES + YIELD CURVE INVERSIONS
@@ -4144,650 +4094,128 @@ with tabs[7]:
 </div>""", unsafe_allow_html=True)
 
     with ec2:
-        st.markdown('<div class="bb-ph">📈 QUICK EARNINGS CHART + MATRIX</div>', unsafe_allow_html=True)
-        earn_tkr = st.text_input("Ticker for chart & matrix", value=st.session_state.master_ticker or "", placeholder="NVDA, AAPL…", key="ec",
-                                  help="Enter a ticker to view earnings history, revenue matrix, expected move, and AI guidance.")
+        st.markdown('<div class="bb-ph">🏦 INSTITUTIONAL FLOW SCANNER</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div style="color:#555;font-family:monospace;font-size:10px;margin-bottom:8px">'
+            'Smart money conviction buys · Dark pool activity · Insider transactions</div>',
+            unsafe_allow_html=True)
 
-        # ── OPTIONS-IMPLIED EXPECTED MOVE (Feature 10) ──
-        if earn_tkr:
-            _em_tkr = earn_tkr.upper().strip()
-            with st.spinner(f"Computing expected move for {_em_tkr}…"):
-                _em_result = get_expected_move(_em_tkr)
-            if _em_result:
-                _em_range_color = "#FF6600"
+        # ── Smart Money Conviction Buys ──────────────────────────────
+        st.markdown('<div class="bb-ph" style="margin-top:4px">💎 SMART MONEY CONVICTION BUYS</div>', unsafe_allow_html=True)
+        with st.spinner("Scanning institutional flow…"):
+            _sm_buys = smart_money_conviction_buys()
+        if _sm_buys:
+            # Header row
+            st.markdown(
+                '<div style="display:grid;grid-template-columns:80px 1fr 80px 70px 70px;gap:8px;'
+                'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
+                'font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
+                '<span>TICKER</span><span>SIGNAL</span><span>PRICE</span><span>%CHG</span><span>VOL RATIO</span></div>',
+                unsafe_allow_html=True)
+            for _sm in _sm_buys[:12]:
+                _sm_pct = _sm.get("pct", 0)
+                _sm_c = "#00CC44" if _sm_pct >= 0 else "#FF4444"
+                _sm_sign = "+" if _sm_pct >= 0 else ""
+                _sm_sig_c = "#00CC44" if "BUY" in _sm.get("signal", "").upper() else "#FF8C00"
+                _sm_vr = _sm.get("vol_ratio", 0)
+                _sm_vr_c = "#FF6600" if _sm_vr > 2.0 else "#888"
                 st.markdown(
-                    f'<div style="background:#0A0500;border:1px solid #FF6600;border-left:4px solid #FF6600;'
-                    f'padding:12px 16px;margin-bottom:10px;font-family:monospace">'
-                    f'<div style="color:#FF6600;font-size:10px;letter-spacing:1px;margin-bottom:6px">'
-                    f'OPTIONS-IMPLIED EXPECTED MOVE — {_em_result["expiry"]} ({_em_result["dte"]}DTE)</div>'
-                    f'<div style="display:flex;justify-content:space-between;align-items:center">'
-                    f'<div style="text-align:center">'
-                    f'<div style="color:#FF4444;font-size:18px;font-weight:700">${_em_result["range_low"]:,.2f}</div>'
-                    f'<div style="color:#555;font-size:8px">LOW</div></div>'
-                    f'<div style="text-align:center">'
-                    f'<div style="color:#FFF;font-size:24px;font-weight:900">${_em_result["price"]:,.2f}</div>'
-                    f'<div style="color:#FF6600;font-size:12px;font-weight:700">±${_em_result["expected_move_dollars"]:,.2f} ({_em_result["expected_move_pct"]:+.2f}%)</div></div>'
-                    f'<div style="text-align:center">'
-                    f'<div style="color:#00CC44;font-size:18px;font-weight:700">${_em_result["range_high"]:,.2f}</div>'
-                    f'<div style="color:#555;font-size:8px">HIGH</div></div>'
-                    f'</div>'
-                    f'<div style="margin-top:8px;display:flex;gap:16px;font-size:9px;color:#888">'
-                    f'<span>Call: ${_em_result["call_premium"]:.2f}</span>'
-                    f'<span>Put: ${_em_result["put_premium"]:.2f}</span>'
-                    f'<span>ATM Strike: ${_em_result["atm_strike"]:,.2f}</span></div>'
-                    f'</div>', unsafe_allow_html=True)
-        if earn_tkr:
-            et = earn_tkr.upper().strip()
-            with st.spinner("Detecting exchange…"):
-                tv_sym_earn = get_ticker_exchange(et)
-            components.html(tv_chart(tv_sym_earn,320), height=325, scrolling=False)
+                    f'<div style="display:grid;grid-template-columns:80px 1fr 80px 70px 70px;gap:8px;'
+                    f'padding:5px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px">'
+                    f'<span style="color:#FF6600;font-weight:700">{_esc(_sm.get("ticker", ""))}</span>'
+                    f'<span style="color:{_sm_sig_c};font-size:10px">{_esc(_sm.get("signal", "—"))}</span>'
+                    f'<span style="color:#FFF;font-weight:600">${_sm.get("price", 0):.2f}</span>'
+                    f'<span style="color:{_sm_c};font-weight:600">{_sm_sign}{_sm_pct:.2f}%</span>'
+                    f'<span style="color:{_sm_vr_c};font-weight:600">{_sm_vr:.1f}x</span></div>',
+                    unsafe_allow_html=True)
+        else:
+            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No conviction buy signals detected. Scanning runs on high-volume movers.</p>', unsafe_allow_html=True)
+
+        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+        # ── Dark Pool / FINRA Short Volume ──────────────────────────
+        st.markdown('<div class="bb-ph">🌑 DARK POOL SHORT VOLUME</div>', unsafe_allow_html=True)
+        _dp_tickers = st.session_state.watchlist[:5] if st.session_state.watchlist else ["SPY", "QQQ", "NVDA", "AAPL", "TSLA"]
+        st.markdown(
+            '<div style="display:grid;grid-template-columns:80px 1fr 80px 100px;gap:8px;'
+            'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
+            'font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
+            '<span>TICKER</span><span>SHORT VOL</span><span>TOTAL VOL</span><span>SHORT %</span></div>',
+            unsafe_allow_html=True)
+        for _dp_tkr in _dp_tickers:
             try:
-                with st.spinner("Loading financials…"):
-                    fin_data = get_full_financials(et)
-                if fin_data:
-                    st.markdown('<div class="bb-ph" style="margin-top:10px">📊 QUARTERLY FINANCIALS</div>', unsafe_allow_html=True)
-
-                    # Header row
-                    quarters_sorted = sorted(fin_data.keys(), reverse=True)
-                    hdr_str = "".join(f'<span style="color:#FF6600;font-weight:700;text-align:right">{q}</span>' for q in quarters_sorted)
+                _dp = get_finra_short_volume(_dp_tkr)
+                if _dp and _dp.get("short_volume"):
+                    _dp_short_pct = (_dp["short_volume"] / _dp["total_volume"] * 100) if _dp.get("total_volume", 0) > 0 else 0
+                    _dp_c = "#FF4444" if _dp_short_pct > 50 else "#FF8C00" if _dp_short_pct > 40 else "#00CC44"
+                    _dp_sv = f"{_dp['short_volume']/1e6:.1f}M" if _dp['short_volume'] > 1e6 else f"{_dp['short_volume']/1e3:.0f}K"
+                    _dp_tv = f"{_dp['total_volume']/1e6:.1f}M" if _dp['total_volume'] > 1e6 else f"{_dp['total_volume']/1e3:.0f}K"
                     st.markdown(
-                        f'<div style="display:grid;grid-template-columns:130px repeat({len(quarters_sorted)},1fr);'
-                        f'gap:6px;padding:5px 8px;border-bottom:1px solid #FF6600;font-family:monospace;font-size:10px;color:#FF6600;letter-spacing:1px">'
-                        f'<span>METRIC</span>{hdr_str}</div>', unsafe_allow_html=True)
-
-                    def _fmt_val(v, unit="auto", decimals=1):
-                        if v is None: return '<span style="color:#444">—</span>'
-                        if unit == "%": return f'<span style="color:#CCC">{v:.1f}%</span>'
-                        if unit == "raw": return f'<span style="color:#CCC">{v:.2f}</span>'
-                        # Auto-scale: detect T/B/M from magnitude
-                        abs_v = abs(v)
-                        if abs_v >= 1e12:   v_disp, suffix = v / 1e12, "T"
-                        elif abs_v >= 1e9:  v_disp, suffix = v / 1e9,  "B"
-                        elif abs_v >= 1e6:  v_disp, suffix = v / 1e6,  "M"
-                        elif abs_v >= 1e3:  v_disp, suffix = v / 1e3,  "K"
-                        else:               v_disp, suffix = v,         ""
-                        color = "#00CC44" if v >= 0 else "#FF4444"
-                        return f'<span style="color:{color};font-weight:600">{v_disp:,.{decimals}f}{suffix}</span>'
-
-                    METRICS = [
-                        ("Revenue",      "revenue",       "auto"),
-                        ("Gross Profit", "gross_profit",  "auto"),
-                        ("Op. Income",   "op_income",     "auto"),
-                        ("Net Income",   "net_income",    "auto"),
-                        ("EBITDA",       "ebitda",        "auto"),
-                        ("Free CF",      "free_cashflow", "auto"),
-                        ("Op. CF",       "op_cashflow",   "auto"),
-                        ("Gross Margin", "gross_margin",  "%"),
-                        ("Op. Margin",   "op_margin",     "%"),
-                        ("Net Margin",   "net_margin",    "%"),
-                        ("Total Debt",   "total_debt",    "auto"),
-                        ("Cash",         "cash",          "auto"),
-                        ("EPS (Dil.)",   "eps",           "raw"),
-                    ]
-
-                    for label, key, unit in METRICS:
-                        cells = "".join(
-                            f'<span style="text-align:right">{_fmt_val(fin_data.get(q, {}).get(key), unit)}</span>'
-                            for q in quarters_sorted
-                        )
-                        row_bg = "background:#050505;" if METRICS.index((label, key, unit)) % 2 == 0 else ""
-                        st.markdown(
-                            f'<div style="display:grid;grid-template-columns:130px repeat({len(quarters_sorted)},1fr);'
-                            f'gap:6px;padding:5px 8px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px;{row_bg}">'
-                            f'<span style="color:#888">{label}</span>{cells}</div>', unsafe_allow_html=True)
-            except Exception:
-                pass
-
-            # ════════════════════════════════════════════════════════════
-            # EARNINGS MATRIX — auto-linked to Quick Earnings Chart ticker
-            # ════════════════════════════════════════════════════════════
-            st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-            with st.spinner(f"Building Earnings Matrix for {et}…"):
-                _em_data = get_earnings_matrix(et)
-
-            if _em_data is None:
-                st.markdown(f'<p style="color:#555;font-family:monospace;font-size:11px">No earnings matrix data available for {et}.</p>', unsafe_allow_html=True)
-            else:
-                _em_years = _em_data["years"]
-                _em_qlabels = _em_data["q_labels"]
-                _em_quarterly = _em_data["quarterly"]
-                _em_estimates = _em_data.get("estimates", {})
-                _em_surprise = _em_data.get("surprise_pct", {})
-                _em_beats = _em_data.get("beats", {})
-                _em_revenue_q = _em_data.get("revenue_q", {})
-                _em_annual = _em_data["annual"]
-                _em_annual_rev = _em_data.get("annual_revenue", {})
-                _em_yoy = _em_data["yoy_growth"]
-                _em_ann_growth = _em_data["annual_growth"]
-                _em_rev_growth = _em_data.get("rev_growth", {})
-                _em_ann_rev_growth = _em_data.get("annual_rev_growth", {})
-                _em_vals = _em_data["valuations"]
-                _em_currency = _em_data["currency"]
-                _em_company = _em_data.get("company", et)
-                _em_streak = _em_data.get("streak", 0)
-                _em_beat_rate = _em_data.get("beat_rate", 0)
-
-                # ── Header with beat/miss streak ──
-                if _em_streak > 0:
-                    _streak_txt = f"🔥 {_em_streak}Q BEAT STREAK"
-                    _streak_c = "#00CC44"
-                elif _em_streak < 0:
-                    _streak_txt = f"⚠️ {abs(_em_streak)}Q MISS STREAK"
-                    _streak_c = "#FF4444"
-                else:
-                    _streak_txt = "— NO STREAK"
-                    _streak_c = "#888"
-                _beat_rate_c = "#00CC44" if _em_beat_rate >= 75 else "#FF8C00" if _em_beat_rate >= 50 else "#FF4444"
-
-                st.markdown(f'''<div class="em-container">
-<div class="em-header">
-<span class="em-badge">Earnings Matrix</span>
-<span class="em-ticker-label">● {et}</span>
-<span class="em-metric-label">EPS (GAAP)</span>
-<span style="margin-left:auto;font-family:monospace;font-size:10px;color:{_streak_c};font-weight:700">{_streak_txt}</span>
-<span style="margin-left:12px;font-family:monospace;font-size:10px;color:{_beat_rate_c}">Beat Rate: {_em_beat_rate:.0f}%</span>
-</div>''', unsafe_allow_html=True)
-
-                _em_left, _em_right = st.columns(2)
-
-                with _em_left:
-                    st.markdown(f'<div style="color:#555;font-family:monospace;font-size:9px;margin-bottom:6px;letter-spacing:1px">EPS ACTUAL vs ESTIMATE — {_em_currency} ($)</div>', unsafe_allow_html=True)
-                    year_headers = "".join(f"<th>{yr}</th>" for yr in _em_years)
-                    eps_html = f'<table class="em-table"><thead><tr><th></th>{year_headers}</tr></thead><tbody>'
-                    for ql in _em_qlabels:
-                        eps_html += f"<tr><td>{ql}</td>"
-                        for yr in _em_years:
-                            val = _em_quarterly.get(yr, {}).get(ql)
-                            est = _em_estimates.get(yr, {}).get(ql)
-                            beat = _em_beats.get(yr, {}).get(ql)
-                            surp = _em_surprise.get(yr, {}).get(ql)
-                            if val is not None:
-                                color = "#00CC44" if val >= 0 else "#FF4444"
-                                # Beat/miss indicator
-                                if beat is True:
-                                    icon = ' <span style="color:#00CC44;font-size:8px">✓</span>'
-                                elif beat is False:
-                                    icon = ' <span style="color:#FF4444;font-size:8px">✗</span>'
-                                else:
-                                    icon = ""
-                                # Surprise tooltip
-                                surp_str = ""
-                                if surp is not None:
-                                    s_c = "#00CC44" if surp >= 0 else "#FF4444"
-                                    surp_str = f'<br><span style="color:{s_c};font-size:8px">{surp:+.1f}%</span>'
-                                est_str = ""
-                                if est is not None:
-                                    est_str = f'<br><span style="color:#555;font-size:8px">est {est:.2f}</span>'
-                                eps_html += f'<td style="color:{color}">{val:.2f}{icon}{est_str}{surp_str}</td>'
-                            else:
-                                eps_html += '<td style="color:#333">—</td>'
-                        eps_html += "</tr>"
-                    eps_html += '<tr class="em-annual"><td>Annual</td>'
-                    for yr in _em_years:
-                        val = _em_annual.get(yr)
-                        if val is not None:
-                            color = "#00CC44" if val >= 0 else "#FF4444"
-                            eps_html += f'<td style="color:{color};font-weight:700">{val:.2f}</td>'
-                        else:
-                            eps_html += '<td style="color:#333">—</td>'
-                    eps_html += "</tr></tbody></table>"
-                    st.markdown(eps_html, unsafe_allow_html=True)
-
-                with _em_right:
-                    st.markdown('<div class="em-growth-toggle"><span class="em-growth-btn active">YoY % Growth</span></div>', unsafe_allow_html=True)
-                    year_headers_g = "".join(f"<th>{yr}</th>" for yr in _em_years)
-                    growth_html = f'<table class="em-table"><thead><tr><th></th>{year_headers_g}</tr></thead><tbody>'
-                    for ql in _em_qlabels:
-                        growth_html += f"<tr><td>{ql}</td>"
-                        for yr in _em_years:
-                            val = _em_yoy.get(yr, {}).get(ql)
-                            if val is not None:
-                                color = "#00CC44" if val >= 0 else "#FF4444"
-                                growth_html += f'<td style="color:{color}">{val:+.1f}%</td>'
-                            else:
-                                growth_html += '<td style="color:#333">—</td>'
-                        growth_html += "</tr>"
-                    growth_html += '<tr class="em-annual"><td>Annual</td>'
-                    for yr in _em_years:
-                        val = _em_ann_growth.get(yr)
-                        if val is not None:
-                            color = "#00CC44" if val >= 0 else "#FF4444"
-                            growth_html += f'<td style="color:{color};font-weight:700">{val:+.1f}%</td>'
-                        else:
-                            growth_html += '<td style="color:#333">—</td>'
-                    growth_html += "</tr></tbody></table>"
-                    st.markdown(growth_html, unsafe_allow_html=True)
-
-                st.markdown('</div>', unsafe_allow_html=True)
-
-                # ── Revenue table (if data exists) ──
-                if _em_revenue_q:
-                    st.markdown('<div class="em-container" style="margin-top:8px">', unsafe_allow_html=True)
-                    _rev_left, _rev_right = st.columns(2)
-                    with _rev_left:
-                        st.markdown('<div style="color:#555;font-family:monospace;font-size:9px;margin-bottom:6px;letter-spacing:1px">QUARTERLY REVENUE</div>', unsafe_allow_html=True)
-                        rev_year_headers = "".join(f"<th>{yr}</th>" for yr in _em_years)
-                        rev_html = f'<table class="em-table"><thead><tr><th></th>{rev_year_headers}</tr></thead><tbody>'
-                        for ql in _em_qlabels:
-                            rev_html += f"<tr><td>{ql}</td>"
-                            for yr in _em_years:
-                                val = _em_revenue_q.get(yr, {}).get(ql)
-                                if val is not None:
-                                    if abs(val) >= 1e9:
-                                        rev_html += f'<td style="color:#CCC">${val/1e9:.1f}B</td>'
-                                    elif abs(val) >= 1e6:
-                                        rev_html += f'<td style="color:#CCC">${val/1e6:.0f}M</td>'
-                                    else:
-                                        rev_html += f'<td style="color:#CCC">${val:,.0f}</td>'
-                                else:
-                                    rev_html += '<td style="color:#333">—</td>'
-                            rev_html += "</tr>"
-                        rev_html += '<tr class="em-annual"><td>Annual</td>'
-                        for yr in _em_years:
-                            val = _em_annual_rev.get(yr)
-                            if val is not None:
-                                if abs(val) >= 1e9:
-                                    rev_html += f'<td style="color:#FF8C00;font-weight:700">${val/1e9:.1f}B</td>'
-                                else:
-                                    rev_html += f'<td style="color:#FF8C00;font-weight:700">${val/1e6:.0f}M</td>'
-                            else:
-                                rev_html += '<td style="color:#333">—</td>'
-                        rev_html += "</tr></tbody></table>"
-                        st.markdown(rev_html, unsafe_allow_html=True)
-
-                    with _rev_right:
-                        st.markdown('<div class="em-growth-toggle"><span class="em-growth-btn active">Revenue YoY %</span></div>', unsafe_allow_html=True)
-                        rev_g_headers = "".join(f"<th>{yr}</th>" for yr in _em_years)
-                        rev_g_html = f'<table class="em-table"><thead><tr><th></th>{rev_g_headers}</tr></thead><tbody>'
-                        for ql in _em_qlabels:
-                            rev_g_html += f"<tr><td>{ql}</td>"
-                            for yr in _em_years:
-                                val = _em_rev_growth.get(yr, {}).get(ql)
-                                if val is not None:
-                                    color = "#00CC44" if val >= 0 else "#FF4444"
-                                    rev_g_html += f'<td style="color:{color}">{val:+.1f}%</td>'
-                                else:
-                                    rev_g_html += '<td style="color:#333">—</td>'
-                            rev_g_html += "</tr>"
-                        rev_g_html += '<tr class="em-annual"><td>Annual</td>'
-                        for yr in _em_years:
-                            val = _em_ann_rev_growth.get(yr)
-                            if val is not None:
-                                color = "#00CC44" if val >= 0 else "#FF4444"
-                                rev_g_html += f'<td style="color:{color};font-weight:700">{val:+.1f}%</td>'
-                            else:
-                                rev_g_html += '<td style="color:#333">—</td>'
-                        rev_g_html += "</tr></tbody></table>"
-                        st.markdown(rev_g_html, unsafe_allow_html=True)
-                    st.markdown('</div>', unsafe_allow_html=True)
-
-                _em_chart_col, _em_val_col = st.columns([3, 2])
-
-                with _em_chart_col:
-                    st.markdown('<div class="em-container">', unsafe_allow_html=True)
-                    _ann_years_sorted = sorted(_em_annual.keys())
-                    if _ann_years_sorted:
-                        ann_labels = [str(yr) for yr in _ann_years_sorted]
-                        ann_values = [_em_annual[yr] for yr in _ann_years_sorted]
-                        fig_eps_line = dark_fig(250)
-                        fig_eps_line.add_trace(go.Scatter(
-                            x=ann_labels, y=ann_values, mode="lines+markers",
-                            name="EPS",
-                            line=dict(color="#00CC44", width=2),
-                            marker=dict(size=8, color="#00CC44", line=dict(width=1, color="#000")),
-                            text=[f"FY{yr}: ${v:.2f}" for yr, v in zip(_ann_years_sorted, ann_values)],
-                            hoverinfo="text",
-                        ))
-                        # Overlay annual revenue on secondary axis if available
-                        if _em_annual_rev:
-                            rev_labels = [str(yr) for yr in _ann_years_sorted if yr in _em_annual_rev]
-                            rev_values = [_em_annual_rev[yr] / 1e9 for yr in _ann_years_sorted if yr in _em_annual_rev]
-                            if rev_values:
-                                fig_eps_line.add_trace(go.Bar(
-                                    x=rev_labels, y=rev_values, name="Revenue ($B)",
-                                    marker=dict(color="rgba(255,102,0,0.15)", line=dict(color="#FF6600", width=1)),
-                                    yaxis="y2",
-                                    hovertext=[f"Rev: ${v:.1f}B" for v in rev_values],
-                                    hoverinfo="text",
-                                ))
-                                fig_eps_line.update_layout(
-                                    yaxis2=dict(overlaying="y", side="right", showgrid=False,
-                                                tickfont=dict(size=8, color="#FF6600"), tickprefix="$", ticksuffix="B",
-                                                title=None),
-                                    legend=dict(font=dict(size=8, color="#888"), bgcolor="rgba(0,0,0,0)",
-                                                orientation="h", x=0, y=1.08),
-                                )
-                        fig_eps_line.update_layout(
-                            margin=dict(l=40, r=50, t=30, b=30), height=250,
-                            title=dict(text="ANNUAL EPS + REVENUE OVERLAY", font=dict(size=10, color="#FF6600"), x=0),
-                            xaxis=dict(color="#555", tickfont=dict(size=9), showgrid=False),
-                            yaxis=dict(color="#555", tickfont=dict(size=9), gridcolor="#111", title=None, tickprefix="$"),
-                        )
-                        st.plotly_chart(fig_eps_line, use_container_width=True, config={'displayModeBar': False})
-
-                    # ── Quarterly EPS: Actual vs Estimate with beat/miss coloring ──
-                    _q_bar_labels, _q_bar_actuals, _q_bar_estimates = [], [], []
-                    _q_bar_colors, _q_bar_beat_icons = [], []
-                    for yr in _em_years:
-                        for ql in _em_qlabels:
-                            val = _em_quarterly.get(yr, {}).get(ql)
-                            if val is not None:
-                                label = f"{ql[:2]} {yr}"
-                                _q_bar_labels.append(label)
-                                _q_bar_actuals.append(val)
-                                est = _em_estimates.get(yr, {}).get(ql)
-                                _q_bar_estimates.append(est)
-                                beat = _em_beats.get(yr, {}).get(ql)
-                                if beat is True:
-                                    _q_bar_colors.append("#00CC44")
-                                    _q_bar_beat_icons.append("✓ BEAT")
-                                elif beat is False:
-                                    _q_bar_colors.append("#FF4444")
-                                    _q_bar_beat_icons.append("✗ MISS")
-                                else:
-                                    _q_bar_colors.append("#FF8C00")
-                                    _q_bar_beat_icons.append("")
-                    if _q_bar_labels:
-                        fig_q_bar = dark_fig(260)
-                        # Estimate bars (background)
-                        est_vals_clean = [e if e is not None else 0 for e in _q_bar_estimates]
-                        if any(e > 0 for e in est_vals_clean):
-                            fig_q_bar.add_trace(go.Bar(
-                                name="Estimate", x=_q_bar_labels, y=est_vals_clean,
-                                marker=dict(color="rgba(255,255,255,0.06)", line=dict(color="#333", width=1)),
-                                hovertext=[f"Est: ${e:.2f}" if e else "—" for e in est_vals_clean],
-                                hoverinfo="text",
-                            ))
-                        # Actual bars (foreground)
-                        fig_q_bar.add_trace(go.Bar(
-                            name="Actual", x=_q_bar_labels, y=_q_bar_actuals,
-                            marker=dict(color=_q_bar_colors, line=dict(width=0), opacity=0.9),
-                            text=[f"${v:.2f}" for v in _q_bar_actuals],
-                            textposition="outside", textfont=dict(size=7, color="#888"),
-                            hovertext=[f"Actual: ${a:.2f} | {b}" for a, b in zip(_q_bar_actuals, _q_bar_beat_icons)],
-                            hoverinfo="text",
-                        ))
-                        fig_q_bar.update_layout(
-                            barmode="overlay",
-                            margin=dict(l=40, r=10, t=30, b=40), height=260,
-                            title=dict(text="QUARTERLY EPS — ACTUAL vs ESTIMATE  (🟢 Beat · 🔴 Miss)", font=dict(size=10, color="#FF6600"), x=0),
-                            xaxis=dict(color="#555", tickfont=dict(size=7, color="#666"), tickangle=-45, showgrid=False),
-                            yaxis=dict(color="#555", tickfont=dict(size=9), gridcolor="#111", title=None, tickprefix="$"),
-                            legend=dict(font=dict(size=8, color="#888"), bgcolor="rgba(0,0,0,0)",
-                                        orientation="h", x=0, y=1.08),
-                            showlegend=True,
-                        )
-                        st.plotly_chart(fig_q_bar, use_container_width=True, config={'displayModeBar': False})
-
-                    # ── Revenue trend chart ──
-                    if _em_revenue_q:
-                        _rev_labels, _rev_values = [], []
-                        for yr in _em_years:
-                            for ql in _em_qlabels:
-                                val = _em_revenue_q.get(yr, {}).get(ql)
-                                if val is not None:
-                                    _rev_labels.append(f"{ql[:2]} {yr}")
-                                    _rev_values.append(val / 1e9)
-                        if _rev_labels:
-                            fig_rev = dark_fig(200)
-                            fig_rev.add_trace(go.Scatter(
-                                x=_rev_labels, y=_rev_values, mode="lines+markers+text",
-                                line=dict(color="#FF6600", width=2),
-                                marker=dict(size=6, color="#FF6600", line=dict(width=1, color="#000")),
-                                text=[f"${v:.1f}B" for v in _rev_values],
-                                textposition="top center", textfont=dict(size=7, color="#FF8C00"),
-                                hoverinfo="text",
-                            ))
-                            fig_rev.update_layout(
-                                margin=dict(l=40, r=10, t=30, b=40), height=200,
-                                title=dict(text="QUARTERLY REVENUE TREND ($B)", font=dict(size=10, color="#FF6600"), x=0),
-                                xaxis=dict(color="#555", tickfont=dict(size=7, color="#666"), tickangle=-45, showgrid=False),
-                                yaxis=dict(color="#555", tickfont=dict(size=9), gridcolor="#111", title=None, tickprefix="$", ticksuffix="B"),
-                            )
-                            st.plotly_chart(fig_rev, use_container_width=True, config={'displayModeBar': False})
-                    st.markdown('</div>', unsafe_allow_html=True)
-
-                with _em_val_col:
-                    st.markdown('<div class="em-container">', unsafe_allow_html=True)
-                    st.markdown('<div style="color:#FF6600;font-size:10px;letter-spacing:1px;font-family:monospace;font-weight:700;margin-bottom:8px">VALUATION MULTIPLES</div>', unsafe_allow_html=True)
-                    if _em_vals:
-                        val_html = '<table class="em-val-table"><thead><tr><th></th><th>Last 4Q</th><th>Forward</th></tr></thead><tbody>'
-                        for metric_name, periods in _em_vals.items():
-                            last4q = periods.get("Last 4Q", "—")
-                            fwd = periods.get("Forward", "—")
-                            def _val_color(v_str):
-                                try:
-                                    v = float(v_str.replace("x", ""))
-                                    if v < 15: return "#00CC44"
-                                    elif v < 25: return "#FF8C00"
-                                    else: return "#FF6600"
-                                except Exception:
-                                    return "#888"
-                            l_color = _val_color(last4q)
-                            f_color = _val_color(fwd)
-                            val_html += f'<tr><td>{metric_name}</td><td style="color:{l_color}">{last4q}</td><td style="color:{f_color}">{fwd}</td></tr>'
-                        val_html += "</tbody></table>"
-                        st.markdown(val_html, unsafe_allow_html=True)
-                    else:
-                        st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Valuation data unavailable.</p>', unsafe_allow_html=True)
-
-                    st.markdown('<div style="margin-top:16px;color:#FF6600;font-size:10px;letter-spacing:1px;font-family:monospace;font-weight:700;margin-bottom:6px">EPS GROWTH SUMMARY</div>', unsafe_allow_html=True)
-                    for yr in _em_years:
-                        g_val = _em_ann_growth.get(yr)
-                        if g_val is not None:
-                            g_color = "#00CC44" if g_val >= 0 else "#FF4444"
-                            g_icon = "▲" if g_val >= 0 else "▼"
-                            # Revenue growth alongside
-                            r_val = _em_ann_rev_growth.get(yr)
-                            rev_str = ""
-                            if r_val is not None:
-                                r_color = "#00CC44" if r_val >= 0 else "#FF4444"
-                                rev_str = f' <span style="color:#555">|</span> <span style="color:{r_color};font-size:9px">Rev {r_val:+.1f}%</span>'
-                            st.markdown(
-                                f'<div style="display:flex;justify-content:space-between;padding:3px 0;font-family:monospace;font-size:11px;border-bottom:1px solid #0D0D0D">'
-                                f'<span style="color:#888">FY {yr}</span>'
-                                f'<span style="color:{g_color};font-weight:700">{g_icon} {g_val:+.1f}%{rev_str}</span></div>',
-                                unsafe_allow_html=True)
-
-                    # ── Company info card ──
-                    _mcap = _em_data.get("market_cap", 0)
-                    _mcap_str = f"${_mcap/1e12:.2f}T" if _mcap >= 1e12 else (f"${_mcap/1e9:.1f}B" if _mcap >= 1e9 else (f"${_mcap/1e6:.0f}M" if _mcap >= 1e6 else "—"))
-                    _t_eps = _em_data.get("trailing_eps", 0)
-                    _f_eps = _em_data.get("forward_eps", 0)
-                    st.markdown(
-                        f'<div style="margin-top:14px;padding:10px;background:#0A0A0A;border:1px solid #1A1A1A;border-radius:3px;font-family:monospace;font-size:10px">'
-                        f'<div style="color:#FF6600;font-weight:700;margin-bottom:4px">{_em_company}</div>'
-                        f'<div style="color:#888">Currency: {_em_currency} · FY End: Mo {_em_data["fiscal_end_month"]}</div>'
-                        f'<div style="color:#00CC44;margin-top:4px">Price: ${_em_data.get("price", 0):,.2f}</div>'
-                        f'<div style="color:#888;margin-top:2px">Mkt Cap: {_mcap_str}</div>'
-                        f'<div style="color:#888;margin-top:2px">TTM EPS: <span style="color:#CCC">${_t_eps:.2f}</span> · Fwd EPS: <span style="color:#CCC">${_f_eps:.2f}</span></div>'
-                        f'<div style="margin-top:6px;padding-top:6px;border-top:1px solid #1A1A1A">'
-                        f'<span style="color:{_beat_rate_c};font-weight:700">Beat Rate: {_em_beat_rate:.0f}%</span>'
-                        f' · <span style="color:{_streak_c}">{_streak_txt}</span>'
-                        f'</div>'
-                        f'</div>',
+                        f'<div style="display:grid;grid-template-columns:80px 1fr 80px 100px;gap:8px;'
+                        f'padding:5px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px">'
+                        f'<span style="color:#FF6600;font-weight:700">{_esc(_dp_tkr)}</span>'
+                        f'<span style="color:#CCC">{_dp_sv}</span>'
+                        f'<span style="color:#888">{_dp_tv}</span>'
+                        f'<span style="color:{_dp_c};font-weight:700">{_dp_short_pct:.1f}%</span></div>',
                         unsafe_allow_html=True)
-                        
-                    _analyst_targets = _em_data.get("analyst_targets", [])
-                    _et_ratings = _em_data.get("analyst_ratings", {})
-
-                    # ── Analyst Ratings Block (Earnings Tab) ──
-                    if _et_ratings:
-                        _et_cons  = _et_ratings.get("consensus","—")
-                        _et_nana  = _et_ratings.get("num_analysts", 0)
-                        _et_sb    = _et_ratings.get("strong_buy",  0)
-                        _et_b     = _et_ratings.get("buy",         0)
-                        _et_h     = _et_ratings.get("hold",        0)
-                        _et_s     = _et_ratings.get("sell",        0)
-                        _et_ss    = _et_ratings.get("strong_sell", 0)
-                        _et_tot   = max(_et_ratings.get("total_rated", _et_sb+_et_b+_et_h+_et_s+_et_ss), 1)
-                        _et_tmean = _et_ratings.get("target_mean",   0)
-                        _et_tmed  = _et_ratings.get("target_median", 0)
-                        _et_tlow  = _et_ratings.get("target_low",    0)
-                        _et_thi   = _et_ratings.get("target_high",   0)
-                        _et_cur   = _em_data.get("price", 0)
-                        _et_cc    = ("#00CC44" if _et_cons.lower() in ("buy","strong buy","strongbuy","outperform","overweight")
-                                     else "#FF4444" if _et_cons.lower() in ("sell","strong sell","underperform","underweight")
-                                     else "#FF8C00")
-                        _et_up_dn = (f'+{((_et_tmean-_et_cur)/_et_cur*100):.1f}%' if _et_cur > 0 and _et_tmean > 0 else "")
-                        _et_pt_c  = "#00CC44" if _et_tmean > _et_cur else "#FF4444"
-                        def _et_bar(lbl, n, tot, col):
-                            p = min(round(n / tot * 100), 100) if tot > 0 else 0
-                            return (f'<div style="display:flex;align-items:center;gap:5px;margin:2px 0">'
-                                    f'<span style="width:58px;color:{col};font-size:8px">{lbl}</span>'
-                                    f'<div style="flex:1;background:#111;height:5px;border-radius:2px">'
-                                    f'<div style="width:{p}%;background:{col};height:5px;border-radius:2px"></div></div>'
-                                    f'<span style="color:{col};font-size:8px;width:22px;text-align:right">{n}</span></div>')
-                        _rat_html = (
-                            f'<div style="margin-top:14px;padding:10px;background:#0A0A0A;border:1px solid #1A1A1A;'
-                            f'border-radius:3px;font-family:monospace;font-size:10px">'
-                            f'<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">'
-                            f'<span style="color:#00AAFF;font-weight:700;letter-spacing:1px">ANALYST RATINGS</span>'
-                            f'<span style="color:#555;font-size:8px">{_et_nana} analysts</span></div>'
-                            f'<span style="color:{_et_cc};font-size:15px;font-weight:900;display:block;margin-bottom:7px">{_et_cons}</span>'
-                            + _et_bar("Strong Buy", _et_sb, _et_tot, "#00CC44")
-                            + _et_bar("Buy",         _et_b,  _et_tot, "#00AA33")
-                            + _et_bar("Hold",        _et_h,  _et_tot, "#FF8C00")
-                            + _et_bar("Sell",        _et_s,  _et_tot, "#FF6655")
-                            + _et_bar("Str. Sell",   _et_ss, _et_tot, "#FF4444")
-                        )
-                        if _et_tmean > 0 or _et_tlow > 0 or _et_thi > 0:
-                            _rat_html += (
-                                f'<div style="margin-top:7px;padding-top:5px;border-top:1px solid #1A1A1A">'
-                                f'<div style="color:#555;font-size:8px;letter-spacing:1px;margin-bottom:3px">PRICE TARGETS</div>'
-                                f'<div style="display:flex;justify-content:space-between">'
-                                f'<span style="color:#888;font-size:9px">Low <b style="color:#CCC">${_et_tlow:,.2f}</b></span>'
-                                f'<span style="color:#888;font-size:9px">Mean <b style="color:{_et_pt_c}">${_et_tmean:,.2f}</b>'
-                                + (f' <b style="color:{_et_pt_c};font-size:8px">{_et_up_dn}</b>' if _et_up_dn else "")
-                                + f'</span><span style="color:#888;font-size:9px">High <b style="color:#CCC">${_et_thi:,.2f}</b></span>'
-                                f'</div></div>'
-                            )
-                        _rat_html += '</div>'
-                        st.markdown(_rat_html, unsafe_allow_html=True)
-
-                    if _analyst_targets:
-                        at_html = '<div style="margin-top:14px;padding:10px;background:#0A0A0A;border:1px solid #1A1A1A;border-radius:3px;font-family:monospace;font-size:10px">'
-                        at_html += '<div style="color:#00AAFF;font-weight:700;margin-bottom:6px">TOP ANALYST TARGETS <span style="font-weight:100;color:#555;font-size:8px">(Track Record)</span></div>'
-                        for tg in _analyst_targets:
-                            firm_str = tg["firm"][:14] + "…" if len(tg["firm"]) > 15 else tg["firm"]
-                            tgt_val = tg["target"]
-                            action = tg["action"]
-                            action_str = f' <span style="color:#555">·</span> <span style="color:#888">{action}</span>' if action else ""
-                            c_price = _em_data.get("price", 0)
-                            color = "#00CC44" if (c_price > 0 and tgt_val > c_price) else ("#FF4444" if (c_price > 0 and tgt_val < c_price) else "#FF8C00")
-                            at_html += f'<div style="display:flex;justify-content:space-between;margin-top:4px"><span style="color:#CCC">{firm_str}{action_str}</span><span style="color:{color};font-weight:700">${tgt_val:,.2f}</span></div>'
-                        at_html += '</div>'
-                        st.markdown(at_html, unsafe_allow_html=True)
-                        
-                    st.markdown('</div>', unsafe_allow_html=True)
-
-            # ═══════════════════════════════════════════════════════
-            # VISUAL MARGIN EXPANSION CHART (Feature 12)
-            # ═══════════════════════════════════════════════════════
-            st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-            st.markdown(f'<div class="bb-ph">📊 MARGIN EXPANSION — {et}</div>', unsafe_allow_html=True)
-            with st.spinner("Loading margin data…"):
-                _margin_data = get_margin_chart_data(et)
-
-            if _margin_data:
-                _m_labels = [d["quarter"][:10] for d in _margin_data]
-                _m_rev = [d["revenue_b"] for d in _margin_data]
-                _m_gm = [d["gross_margin"] for d in _margin_data]
-                _m_om = [d["op_margin"] for d in _margin_data]
-                _m_nm = [d["net_margin"] for d in _margin_data]
-
-                fig_margin = dark_fig(300)
-                # Revenue bars on primary axis
-                fig_margin.add_trace(go.Bar(
-                    x=_m_labels, y=_m_rev, name="Revenue ($B)",
-                    marker=dict(color="rgba(255,102,0,0.15)", line=dict(color="#FF6600", width=1)),
-                    hovertext=[f"Rev: ${r:.1f}B" for r in _m_rev], hoverinfo="text",
-                ))
-                # Margin lines on secondary axis
-                if any(v is not None for v in _m_gm):
-                    fig_margin.add_trace(go.Scatter(
-                        x=_m_labels, y=_m_gm, name="Gross Margin",
-                        mode="lines+markers", yaxis="y2",
-                        line=dict(color="#00CC44", width=2), marker=dict(size=5),
-                    ))
-                if any(v is not None for v in _m_om):
-                    fig_margin.add_trace(go.Scatter(
-                        x=_m_labels, y=_m_om, name="Op Margin",
-                        mode="lines+markers", yaxis="y2",
-                        line=dict(color="#00AAFF", width=2), marker=dict(size=5),
-                    ))
-                if any(v is not None for v in _m_nm):
-                    fig_margin.add_trace(go.Scatter(
-                        x=_m_labels, y=_m_nm, name="Net Margin",
-                        mode="lines+markers", yaxis="y2",
-                        line=dict(color="#FF8C00", width=2), marker=dict(size=5),
-                    ))
-                fig_margin.update_layout(
-                    margin=dict(l=40, r=50, t=30, b=40), height=300,
-                    title=dict(text=f"{et} MARGIN EXPANSION + REVENUE", font=dict(size=10, color="#FF6600"), x=0),
-                    xaxis=dict(color="#555", tickfont=dict(size=7), tickangle=-45, showgrid=False),
-                    yaxis=dict(color="#555", gridcolor="#111", tickprefix="$", ticksuffix="B", title=None),
-                    yaxis2=dict(overlaying="y", side="right", showgrid=False, ticksuffix="%",
-                                tickfont=dict(size=8, color="#888"), title=None),
-                    legend=dict(font=dict(size=8, color="#888"), bgcolor="rgba(0,0,0,0)",
-                                orientation="h", x=0, y=1.08),
-                    barmode="overlay",
-                )
-                st.plotly_chart(fig_margin, use_container_width=True)
-            else:
-                st.markdown(f'<p style="color:#555;font-family:monospace;font-size:11px">Margin data unavailable for {et}.</p>', unsafe_allow_html=True)
-
-            # ═══════════════════════════════════════════════════════
-            # AI-POWERED GUIDANCE SUMMARY (Feature 11)
-            # ═══════════════════════════════════════════════════════
-            if st.session_state.get("gemini_key"):
-                st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-                st.markdown(f'<div class="bb-ph">🤖 AI GUIDANCE SUMMARY — {et}</div>', unsafe_allow_html=True)
-                with st.spinner(f"Generating AI summary for {et}…"):
-                    _ai_summary = get_ai_earnings_summary(
-                        et,
-                        gemini_api_key=st.session_state.gemini_key.get_secret_value(),
-                        finnhub_key=st.session_state.get("finnhub_key"),
-                        newsapi_key=st.session_state.get("newsapi_key"),
-                    )
-                if _ai_summary:
-                    if "error" in _ai_summary:
-                        err = _ai_summary["error"]
-                        if err == "NO_KEY":
-                            msg = "AI summary unavailable. Check Gemini key."
-                        elif err == "FUTURE_EVENT":
-                            msg = f"Earnings event for {et} has not happened yet (Expected: {_ai_summary.get('date', 'Future')})."
-                        elif err == "NO_NEWS":
-                            msg = f"No recent news found for {et} to generate an earnings summary."
-                        else:
-                            msg = "AI summary generation failed."
-                        st.markdown(f'<p style="color:#555;font-family:monospace;font-size:11px">{msg}</p>', unsafe_allow_html=True)
-                    else:
-                        _summary_text = _ai_summary["summary"].replace("\n", "<br>")
-                        st.markdown(
-                            f'<div style="background:#0A0500;border:1px solid #FF6600;border-left:4px solid #FF6600;'
-                            f'padding:14px 16px;font-family:monospace;font-size:11px;color:#CCC;line-height:1.8">'
-                            f'<div style="color:#FF6600;font-size:10px;letter-spacing:1px;margin-bottom:8px">'
-                            f'⚡ SENTINEL AI ({_ai_summary["news_count"]} news sources analyzed)</div>'
-                            f'{_summary_text}</div>', unsafe_allow_html=True)
                 else:
-                    st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">AI summary generation failed.</p>', unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div style="display:grid;grid-template-columns:80px 1fr;gap:8px;'
+                        f'padding:5px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px">'
+                        f'<span style="color:#FF6600;font-weight:700">{_esc(_dp_tkr)}</span>'
+                        f'<span style="color:#333">Data unavailable</span></div>',
+                        unsafe_allow_html=True)
+            except Exception:
+                continue
 
-            # ── Stock-specific news (after margin + AI) ──
-            st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
-            st.markdown('<div class="bb-ph" style="margin-top:10px">📰 NEWS — {}</div>'.format(et), unsafe_allow_html=True)
-            with st.spinner("Loading stock news…"):
-                stock_news = get_stock_news(
-                    et,
-                    finnhub_key=st.session_state.get("finnhub_key"),
-                    newsapi_key=st.session_state.get("newsapi_key"),
-                )
-            if stock_news:
-                stock_news = filter_market_news(stock_news, key_title="title", key_source="source")
-                for art in stock_news:
-                    st.markdown(render_news_card(art["title"], art["url"], art["source"], art["date"], "bb-news"), unsafe_allow_html=True)
+        st.markdown(
+            '<div style="color:#444;font-size:8px;font-family:monospace;margin-top:4px">'
+            'Source: FINRA ADF/OTC short volume. &gt;50% short = bearish pressure.</div>',
+            unsafe_allow_html=True)
+
+        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+
+        # ── Insider Transactions (Finnhub) ──────────────────────────
+        if st.session_state.finnhub_key.get_secret_value():
+            st.markdown('<div class="bb-ph">👤 INSIDER TRANSACTIONS — WATCHLIST</div>', unsafe_allow_html=True)
+            _ins_tickers = st.session_state.watchlist[:5] if st.session_state.watchlist else ["AAPL", "NVDA", "TSLA"]
+            _all_insiders = []
+            for _ins_tkr in _ins_tickers:
+                try:
+                    _ins_data = finnhub_insider(st.session_state.finnhub_key.get_secret_value(), _ins_tkr)
+                    if _ins_data:
+                        for _ins in _ins_data[:3]:
+                            _ins["_ticker"] = _ins_tkr
+                            _all_insiders.append(_ins)
+                except Exception:
+                    continue
+            if _all_insiders:
+                for _ins in _all_insiders[:10]:
+                    _ins_name = _ins.get("name", "Unknown")
+                    _ins_type = _ins.get("transactionType", "").upper()
+                    _is_buy = "PURCHASE" in _ins_type or "BUY" in _ins_type or "ACQUISITION" in _ins_type
+                    _ins_cls = "buy" if _is_buy else "sell"
+                    _ins_shares = _ins.get("share", 0)
+                    _ins_val = _ins.get("transactionPrice", 0) * abs(_ins_shares) if _ins.get("transactionPrice") else 0
+                    _ins_val_str = f"${_ins_val/1e6:.1f}M" if _ins_val >= 1e6 else f"${_ins_val/1e3:.0f}K" if _ins_val >= 1e3 else f"${_ins_val:,.0f}"
+                    _ins_date = _ins.get("filingDate", _ins.get("transactionDate", ""))[:10]
+                    _ins_lbl = "BUY" if _is_buy else "SELL"
+                    _ins_lbl_c = "#00CC44" if _is_buy else "#FF4444"
+                    st.markdown(
+                        f'<div class="ins-card {_ins_cls}">'
+                        f'<div style="display:flex;justify-content:space-between;align-items:center">'
+                        f'<div><span class="ins-name">{_esc(_ins.get("_ticker", ""))}</span>'
+                        f' <span style="color:#888;font-size:10px">{_esc(_ins_name[:25])}</span></div>'
+                        f'<span class="ins-{_ins_cls}" style="color:{_ins_lbl_c};font-weight:700">{_ins_lbl} {_ins_val_str}</span></div>'
+                        f'<div class="ins-meta">{_ins_date} · {abs(_ins_shares):,.0f} shares</div></div>',
+                        unsafe_allow_html=True)
             else:
-                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No recent news found. Add Finnhub or NewsAPI key for richer coverage.</p>', unsafe_allow_html=True)
+                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No recent insider transactions found.</p>', unsafe_allow_html=True)
+        else:
+            st.markdown(
+                '<div style="color:#555;font-family:monospace;font-size:11px;padding:8px 0">'
+                '👤 Insider transactions require Finnhub API key.</div>',
+                unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════
 # TAB 8 — SENTINEL AI
