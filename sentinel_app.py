@@ -52,24 +52,47 @@ from data_fetchers import (
     is_market_relevant,
     logger,
 )
-from ui_components import (
-    CHART_LAYOUT, dark_fig, tv_chart, candlestick_chart, terminal_quote_strip,
-    yield_curve_chart, yield_history_chart, cpi_vs_rates_chart,
-    render_news_card, render_options_table,
-    render_scored_options, render_unusual_trade,
-    render_insider_cards, poly_url, poly_status,
-    render_poly_card, render_crypto_etf_chart,
-    list_gemini_models, gemini_response, format_gemini_msg,
-    render_0dte_gex_chart, render_0dte_gex_decoder, render_0dte_recommendation, render_0dte_trade_log,
-    render_geo_tab, render_stat_arb_cards,
-    metric_card, metric_card_with_delta, sentinel_grid,
-    load_memory, save_memory, summarize_and_persist,
-    parse_chained_commands, detect_sentiment_divergence,
-)
+# Import UI helpers in a way that surfaces the real error on Streamlit Cloud
+# (client.showErrorDetails=false otherwise redacts the message).
+try:
+    from ui_components import (
+        CHART_LAYOUT, dark_fig, tv_chart,
+        yield_curve_chart, yield_history_chart, cpi_vs_rates_chart,
+        render_news_card, render_options_table,
+        render_scored_options, render_unusual_trade,
+        render_insider_cards, poly_url, poly_status,
+        render_poly_card, render_crypto_etf_chart,
+        list_gemini_models, gemini_response, format_gemini_msg,
+        render_0dte_gex_chart, render_0dte_gex_decoder, render_0dte_recommendation, render_0dte_trade_log,
+        render_geo_tab, render_stat_arb_cards,
+        metric_card, metric_card_with_delta, sentinel_grid,
+        load_memory, save_memory, summarize_and_persist,
+        parse_chained_commands, detect_sentiment_divergence,
+    )
+except Exception as _ui_imp_err:
+    st.set_page_config(page_title="SENTINEL", page_icon="⚡", layout="wide")
+    st.error("Failed to import ui_components")
+    st.exception(_ui_imp_err)
+    st.stop()
+
 try:
     from http_client import fmt_vol
 except ImportError:
-    from ui_components import fmt_vol  # re-exported path if http_client is older
+    try:
+        from ui_components import fmt_vol
+    except ImportError:
+        def fmt_vol(v):
+            try:
+                v = float(v or 0)
+            except (TypeError, ValueError):
+                return "—"
+            if v >= 1e9:
+                return f"{v/1e9:.2f}B"
+            if v >= 1e6:
+                return f"{v/1e6:.1f}M"
+            if v >= 1e3:
+                return f"{v/1e3:.1f}K"
+            return f"{int(v)}"
 
 st.set_page_config(page_title="SENTINEL", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
 import time

@@ -41,17 +41,24 @@ except ImportError:  # pragma: no cover — partial deploys / older http_client
             return f"{v/1e3:.1f}K"
         return f"{int(v)}"
 
-from data_fetchers import (
-    fred_series, _parse_poly_field,
-    multi_quotes,
-    GEO_FINANCIAL_NETWORKS,
-    GEO_THEATERS, GEO_IMPACT_TICKERS, GEO_SHIPPING_LANES,
-    gdelt_news, newsapi_headlines,
-    fetch_conflict_events_json, fetch_military_aircraft_json,
-    fetch_satellite_positions_json, fetch_ais_vessels,
-    fetch_ai_hotspots_json,
-    _ETF_TICKERS, _ETF_COLORS,
-)
+try:
+    from data_fetchers import (
+        fred_series, _parse_poly_field,
+        multi_quotes,
+        GEO_FINANCIAL_NETWORKS,
+        GEO_THEATERS, GEO_IMPACT_TICKERS, GEO_SHIPPING_LANES,
+        gdelt_news, newsapi_headlines,
+        fetch_conflict_events_json, fetch_military_aircraft_json,
+        fetch_satellite_positions_json, fetch_ais_vessels,
+        fetch_ai_hotspots_json,
+        _ETF_TICKERS, _ETF_COLORS,
+    )
+except Exception as _df_err:  # pragma: no cover
+    # Re-raise with explicit context so Streamlit Cloud logs are actionable
+    raise ImportError(
+        f"ui_components could not import data_fetchers dependencies: "
+        f"{type(_df_err).__name__}: {_df_err}"
+    ) from _df_err
 
 try:
     import numpy as _np
