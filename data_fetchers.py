@@ -5,8 +5,6 @@ All @st.cache_data API functions, data utilities, and helpers.
 
 import streamlit as st
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 import asyncio
 import pandas as pd
 import numpy as np
@@ -15,14 +13,11 @@ import re
 import logging
 from datetime import datetime, timedelta, time as dtime
 import pytz
-from collections import OrderedDict
 
 import pandas_market_calendars as mcal
 from scipy.stats import norm
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
-# orjson.loads for speed if available, stdlib json as fallback
-import json as _stdlib_json
+
 try:
     from orjson import loads as _json_loads
 except ImportError:
@@ -40,7 +35,6 @@ try:
 except ImportError:
     yf = None
 
-# ── Logging Setup ──
 logger = logging.getLogger("sentinel.data")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -50,408 +44,19 @@ TZ_EASTERN = pytz.timezone("US/Eastern")
 TZ_UTC = pytz.utc
 
 
-TRADING_DAYS_PER_YEAR: int = 252
-CALENDAR_DAYS_PER_YEAR: int = 365
-DEFAULT_RISK_FREE_RATE: float = 0.045
-BPS_FACTOR: float = 0.0001
-
-
-_YAHOO_UAS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-]
-
-# ── Yahoo Finance Rate Limiter ──
-import threading as _threading
-import time as _time
-
-_yf_semaphore = _threading.BoundedSemaphore(3)   # allow 3 concurrent Yahoo calls
-_yf_lock = _threading.Lock()                      # guards ticker cache AND gap timing
-_yf_last_request = 0.0
-_YF_MIN_GAP = 0.35          # minimum seconds between Yahoo API calls
-_YF_CACHE_TTL = 120          # reuse Ticker objects for 2 minutes
-_YF_CACHE_MAX_SIZE = 200     # max tickers to cache — prevents unbounded memory growth
-
-
-
-class _LRUTickerCache:
-    """Thread-safe LRU cache for yfinance Ticker objects with TTL eviction."""
-    __slots__ = ("_cache", "_maxsize", "_ttl", "_hits", "_misses")
-
-    def __init__(self, maxsize=200, ttl=120):
-        self._cache = OrderedDict()   # key → (ticker_obj, timestamp)
-        self._maxsize = maxsize
-        self._ttl = ttl
-        self._hits = 0
-        self._misses = 0
-
-    def get(self, key):
-        """Return cached Ticker if present and fresh, else None."""
-        entry = self._cache.get(key)
-        if entry is None:
-            self._misses += 1
-            return None
-        obj, ts = entry
-        if (_time.time() - ts) >= self._ttl:
-            # Stale — evict and return miss
-            del self._cache[key]
-            self._misses += 1
-            return None
-        self._cache.move_to_end(key)
-        self._hits += 1
-        return obj
-
-    def put(self, key, obj):
-        """Insert/update a cache entry, evicting LRU if over capacity."""
-        if key in self._cache:
-            self._cache.move_to_end(key)
-        self._cache[key] = (obj, _time.time())
-        while len(self._cache) > self._maxsize:
-            self._cache.popitem(last=False)  # pop oldest (LRU)
-
-    @property
-    def stats(self):
-        """Return cache hit/miss statistics."""
-        total = self._hits + self._misses
-        rate = (self._hits / total * 100) if total > 0 else 0.0
-        return {
-            "size": len(self._cache),
-            "maxsize": self._maxsize,
-            "hits": self._hits,
-            "misses": self._misses,
-            "hit_rate_pct": round(rate, 1),
-        }
-
-    def __len__(self):
-        return len(self._cache)
-
-
-_yf_ticker_cache = _LRUTickerCache(maxsize=_YF_CACHE_MAX_SIZE, ttl=_YF_CACHE_TTL)
-
-
-def get_yf_ticker(ticker):
-    """Return a yfinance Ticker with LRU caching and rate limiting."""
-    if yf is None: return None
-    global _yf_last_request
-
-    # Fast path: cached
-    with _yf_lock:
-        cached = _yf_ticker_cache.get(ticker)
-        if cached is not None:
-            return cached
-
-    # Slow path: acquire semaphore, enforce gap (try/finally prevents slot leak)
-    _yf_semaphore.acquire()
-    try:
-        # Double-check cache after semaphore acquisition
-        with _yf_lock:
-            cached = _yf_ticker_cache.get(ticker)
-            if cached is not None:
-                return cached
-            elapsed = _time.time() - _yf_last_request
-            need_sleep = max(0, _YF_MIN_GAP - elapsed)
-            _yf_last_request = _time.time()  # record NOW, not future
-
-        # Sleep outside lock so other threads aren't blocked
-        if need_sleep > 0:
-            _time.sleep(need_sleep)
-
-        tk = yf.Ticker(ticker)
-
-        with _yf_lock:
-            _yf_last_request = _time.time()  # update to actual completion time
-            _yf_ticker_cache.put(ticker, tk)
-        return tk
-    finally:
-        _yf_semaphore.release()
-
-
-# ── Connection Pooling ──
-_http_session = None
-_http_session_lock = _threading.Lock()
-
-def _get_http_session():
-    """Return a shared requests.Session with connection pooling and auto-retry."""
-    global _http_session
-    if _http_session is not None:
-        return _http_session
-    with _http_session_lock:
-        if _http_session is not None:
-            return _http_session
-        session = requests.Session()
-        retry_strategy = Retry(
-            total=2,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET", "POST"],
-        )
-        adapter = HTTPAdapter(
-            pool_connections=10,
-            pool_maxsize=20,
-            max_retries=retry_strategy,
-        )
-        session.mount("https://", adapter)
-        session.mount("http://", adapter)
-        session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) "
-                          "Chrome/122.0.0.0 Safari/537.36",
-        })
-        _http_session = session
-        return _http_session
-
-
-# ── Request Metrics Tracking ──
-_metrics_lock = _threading.Lock()
-_request_metrics = {}  # api_domain → {"count", "errors", "total_ms", "min_ms", "max_ms"}
-
-def _record_metric(api_domain, latency_ms, is_error=False):
-    """Record a single request metric (thread-safe)."""
-    with _metrics_lock:
-        m = _request_metrics.setdefault(api_domain, {
-            "count": 0, "errors": 0,
-            "total_ms": 0.0, "min_ms": float('inf'), "max_ms": 0.0,
-        })
-        m["count"] += 1
-        m["total_ms"] += latency_ms
-        if latency_ms < m["min_ms"]:
-            m["min_ms"] = latency_ms
-        if latency_ms > m["max_ms"]:
-            m["max_ms"] = latency_ms
-        if is_error:
-            m["errors"] += 1
-
-def get_request_metrics():
-    """Return per-API request metrics snapshot."""
-    with _metrics_lock:
-        snapshot = {}
-        for domain, m in _request_metrics.items():
-            avg = m["total_ms"] / m["count"] if m["count"] > 0 else 0.0
-            err_rate = (m["errors"] / m["count"] * 100) if m["count"] > 0 else 0.0
-            snapshot[domain] = {
-                "count": m["count"],
-                "errors": m["errors"],
-                "avg_ms": round(avg, 1),
-                "min_ms": round(m["min_ms"], 1) if m["min_ms"] != float('inf') else 0.0,
-                "max_ms": round(m["max_ms"], 1),
-                "error_rate_pct": round(err_rate, 1),
-            }
-        return snapshot
-
-def get_ticker_cache_stats():
-    """Return LRU ticker cache statistics for monitoring."""
-    with _yf_lock:
-        return _yf_ticker_cache.stats
-
-def reset_request_metrics():
-    """Reset all request metrics (useful for A/B testing cache TTLs)."""
-    with _metrics_lock:
-        _request_metrics.clear()
-
-
-
-
-# ════════════════════════════════════════════════════════════════════
-# UTILITY FUNCTIONS
-# ════════════════════════════════════════════════════════════════════
-
-
-def _safe_float(v, default=None):
-    """Convert to float, returning default for invalid/missing values."""
-    if v is None:
-        return default
-    try:
-        f = float(v)
-        return default if (math.isnan(f) or math.isinf(f)) else f
-    except (ValueError, TypeError, OverflowError):
-        return default
-
-def _safe_int(v, default: int = 0) -> int:
-    try:
-        f = float(v) if v is not None else float(default)
-        return default if (math.isnan(f) or math.isinf(f)) else int(f)
-    except (ValueError, TypeError, OverflowError):
-        return default
-
-def _esc(t) -> str:
-    return str(t).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;") if t else ""
-
-def fmt_p(p) -> str:
-    """Format price — 2 decimal places always"""
-    if p is None: return "—"
-    if p < 0.01: return f"${p:.6f}"
-    return f"${p:,.2f}"
-
-def fmt_pct(p) -> str:
-    if p is None: return "—"
-    s = "+" if p >= 0 else ""
-    return f"{s}{p:.2f}%"
-
-def pct_color(v) -> str:
-    return "#00CC44" if v >= 0 else "#FF4444"
-
-def _is_english(text: str) -> bool:
-    """Heuristic: reject text where >15% of characters are non-ASCII."""
-    if not text: return False
-    return sum(1 for c in text if ord(c) < 128) / max(len(text), 1) > 0.85
-
-
-def _should_retry_http_error(exc):
-    if isinstance(exc, requests.exceptions.HTTPError):
-        status = exc.response.status_code
-        if status in (429, 500, 502, 503, 504):
-            return True
-        logger.error(f"HTTP {status} - Failing fast on 4xx error: {getattr(exc.response, 'text', '')}")
-        return False
-    if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout, ValueError)):
-        return True
-    return False
-
-def _do_fetch_robust_json(url, params=None, headers=None, timeout=10):
-    """Low-level JSON fetch with pooling, metrics, rate limiting, and sanitized errors."""
-    session = _get_http_session()
-    req_headers = dict(session.headers)  # start with session defaults
-    if headers:
-        req_headers.update(headers)
-    if "User-Agent" not in req_headers or "SENTINEL" in req_headers.get("User-Agent", ""):
-        req_headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-
-    from urllib.parse import urlparse
-    api_domain = urlparse(url).netloc
-    t0 = _time.time()
-
-    _enforce_api_rate_limit(api_domain)
-
-    try:
-        r = session.get(url, params=params, headers=req_headers, timeout=timeout)
-        latency_ms = (_time.time() - t0) * 1000
-        _record_metric(api_domain, latency_ms, is_error=(r.status_code >= 400))
-        r.raise_for_status()
-        return _json_loads(r.content)
-    except Exception as exc:
-        latency_ms = (_time.time() - t0) * 1000
-        _record_metric(api_domain, latency_ms, is_error=True)
-        # Sanitize exception to prevent API key leakage
-        _sanitized_msg = _sanitize_error(str(exc))
-        raise RuntimeError(f"API request failed ({api_domain}): {_sanitized_msg}") from None
-
-
-# ── Per-domain rate limiting ──
-_api_rate_limits_lock = _threading.Lock()
-_api_rate_limits = {}  # domain → last_request_time
-_API_RATE_LIMIT_DEFAULTS = {
-    "api.gdeltproject.org": 1.0,      # 1 req/sec
-    "api.coingecko.com": 1.5,         # conservative for free tier
-    "gamma-api.polymarket.com": 1.0,
-    "clob.polymarket.com": 1.0,
-    "api.rainviewer.com": 2.0,
-    "eonet.gsfc.nasa.gov": 2.0,
-}
-_API_RATE_LIMIT_DEFAULT = 0.5  # 500ms default gap
-
-def _enforce_api_rate_limit(domain):
-    """Enforce per-domain minimum gap between requests (thread-safe)."""
-    min_gap = _API_RATE_LIMIT_DEFAULTS.get(domain, _API_RATE_LIMIT_DEFAULT)
-    with _api_rate_limits_lock:
-        last = _api_rate_limits.get(domain, 0.0)
-        elapsed = _time.time() - last
-        need_sleep = max(0, min_gap - elapsed)
-        _api_rate_limits[domain] = _time.time() + need_sleep
-    if need_sleep > 0:
-        _time.sleep(need_sleep)
-
-# ── Error sanitization ──
-_KEY_PATTERN = re.compile(
-    r'(api[_-]?key|apikey|token|secret|password|authorization)'
-    r'[=:]\s*["\']?([A-Za-z0-9_\-]{8,})["\']?',
-    re.IGNORECASE
+from config import (
+    TRADING_DAYS_PER_YEAR, CALENDAR_DAYS_PER_YEAR, DEFAULT_RISK_FREE_RATE,
+    BPS_FACTOR, YAHOO_USER_AGENTS as _YAHOO_UAS,
 )
 
-def _sanitize_error(msg):
-    """Strip potential API keys from error messages before logging/display."""
-    return _KEY_PATTERN.sub(r'\1=***REDACTED***', msg)
+from http_client import (
+    _get_http_session, _record_metric, get_request_metrics, reset_request_metrics,
+    _enforce_api_rate_limit, _sanitize_error, get_circuit_breaker_states,
+    _do_fetch_robust_json, _fetch_robust_json, _get_persistent_loop, run_async,
+    get_yf_ticker, get_ticker_cache_stats, _yf_semaphore,
+    _safe_float, _safe_int, _esc, fmt_p, fmt_pct, pct_color, _is_english,
+)
 
-# ── Circuit breaker ──
-_cb_lock = _threading.Lock()
-_API_CIRCUIT_BREAKERS = {}
-
-def _fetch_robust_json(url, params=None, headers=None, timeout=10):
-    """Centralized JSON fetcher with circuit breaker, pooling, and metrics."""
-    from urllib.parse import urlparse
-    import time
-    
-    api_name = urlparse(url).netloc
-    
-    with _cb_lock:
-        cb = _API_CIRCUIT_BREAKERS.setdefault(api_name, {"failures": 0, "last_fail": 0})
-        if cb["failures"] >= 3 and (time.time() - cb["last_fail"]) < 300:
-            logger.warning(f"Circuit breaker open for {api_name} - skipping request")
-            return None
-        
-    try:
-        res = _do_fetch_robust_json(url, params=params, headers=headers, timeout=timeout)
-        with _cb_lock:
-            cb = _API_CIRCUIT_BREAKERS.setdefault(api_name, {"failures": 0, "last_fail": 0})
-            cb["failures"] = 0
-        return res
-    except Exception as e:
-        with _cb_lock:
-            cb = _API_CIRCUIT_BREAKERS.setdefault(api_name, {"failures": 0, "last_fail": 0})
-            cb["failures"] = cb["failures"] + 1
-            cb["last_fail"] = time.time()
-        logger.error(f"Request failed for {api_name}: {e}")
-        return None
-
-
-# ── Persistent async event loop ──
-_async_loop = None
-_async_thread = None
-_async_loop_lock = _threading.Lock()
-
-def _get_persistent_loop():
-    """Return a persistent event loop running on a dedicated background thread.
-    
-    Thread-safe: uses a lock to prevent duplicate loops on Streamlit
-    hot-reload. If the old loop is still alive but our reference was
-    lost (module reload), we reuse it instead of spawning a zombie.
-    """
-    global _async_loop, _async_thread
-    with _async_loop_lock:
-        # Fast path: existing loop is alive and running
-        if _async_loop is not None and _async_loop.is_running():
-            return _async_loop
-        
-        # If thread is alive but loop ref was lost, stop the old thread first
-        if _async_thread is not None and _async_thread.is_alive():
-            try:
-                if _async_loop is not None:
-                    _async_loop.call_soon_threadsafe(_async_loop.stop)
-                    _async_thread.join(timeout=2)
-            except Exception:
-                pass
-        
-        import threading
-        _async_loop = asyncio.new_event_loop()
-        _async_thread = threading.Thread(
-            target=_async_loop.run_forever,
-            daemon=True,
-            name="sentinel-async-loop"  # named for debugging zombie threads
-        )
-        _async_thread.start()
-        return _async_loop
-
-def run_async(coro):
-    """Run an async coroutine on the persistent event loop."""
-    loop = _get_persistent_loop()
-    future = asyncio.run_coroutine_threadsafe(coro, loop)
-    return future.result(timeout=60)
-
-
-# ════════════════════════════════════════════════════════════════════
-# MARKET STATUS
-# ════════════════════════════════════════════════════════════════════
 
 def is_market_open():
     """Check US equity market status using accurate NYSE calendar schedules."""
@@ -463,7 +68,7 @@ def is_market_open():
         schedule = nyse.schedule(start_date=now.date(), end_date=now.date())
         
         if schedule.empty:
-            wd = now.weekday()  # Monday=0, Sunday=6
+            wd = now.weekday()
             if wd == 6 and now.time() >= dtime(18, 0):
                 return "FUTURES OPEN", "#FF8C00", "US Equities Closed, Futures Live"
             return "CLOSED", "#FF4444", "Weekend / Holiday"
@@ -488,22 +93,19 @@ def is_0dte_market_open():
     """Check if within regular US equity hours for Alpaca."""
     status, _, _ = is_market_open()
     if status == "OPEN":
-        return True, f"Market OPEN"
+        return True, "Market OPEN"
     return False, f"Market {status}"
 
 
-# ════════════════════════════════════════════════════════════════════
-# YAHOO FINANCE & ASYNC BATCHING
-# ════════════════════════════════════════════════════════════════════
-
 @st.cache_data(ttl=60)
 def yahoo_quote(ticker: str):
-    """Fetch a single Yahoo Finance quote with price, change, pct, and volume."""
     TICKER_MAP = {"DXY": "DX-Y.NYB", "$DXY": "DX-Y.NYB"}
-    t = TICKER_MAP.get(ticker, ticker)
+    raw = (ticker or "").strip()
+    t = TICKER_MAP.get(raw.upper(), TICKER_MAP.get(raw, raw))
     try:
         tk = get_yf_ticker(t)
-        if tk is None: return None
+        if tk is None:
+            return None
 
         price = None
         prev = None
@@ -518,7 +120,6 @@ def yahoo_quote(ticker: str):
         except Exception as e:
             logger.debug(f"yahoo_quote history error for {ticker}: {e}")
 
-        # Fallback to fast_info only if history completely failed
         if price is None:
             try:
                 fi = tk.fast_info
@@ -530,37 +131,66 @@ def yahoo_quote(ticker: str):
 
         if price is None:
             return None
-        if prev is None:
+        if prev is None or prev == 0:
             prev = price
 
         price = float(price)
-        prev  = float(prev)
-        chg   = price - prev
-        pct   = chg / prev * 100 if prev else 0.0
+        prev = float(prev)
+        chg = price - prev
+        pct = chg / prev * 100 if prev else 0.0
 
         return {
-            "ticker": ticker, "price": round(price, 2),
-            "change": round(chg, 2), "pct": round(pct, 2), "volume": vol,
+            "ticker": raw or t,
+            "price": round(price, 2),
+            "change": round(chg, 2),
+            "pct": round(pct, 2),
+            "volume": vol,
         }
     except Exception as exc:
         logger.debug(f"yahoo_quote failed for {ticker}: {exc}")
         return None
 
+from options_math import (
+    bs_price, _get_iv_brentq_fallback, bs_greeks_vectorized,
+    compute_max_pain, compute_pcr,
+    get_iv_explicit, get_iv_brentq, get_iv_newton, bs_greeks_engine,
+)
+
+def fred_series(series_id, key, limit=36):
+    if not key: return None
+    try:
+        data = _fetch_robust_json("https://api.stlouisfed.org/fred/series/observations",
+            params={"series_id": series_id, "api_key": key, "sort_order": "desc",
+                    "limit": limit, "file_type": "json"}, timeout=10)
+        df = pd.DataFrame(data.get("observations", []))
+        df["value"] = pd.to_numeric(df["value"], errors="coerce")
+        df["date"] = pd.to_datetime(df["date"])
+        return df.dropna(subset=["value"]).sort_values("date")
+    except Exception as exc:
+        logger.debug(f"fred_series {series_id}: {exc}")
+        return None
+
+
 @st.cache_data(ttl=3600)
 def get_risk_free_rate(fred_key=None):
-    """Fetch current 3-month T-bill rate as risk-free proxy."""
+    """Fetch current 3-month T-bill rate as risk-free proxy.
+    
+    Cached for 1 hour — the 3-month T-bill rate doesn't change frequently.
+    H9 fix: was called multiple times per options scoring without caching.
+    """
+    if fred_key and hasattr(fred_key, 'get_secret_value'):
+        fred_key = fred_key.get_secret_value()
     if fred_key:
         df = fred_series("DTB3", fred_key, 5)
         if df is not None and not df.empty:
             return round(df["value"].iloc[-1] / 100, 4)
-    # Fallback: fetch from Yahoo Finance
     try:
         h = get_yf_ticker("^IRX").history(period="5d")
         if not h.empty:
             return round(h["Close"].iloc[-1] / 100, 4)
     except Exception as e:
         logger.debug(f"Error caught: {e}")
-    return DEFAULT_RISK_FREE_RATE   # final fallback
+    return DEFAULT_RISK_FREE_RATE
 
 async def _fetch_yahoo_quotes_async(tickers):
     loop = asyncio.get_running_loop()
@@ -607,7 +237,6 @@ def get_heatmap_data():
     
     try:
         data = yf.download(list(set(tickers)), period="5d", progress=False, threads=True, auto_adjust=True)
-        # Handle both multi-level and single-level column index
         if isinstance(data.columns, pd.MultiIndex):
             closes = data["Close"] if "Close" in data.columns.get_level_values(0) else data.xs("Close", axis=1, level=0, drop_level=True)
         else:
@@ -644,7 +273,7 @@ def get_heatmap_data():
                 pct = (chg / prev) * 100 if prev else 0.0
                 mcap = mcaps.get(tkr)
                 if mcap is None:
-                    continue  # skip stocks with missing market cap
+                    continue
                 rows.append({"ticker": tkr, "sector": sector, "pct": pct, "price": price, "change": chg, "market_cap": float(mcap)})
         return rows
     except Exception as e:
@@ -654,7 +283,6 @@ def get_heatmap_data():
 @st.cache_data(ttl=60)
 def multi_quotes(tickers):
     """Fetch quotes for multiple tickers using async batching."""
-    # Deduplicate preserving insertion order
     seen = set()
     unique = []
     for t in tickers:
@@ -667,7 +295,12 @@ def multi_quotes(tickers):
         return [q for q in results if isinstance(q, dict) and q]
     except Exception as e:
         logger.error(f"multi_quotes async failed, falling back to sequential: {e}")
-        return [q for t in tickers if (q := yahoo_quote(t))]
+        ret = []
+        for t in tickers:
+            res = yahoo_quote(t)
+            if res:
+                ret.append(res)
+        return ret
 
 @st.cache_data(ttl=300)
 def get_spy_history():
@@ -694,19 +327,15 @@ def get_vix_full():
             return None, None, None
         current = round(float(h["Close"].iloc[-1]), 2)
         
-        # 3Y percentile rank (full history)
         pct_3y = (h["Close"] < current).mean() * 100
         
-        # 1Y percentile rank (last ~252 trading days)
         h_1y = h.tail(TRADING_DAYS_PER_YEAR)
         pct_1y = (h_1y["Close"] < current).mean() * 100 if len(h_1y) >= 20 else pct_3y
         
-        # Posture based on 1Y percentile
         if pct_1y < 30:   posture = "RISK-ON"
         elif pct_1y < 65: posture = "NEUTRAL"
         else:             posture = "RISK-OFF"
         
-        # Regime divergence: 1Y elevated but 3Y normal
         if pct_1y > 70 and pct_3y < 50:
             posture += " (REGIME: structurally normal)"
         
@@ -716,12 +345,20 @@ def get_vix_full():
 
 @st.cache_data(ttl=600)
 def options_expiries(ticker):
+    """Fetch available option expiry dates with retry.
+    
+    M14 fix: On retry, create a fresh yf.Ticker() bypassing the LRU cache,
+    since the cached Ticker object caches .options internally and retries
+    would return the same stale result.
+    """
     import time
     for attempt in range(3):
         try:
             if attempt > 0:
                 time.sleep(0.5 * (attempt + 1))
-            tk = get_yf_ticker(ticker)
+                tk = yf.Ticker(ticker) if yf else None
+            else:
+                tk = get_yf_ticker(ticker)
             if not tk: return []
             res = list(tk.options)
             if res: return res
@@ -736,7 +373,7 @@ def options_chain(ticker, expiry=None):
     for attempt in range(3):
         try:
             if attempt > 0:
-                time.sleep(0.5 * (attempt + 1))  # 1.0s, 1.5s backoff
+                time.sleep(0.5 * (attempt + 1))
             t = get_yf_ticker(ticker)
             if t is None: return None, None, None
             exps = []
@@ -780,9 +417,19 @@ def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=
     w1 = max(w1, 0)
     w2 = max(w2, 0)
     w3 = max(w3, 0)
-    # Runtime weight invariant — reset to defaults if FP drift breaks sum
     if abs(w1 + w2 + w3 - 1.0) > 1e-6:
         w1, w2, w3 = 0.40, 0.30, 0.30
+
+    if expiry_date is not None:
+        try:
+            exp_dt = datetime.strptime(str(expiry_date), "%Y-%m-%d")
+            dte = max((exp_dt.date() - datetime.today().date()).days, 0)
+            T_approx = max(dte / 365.0, 1 / 365.0)
+        except Exception:
+            T_approx = 14 / 365.0
+    else:
+        T_approx = 14 / 365.0
+    r_risk_free = get_risk_free_rate(fred_key)
 
     def _score_side(df, side):
         if df is None or df.empty:
@@ -799,9 +446,10 @@ def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=
         if df.empty:
             return []
 
-        df["_voi"] = df["volume"].fillna(0) / df["openInterest"].clip(lower=1).fillna(1)
+        oi = df["openInterest"].clip(lower=1)
+        df["_voi"] = df["volume"] / oi
         max_voi = df["_voi"].max()
-        df["_norm_voi"] = df["_voi"] / max_voi if max_voi > 0 else 0
+        df["_norm_voi"] = df["_voi"] / max_voi if max_voi > 0 else 0.0
 
         iv_col = "impliedVolatility"
         if iv_col in df.columns:
@@ -811,23 +459,7 @@ def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=
         else:
             df["_iv_pct"] = 0.5
 
-        # Precise Delta using Black-Scholes Approximation
-        if expiry_date is not None:
-            try:
-                exp_dt = datetime.strptime(str(expiry_date), "%Y-%m-%d")
-                dte = max((exp_dt.date() - datetime.today().date()).days, 0)
-                T_approx = max(dte / 365.0, 1 / 365.0)   # min 1 day to avoid div/0
-            except Exception:
-                T_approx = 14 / 365.0
-        else:
-            T_approx = 14 / 365.0
-
-        # fred_key is now passed as a parameter from the caller (sentinel_app.py)
-        # to avoid coupling the data layer to st.session_state
-        r_risk_free = get_risk_free_rate(fred_key)        
-
         if current_price and current_price > 0 and "strike" in df.columns:
-            # Vectorized Black-Scholes Greeks (numpy) — eliminates slow df.apply
             greeks_result = bs_greeks_vectorized(
                 S=current_price,
                 K=df["strike"].values,
@@ -881,281 +513,6 @@ def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=
 
     return result
 
-def bs_price(S, K, T, r, sigma, side="call", q=0.0):
-    """Calculate theoretical option price using Black-Scholes with dividend yield.
-    
-    Args:
-        S: Spot price
-        K: Strike price  
-        T: Time to expiry in years
-        r: Risk-free rate
-        sigma: Volatility
-        side: 'call' or 'put'
-        q: Continuous dividend yield (default 0.0)
-    """
-    try:
-        # Prevent math domain errors on edge cases
-        if T <= 0 or sigma <= 0 or S <= 0 or K <= 0: return 0.0
-        S_adj = S * math.exp(-q * T)
-        d1 = (math.log(S / K) + (r - q + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
-        d2 = d1 - sigma * math.sqrt(T)
-        if side == "call":
-            p = S_adj * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
-        else:
-            p = K * math.exp(-r * T) * norm.cdf(-d2) - S_adj * norm.cdf(-d1)
-        return max(p, 0.0)
-    except Exception:
-        return 0.0
-
-def get_iv_explicit(S, K, T, r, target_price, side="call", q=0.0):
-    """Explicit closed-form Black-Scholes implied volatility (no root-finding).
-
-    Implements the inverse-Gaussian quantile formula from:
-      "An Explicit Formula for Black-Scholes Implied Volatility" (2025).
-
-    The key identity: for an OTM call with log-moneyness k = log(K/F) > 0,
-      c_BS(k, v) = 1 - F_IG(4/v²; 2/k, 1)
-    Inverting gives v = 2 / sqrt(F_IG_inv(1 - c; 2/k, 1)), where v = σ√T.
-    ITM calls are handled via put-call symmetry; ATM via the normal quantile.
-
-    ~3.4× faster than iterative solvers at machine-precision accuracy.
-    Falls back to brentq on any numerical failure.
-
-    Args:
-        S: Spot price
-        K: Strike price
-        T: Time to expiry in years
-        r: Risk-free rate (continuously compounded)
-        target_price: Observed option market price
-        side: 'call' or 'put'
-        q: Continuous dividend yield (default 0.0)
-
-    Returns:
-        Implied volatility (annualised σ) or None on failure.
-    """
-    from scipy.stats import invgauss  # scipy IG: shape param μ, scale 1 by default
-
-    if target_price <= 0 or S <= 0 or K <= 0 or T <= 0:
-        return None
-
-    try:
-        # Forward price and discount factor
-        F = S * math.exp((r - q) * T)
-        D = math.exp(-r * T)
-
-        # Normalise to put via put-call parity if needed, then work in call space
-        if side == "put":
-            # put-call parity: C = P + D*F - D*K  →  c = p + 1 - K/F
-            c = target_price / (D * F) + 1.0 - K / F
-        else:
-            c = target_price / (D * F)
-
-        # Clamp to valid range (intrinsic + epsilon guard)
-        c = max(c, 1e-15)
-        c = min(c, 1.0 - 1e-15)
-
-        k = math.log(K / F)  # forward log-moneyness
-
-        # ── ATM branch: v = 2*T^{-1/2} * Φ^{-1}(c + 1/2)  (eq. 2 in paper) ──
-        if abs(k) < 1e-10:
-            from scipy.stats import norm as _norm
-            q_val = _norm.ppf(c + 0.5)
-            if q_val <= 0:
-                return _get_iv_brentq_fallback(S, K, T, r, target_price, side, q)
-            sigma = 2.0 / math.sqrt(T) * q_val
-            return float(max(sigma, 1e-8))
-
-        # ── OTM / ITM branch ──
-        # For ITM calls (k < 0): apply put-call symmetry to get OTM equivalent
-        # m = 1 if K > F else K/F
-        if k > 0:
-            # OTM call: 1 - c is the IG CDF argument
-            prob = 1.0 - c
-            mu_ig = 2.0 / k          # IG mean parameter = 2/|k|
-        else:
-            # ITM call → OTM equivalent: (1-c) * F/K  (eq. 7 in paper)
-            prob = (1.0 - c) * (F / K)
-            mu_ig = 2.0 / (-k)       # |k|
-
-        # Clamp probability to a valid open interval for the quantile
-        prob = max(prob, 1e-15)
-        prob = min(prob, 1.0 - 1e-15)
-
-        # scipy invgauss parameterisation: invgauss(mu=μ, scale=λ)
-        # Paper uses F_IG(x; μ, λ=1), so scale=1, mu=mu_ig
-        # quantile = F_IG^{-1}(prob; mu_ig, 1)
-        x = invgauss.ppf(prob, mu=mu_ig, scale=1.0)
-
-        if x <= 0:
-            return _get_iv_brentq_fallback(S, K, T, r, target_price, side, q)
-
-        # v = 2 / sqrt(x),  σ = v / sqrt(T)
-        v = 2.0 / math.sqrt(x)
-        sigma = v / math.sqrt(T)
-        return float(max(sigma, 1e-8))
-
-    except Exception:
-        return _get_iv_brentq_fallback(S, K, T, r, target_price, side, q)
-
-
-def _get_iv_brentq_fallback(S, K, T, r, target_price, side="call", q=0.0):
-    """Internal brentq fallback — used only when the explicit formula fails."""
-    from scipy.optimize import brentq
-
-    if target_price <= 0 or S <= 0 or K <= 0 or T <= 0:
-        return None
-
-    def objective(sigma):
-        return bs_price(S, K, T, r, sigma, side, q) - target_price
-
-    try:
-        lo_val = objective(1e-6)
-        hi_val = objective(10.0)
-        if lo_val * hi_val > 0:
-            return None
-        iv = brentq(objective, 1e-6, 10.0, xtol=1e-6, maxiter=100)
-        return float(max(iv, 0.0))
-    except Exception:
-        return None
-
-
-def get_iv_brentq(S, K, T, r, target_price, side="call", q=0.0):
-    """Implied volatility via explicit inverse-Gaussian formula (primary path)
-    with brentq fallback for edge cases.
-
-    Primary: explicit closed-form from the 2025 IG-quantile paper (~3.4× faster).
-    Fallback: scipy.optimize.brentq bracket solver for numerical robustness.
-
-    Returns None if the solver fails, signaling the caller to fall back to
-    broker-provided IV instead of injecting a bogus 0.0.
-    """
-    return get_iv_explicit(S, K, T, r, target_price, side, q)
-
-
-# Backward-compatible alias
-def get_iv_newton(S, K, T, r, target_price, side="call", q=0.0):
-    """Alias for get_iv_brentq — kept for backward compatibility."""
-    return get_iv_brentq(S, K, T, r, target_price, side, q)
-
-def bs_greeks_engine(S, K, T, r, sigma, side="call", q=0.0):
-    """True Black-Scholes Greeks Engine with dividend yield (scalar version).
-    
-    Returns Delta, Gamma, Theta, Vega, and Rho.
-    Vega and Rho are expressed per 1% move (divided by 100).
-    """
-    if S <= 0 or K <= 0 or T <= 0 or sigma <= 0:
-        return {"delta": 0.5 if side == "call" else -0.5, "gamma": 0.0, "theta": 0.0, "vega": 0.0, "rho": 0.0}
-    try:
-        S_adj = S * math.exp(-q * T)
-        d1 = (math.log(S / K) + (r - q + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
-        d2 = d1 - sigma * math.sqrt(T)
-        N_d1 = norm.cdf(d1)
-        N_d2 = norm.cdf(d2)
-        n_d1 = norm.pdf(d1)
-        discount = math.exp(-r * T)
-        
-        # Delta (adjusted for dividends)
-        delta = math.exp(-q * T) * N_d1 if side == "call" else math.exp(-q * T) * (N_d1 - 1.0)
-        
-        # Gamma
-        gamma = math.exp(-q * T) * n_d1 / (S * sigma * math.sqrt(T))
-        
-        # Theta
-        theta_d1 = -(S_adj * n_d1 * sigma) / (2 * math.sqrt(T))
-        if side == "call":
-            theta = (theta_d1 + q * S_adj * N_d1 - r * K * discount * N_d2) / 365.0
-        else:
-            theta = (theta_d1 - q * S_adj * norm.cdf(-d1) + r * K * discount * norm.cdf(-d2)) / 365.0
-        
-        # Vega: sensitivity to 1% move in IV  →  S * e^(-qT) * N'(d1) * sqrt(T) / 100
-        vega = S_adj * n_d1 * math.sqrt(T) / 100.0
-        
-        # Rho: sensitivity to 1% move in rates
-        if side == "call":
-            rho = K * T * discount * N_d2 / 100.0
-        else:
-            rho = -K * T * discount * norm.cdf(-d2) / 100.0
-            
-        return {
-            "delta": round(delta, 4), "gamma": round(gamma, 6), "theta": round(theta, 4),
-            "vega": round(vega, 4), "rho": round(rho, 4)
-        }
-    except Exception:
-        return {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0, "rho": 0.0}
-
-
-def bs_greeks_vectorized(S, K, T, r, sigma, side="call", q=0.0):
-    """Vectorized Black-Scholes Greeks using numpy arrays.
-    
-    Accepts scalar S/T/r/q and array K/sigma (or all arrays).
-    Returns dict of numpy arrays: delta, gamma, theta, vega, rho.
-    Eliminates the df.apply(axis=1) bottleneck for large option chains.
-    
-    K values <= 0 are clamped to 1e-10 BEFORE np.log to prevent
-    RuntimeWarning and NaN/Inf poisoning from malformed yfinance data.
-    """
-    K = np.asarray(K, dtype=np.float64)
-    sigma = np.asarray(sigma, dtype=np.float64)
-    
-    # Clamp K > 0 to avoid np.log(S/K) → -inf/NaN from zero/negative strikes
-    # (yfinance occasionally returns 0 or negative strikes from parsing artifacts)
-    K = np.maximum(K, 1e-10)
-    sigma = np.maximum(sigma, 1e-6)
-    T_safe = np.maximum(T, 1e-10)
-    S_safe = np.maximum(S, 1e-10)
-    
-    sqrt_T = np.sqrt(T_safe)
-    S_adj = S_safe * np.exp(-q * T_safe)
-    
-    d1 = (np.log(S_safe / K) + (r - q + 0.5 * sigma**2) * T_safe) / (sigma * sqrt_T)
-    d2 = d1 - sigma * sqrt_T
-    
-    # Clamp d1/d2 to reasonable range to prevent overflow in norm.cdf/pdf
-    d1 = np.clip(d1, -50, 50)
-    d2 = np.clip(d2, -50, 50)
-    
-    N_d1 = norm.cdf(d1)
-    N_d2 = norm.cdf(d2)
-    n_d1 = norm.pdf(d1)
-    discount = np.exp(-r * T_safe)
-    div_adj = np.exp(-q * T_safe)
-    
-    # Delta
-    if side == "call":
-        delta = div_adj * N_d1
-    else:
-        delta = div_adj * (N_d1 - 1.0)
-    
-    # Gamma
-    gamma = div_adj * n_d1 / (S_safe * sigma * sqrt_T)
-    
-    # Theta
-    theta_d1 = -(S_adj * n_d1 * sigma) / (2 * sqrt_T)
-    if side == "call":
-        theta = (theta_d1 + q * S_adj * N_d1 - r * K * discount * N_d2) / 365.0
-    else:
-        theta = (theta_d1 - q * S_adj * norm.cdf(-d1) + r * K * discount * norm.cdf(-d2)) / 365.0
-    
-    # Vega (per 1% IV move)
-    vega = S_adj * n_d1 * sqrt_T / 100.0
-    
-    # Rho (per 1% rate move)
-    if side == "call":
-        rho = K * T_safe * discount * N_d2 / 100.0
-    else:
-        rho = -K * T_safe * discount * norm.cdf(-d2) / 100.0
-    
-    # Final NaN/Inf safety net — replace any remaining poison values with 0
-    result = {
-        "delta": np.round(delta, 4),
-        "gamma": np.round(gamma, 6),
-        "theta": np.round(theta, 4),
-        "vega": np.round(vega, 4),
-        "rho": np.round(rho, 4),
-    }
-    for key in result:
-        result[key] = np.nan_to_num(result[key], nan=0.0, posinf=0.0, neginf=0.0)
-    return result
 
 @st.cache_data(ttl=21600)
 def get_finra_short_volume(ticker):
@@ -1164,8 +521,9 @@ def get_finra_short_volume(ticker):
         t = get_yf_ticker(ticker)
         if t is None: return None
         i = t.fast_info
-        # Use fast_info (if available in newer yf) or info as fallback
-        s_pct = getattr(i, "shares_short_prior_month", 0) / getattr(i, "shares_outstanding", 1)
+        _short_prior = _safe_float(getattr(i, "shares_short_prior_month", 0))
+        _shares_out = _safe_float(getattr(i, "shares_outstanding", 1))
+        s_pct = _short_prior / _shares_out if _shares_out > 0 else 0
         if not s_pct:
             info = t.info
             s_pct = info.get("shortPercentOfFloat", 0)
@@ -1201,7 +559,6 @@ def stat_arb_screener(pairs=None):
     end = datetime.today()
     start = end - timedelta(days=252)
     
-    # Bulk download to avoid individual rate-limited requests
     all_tickers = list(set([t for pair in pairs for t in pair]))
     try:
         with _yf_semaphore:
@@ -1224,7 +581,6 @@ def stat_arb_screener(pairs=None):
             if len(df) < 100:
                 continue
             
-            # Test cointegration in both directions, keep lower p-value
             _, pvalue_fwd, _ = coint(df[t1], df[t2])
             _, pvalue_rev, _ = coint(df[t2], df[t1])
             
@@ -1237,17 +593,14 @@ def stat_arb_screener(pairs=None):
                 dep, indep = t2, t1
                 direction_label = f"{t2} ~ {t1}"
             
-            # OLS for Hedge Ratio (Beta) using the canonical direction
             Y = df[dep]
             X = sm.add_constant(df[indep])
             model = sm.OLS(Y, X).fit()
             beta = model.params.iloc[1]
             
-            # Spread = dep - beta * indep
             spread = df[dep] - beta * df[indep]
             std_spread = spread.std()
             
-            # Ornstein-Uhlenbeck Process for Half-Life
             spread_lag = spread.shift(1).dropna()
             spread_diff = spread.diff().dropna()
             lag_with_const = sm.add_constant(spread_lag)
@@ -1256,17 +609,13 @@ def stat_arb_screener(pairs=None):
             ou_lambda = -ou_model.params.iloc[1]
             half_life = np.log(2) / ou_lambda if ou_lambda > 0 else float('inf')
             
-            # OU equilibrium mean (unbiased)
             if ou_lambda > 0:
                 eq_mean = ou_intercept / ou_lambda
             else:
-                eq_mean = spread.mean()  # fallback if OU not mean-reverting
+                eq_mean = spread.mean()
             
             z_score = (spread.iloc[-1] - eq_mean) / std_spread if std_spread > 0 else 0.0
             
-            # Scale entry thresholds by half-life
-            # Fast-reverting (3-day HL) → tight thresholds (~1.0)
-            # Slow-reverting (60-day HL) → wide thresholds (~2.5)
             clamped_hl = max(3.0, min(float(half_life), 60.0))
             entry_thresh = 1.0 + (clamped_hl / 60.0) * 1.5
             lean_thresh = entry_thresh * 0.6
@@ -1364,31 +713,28 @@ def top_movers():
         return [], []
 
 
+@st.cache_data(ttl=300)
 def calc_stock_fear_greed():
     """5-signal Fear & Greed: VIX, Momentum, Safe Haven, PCR, Junk Demand."""
     try:
         scores = []
 
-        # --- Signal 1: VIX Level — 1-year rolling percentile rank (self-calibrating) ---
         vix_info = get_vix_full()
         if vix_info and vix_info[0] is not None:
             vix, pct_1y, _ = vix_info
             vix_score = 100 - pct_1y
             scores.append(("VIX", vix_score))
 
-        # --- Signal 2: Market Momentum (SPY vs 125-day MA) ---
         try:
             h = get_spy_history().tail(130)
             if len(h) >= 125:
                 current = float(h["Close"].iloc[-1])
                 ma125 = float(h["Close"].tail(125).mean())
-                # How far above/below MA, mapped 0-100
                 pct_above = (current / ma125 - 1) * 100
                 mom_score = max(0, min(100, 50 + pct_above * 5))
                 scores.append(("Momentum", mom_score))
         except Exception as e:
             logger.debug(f"Error caught: {e}")
-        # --- Signal 3: Safe Haven Demand (TLT vs SPY 20-day relative perf) ---
         try:
             tlt_hist = get_tlt_history().tail(21)
             spy_hist = get_spy_history().tail(21)
@@ -1396,14 +742,11 @@ def calc_stock_fear_greed():
                 t_ret = (tlt_hist["Close"].iloc[-1] / tlt_hist["Close"].iloc[0] - 1) * 100
                 s_ret = (spy_hist["Close"].iloc[-1] / spy_hist["Close"].iloc[0] - 1) * 100
                 relative_20d = t_ret - s_ret
-                # Score mapping: Positive 20d outperformance of TLT -> fear
                 sh_score = max(0, min(100, 50 - relative_20d * 5))
                 scores.append(("SafeHaven", sh_score))
         except Exception as e:
             logger.debug(f"Error caught: {e}")
-        # --- Signal 4: Put/Call Ratio (equity options) ---
         try:
-            # Use SPY options PCR as proxy
             t = get_yf_ticker("SPY")
             opts = t.options
             if opts:
@@ -1411,17 +754,14 @@ def calc_stock_fear_greed():
                 call_vol = chain.calls["volume"].sum()
                 put_vol = chain.puts["volume"].sum()
                 pcr = put_vol / call_vol if call_vol > 0 else 1.0
-                # PCR 0.5 = extreme greed (100), PCR 1.5 = extreme fear (0)
                 pcr_score = max(0, min(100, (1.5 - pcr) / 1.0 * 100))
                 scores.append(("PCR", pcr_score))
         except Exception as e:
             logger.debug(f"Error caught: {e}")
-        # --- Signal 5: Junk Bond Demand (HYG vs LQD spread proxy) ---
         try:
             hyg = yahoo_quote("HYG")
             lqd = yahoo_quote("LQD")
             if hyg and lqd:
-                # HYG outperforming LQD = risk-on = greed
                 spread = hyg["pct"] - lqd["pct"]
                 junk_score = max(0, min(100, 50 + spread * 20))
                 scores.append(("Junk", junk_score))
@@ -1430,7 +770,6 @@ def calc_stock_fear_greed():
         if not scores:
             return None, None
 
-        # Equal-weight composite
         total = sum(s for _, s in scores) / len(scores)
         score = int(total)
 
@@ -1444,6 +783,7 @@ def calc_stock_fear_greed():
     except Exception:
         return None, None
 
+@st.cache_data(ttl=60)
 def market_snapshot_str():
     try:
         pst = pytz.timezone("US/Pacific")
@@ -1488,16 +828,16 @@ def build_brief_context(geo_watch=""):
     )
 
     def _fetch_geo(query):
+        """H10 fix: Route through _fetch_robust_json for circuit breaker protection."""
         try:
-            r = requests.get(
+            data = _fetch_robust_json(
                 "https://api.gdeltproject.org/api/v2/doc/doc",
                 params={"query": query + " sourcelang:english", "mode": "artlist",
                         "maxrecords": 20, "format": "json", "timespan": "48h"},
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"},
                 timeout=8,
             )
-            if r.status_code != 200: return []
-            arts = [a for a in r.json().get("articles", []) if _is_english(a.get("title", ""))]
+            if not data: return []
+            arts = [a for a in data.get("articles", []) if _is_english(a.get("title", ""))]
             lines, seen = [], set()
             for a in arts:
                 title = a.get("title", "").strip()
@@ -1511,8 +851,6 @@ def build_brief_context(geo_watch=""):
         except Exception:
             return []
 
-    # Fetch both GDELT queries in parallel
-    # (worst case was 16s for two sequential 8s-timeout calls)
     import concurrent.futures
     base = market_snapshot_str()
 
@@ -1548,29 +886,6 @@ def build_brief_context(geo_watch=""):
     if macro_block: sections.append(macro_block)
     return "\n\n".join(s for s in sections if s)
 
-
-# ════════════════════════════════════════════════════════════════════
-# FRED
-# ════════════════════════════════════════════════════════════════════
-
-@st.cache_data(ttl=600)
-def fred_series(series_id, key, limit=36):
-    if not key: return None
-    try:
-        data = _fetch_robust_json("https://api.stlouisfed.org/fred/series/observations",
-            params={"series_id": series_id, "api_key": key, "sort_order": "desc",
-                    "limit": limit, "file_type": "json"}, timeout=10)
-        df = pd.DataFrame(data.get("observations", []))
-        df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        df["date"] = pd.to_datetime(df["date"])
-        return df.dropna(subset=["value"]).sort_values("date")
-    except Exception as exc:
-        logger.debug(f"fred_series {series_id}: {exc}")
-        return None
-
-# ════════════════════════════════════════════════════════════════════
-# POLYMARKET
-# ════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=180)
 def polymarket_events(limit=60):
@@ -1608,9 +923,6 @@ def _parse_poly_field(field):
         except Exception: return []
     return field if isinstance(field, list) else []
 
-# ════════════════════════════════════════════════════════════════════
-# CRYPTO
-# ════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=300)
 def fear_greed_crypto():
@@ -1629,6 +941,7 @@ def crypto_markets():
                     "page": 1, "price_change_percentage": "24h"}, timeout=15)
         if isinstance(data, list):
             return data
+        return []
     except Exception as exc:
         logger.debug(f"crypto_markets: {exc}")
         return []
@@ -1642,15 +955,8 @@ def crypto_global():
         return {}
 
 
-# ════════════════════════════════════════════════════════════════════
-# NEWS
-# ════════════════════════════════════════════════════════════════════
-
 @st.cache_data(ttl=180)
 def gdelt_news(query, max_rec=15):
-    # Both endpoints enforce sourcelang:english at the API level.
-    # The 168h fallback widens the time window (not the language) when
-    # the 72h primary returns too few results.
     endpoints = [
         {"url": "https://api.gdeltproject.org/api/v2/doc/doc",
          "params": {"query": query + " sourcelang:english", "mode": "artlist", "maxrecords": max_rec, "format": "json", "timespan": "72h"}},
@@ -1662,8 +968,6 @@ def gdelt_news(query, max_rec=15):
             data = _fetch_robust_json(ep["url"], params=ep["params"], timeout=8)
             arts = data.get("articles", [])
             if arts:
-                # Secondary client-side filter catches edge cases where the
-                # API returns non-English despite the sourcelang constraint.
                 filtered = [a for a in arts if _is_english(a.get("title", ""))][:max_rec]
                 if filtered: return filtered
         except Exception:
@@ -1719,7 +1023,6 @@ def smart_money_conviction_buys(insider_data, officer_roles=None):
     if officer_roles is None:
         officer_roles = {}
     
-    # C-Suite / Senior Executive keywords (case-insensitive match)
     _CSUITE_KEYWORDS = [
         "CEO", "CFO", "COO", "CTO", "CIO", "CHIEF", "PRESIDENT",
         "CHAIRMAN", "VICE CHAIR", "DIRECTOR", "EVP", "SVP",
@@ -1731,7 +1034,6 @@ def smart_money_conviction_buys(insider_data, officer_roles=None):
         name_upper = str(name).upper().strip()
         role = role_map.get(name_upper, "")
         if not role:
-            # Try partial name match
             parts = name_upper.replace(",", "").replace(".", "").split()
             if len(parts) >= 2:
                 role = role_map.get(" ".join(parts[:2]), "")
@@ -1745,7 +1047,6 @@ def smart_money_conviction_buys(insider_data, officer_roles=None):
         role_upper = str(role).upper()
         return any(kw in role_upper for kw in _CSUITE_KEYWORDS), role
     
-    # Step 1: Filter to open market purchases only (TransactionCode == 'P')
     purchases = []
     for tx in insider_data:
         code = str(tx.get("transactionCode", "") or "").upper()
@@ -1754,23 +1055,20 @@ def smart_money_conviction_buys(insider_data, officer_roles=None):
         
         change = _safe_int(tx.get("change", 0))
         if change <= 0:
-            continue  # Must be a buy (positive share change)
+            continue
         
         name = str(tx.get("name", "Unknown"))
         date_str = str(tx.get("transactionDate", ""))[:10]
         price = _safe_float(tx.get("transactionPrice", 0))
         shares_owned = _safe_int(tx.get("share", 0))
         
-        # Calculate dollar value
         dollar_value = change * price if price > 0 else 0
         
-        # Check if C-suite
         is_senior, role = _is_csuite(name, officer_roles)
         
-        # Score: base on dollar value tier + role seniority
         score = 0
         if dollar_value >= 1_000_000:
-            score += 5   # $1M+ = very strong signal
+            score += 5
         elif dollar_value >= 500_000:
             score += 4
         elif dollar_value >= 100_000:
@@ -1781,7 +1079,7 @@ def smart_money_conviction_buys(insider_data, officer_roles=None):
             score += 1
         
         if is_senior:
-            score += 3  # C-suite bonus
+            score += 3
         
         purchases.append({
             "name": name,
@@ -1796,7 +1094,6 @@ def smart_money_conviction_buys(insider_data, officer_roles=None):
             "ticker": str(tx.get("symbol", "")).upper(),
         })
     
-    # Step 2: Sort by conviction score then dollar value
     purchases.sort(key=lambda x: (x["score"], x["dollar_value"]), reverse=True)
     
     return purchases
@@ -1826,7 +1123,6 @@ def finnhub_officers(ticker, key):
     try:
         tk = get_yf_ticker(ticker)
         if tk:
-            # 1. Extract from insider_transactions FIRST (generic titles like "Officer")
             try:
                 idf = tk.insider_transactions if hasattr(tk, "insider_transactions") else None
                 if idf is None and hasattr(tk, "get_insider_transactions"):
@@ -1848,7 +1144,6 @@ def finnhub_officers(ticker, key):
             except Exception as exc:
                 logger.debug(f"finnhub_officers yf insider_transactions: {exc}")
 
-            # 2. companyOfficers override generic titles with real ones
             _generic = {"Officer", "Director", "officer", "director", ""}
             officers = tk.info.get("companyOfficers", [])
             for o in officers:
@@ -1859,10 +1154,8 @@ def finnhub_officers(ticker, key):
                 for pfx in ["MR ", "MS ", "MRS ", "DR ", "PROF "]:
                     if clean_name.startswith(pfx):
                         clean_name = clean_name[len(pfx):].strip()
-                # Always overwrite if existing entry is generic
                 if clean_name not in role_map or role_map.get(clean_name) in _generic:
                     role_map[clean_name] = title
-                # Create reversed-name entries (LAST FIRST / LAST FIRST MIDDLE)
                 parts = clean_name.split()
                 if len(parts) >= 2:
                     last_first_all = parts[-1] + " " + " ".join(parts[:-1])
@@ -1876,21 +1169,23 @@ def finnhub_officers(ticker, key):
     return role_map
 
 
-# ════════════════════════════════════════════════════════════════════
-# EARNINGS
-# ════════════════════════════════════════════════════════════════════
-
 @st.cache_data(ttl=86400)
 def get_earnings_calendar(today_str=None):
+    """Fetch earnings dates for major tickers.
+    
+    H5 fix: Parallelized with ThreadPoolExecutor(max_workers=8) to reduce
+    load time from 30-90s to 5-10s. Uses fast_info.short_name instead of
+    t.info for company names to avoid a second API call per ticker.
+    """
+    import concurrent.futures
     MAJOR = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "JPM", "GS", "BAC",
              "NFLX", "AMD", "INTC", "CRM", "ORCL", "V", "MA", "WMT", "XOM", "CVX", "UNH",
              "JNJ", "PFE", "ABBV", "LLY", "BRK-B", "HD", "DIS", "SHOP", "PLTR", "SNOW"]
-    rows = []
-    for tkr in MAJOR:
+    
+    def _fetch_single(tkr):
         try:
             t = get_yf_ticker(tkr)
-            if t is None: continue
-            info = t.info
+            if t is None: return None
             cal = t.calendar
             if cal is not None and not (cal.empty if hasattr(cal, "empty") else False):
                 if isinstance(cal, pd.DataFrame):
@@ -1899,29 +1194,40 @@ def get_earnings_calendar(today_str=None):
                         ed = ed.iloc[0] if hasattr(ed, "iloc") else ed
                         eps = float(cal.loc["EPS Estimate"].iloc[0]) if "EPS Estimate" in cal.index else None
                     else:
-                        continue
+                        return None
                 elif isinstance(cal, dict):
                     ed = cal.get("Earnings Date", [None])
                     ed = ed[0] if isinstance(ed, list) and len(ed) > 0 else (ed if not isinstance(ed, list) else None)
                     eps = cal.get("EPS Estimate", cal.get("Earnings Average", None))
                 else:
-                    continue
-                if ed is None: continue
-                rows.append({
+                    return None
+                if ed is None: return None
+                try:
+                    short_name = getattr(t.fast_info, 'short_name', tkr) or tkr
+                except Exception:
+                    short_name = tkr
+                return {
                     "Ticker": tkr,
-                    "Company": info.get("shortName", tkr)[:22],
+                    "Company": str(short_name)[:22],
                     "EarningsDate": pd.to_datetime(ed).date(),
                     "EPS Est": round(float(eps), 2) if eps is not None else None,
-                    "Sector": info.get("sector", "—"), 
-                })
+                    "Sector": "—",
+                }
         except Exception as exc:
             logger.debug(f"get_earnings_calendar {tkr}: {exc}")
+        return None
+    
+    rows = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_fetch_single, tkr): tkr for tkr in MAJOR}
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result:
+                rows.append(result)
+    
     if not rows: return pd.DataFrame()
     return pd.DataFrame(rows).dropna(subset=["EarningsDate"]).sort_values("EarningsDate")
 
-# ════════════════════════════════════════════════════════════════════
-# 0DTE — ALPACA REST API 
-# ════════════════════════════════════════════════════════════════════
 
 def _alpaca_headers():
     try:
@@ -1949,7 +1255,7 @@ def get_stock_snapshot(symbol="SPY"):
             "high": _safe_float(daily_bar.get("h")),
             "low": _safe_float(daily_bar.get("l")),
             "close": _safe_float(daily_bar.get("c")),
-            "volume": int(_safe_float(daily_bar.get("v"))),
+            "volume": int(_safe_float(daily_bar.get("v"), 0)),
             "minute_vwap": _safe_float(minute_bar.get("vw")),
         }
     except Exception:
@@ -1989,7 +1295,7 @@ def _parse_type_from_symbol(sym):
         return "unknown"
     except Exception: return "unknown"
 
-@st.cache_resource(ttl=30)
+@st.cache_data(ttl=30)
 def fetch_0dte_chain(underlying="SPY"):
     headers = _alpaca_headers()
     if not headers: return [], "No Alpaca API keys configured"
@@ -2015,7 +1321,6 @@ def fetch_0dte_chain(underlying="SPY"):
         url = f"https://data.alpaca.markets/v1beta1/options/snapshots/{underlying}"
         params = {"feed": "indicative", "limit": 250, "expiration_date": target_expiry}
         data = _fetch_robust_json(url, headers=headers, params=params, timeout=15)
-        # Guard against None: _fetch_robust_json returns None on timeout/circuit breaker
         if not data:
             logger.error("fetch_0dte_chain: Alpaca snapshots endpoint returned None")
             return [], "Alpaca snapshots API unavailable — network timeout or circuit breaker"
@@ -2023,7 +1328,6 @@ def fetch_0dte_chain(underlying="SPY"):
         seen_tokens = set()
         pages = 0
 
-        # Pagination: guard every iteration against None response
         while data is not None and data.get("next_page_token") and pages < 10:
             token = data["next_page_token"]
             if token in seen_tokens:
@@ -2043,6 +1347,9 @@ def fetch_0dte_chain(underlying="SPY"):
         chain = []
         lower_bound, upper_bound = spot * 0.98, spot * 1.02
 
+        r_rate = get_risk_free_rate()
+        T_val = 0.5 / 365.0
+
         for sym, snap_data in snapshots.items():
             greeks = snap_data.get("greeks", {})
             quote = snap_data.get("latestQuote", {})
@@ -2054,12 +1361,17 @@ def fetch_0dte_chain(underlying="SPY"):
             bid = _safe_float(quote.get("bp"))
             ask = _safe_float(quote.get("ap"))
             last = _safe_float(trade.get("p"))
-            mid = round((bid + ask) / 2, 2) if (bid + ask) > 0 else last
-            
-            # Use Newton-Raphson dynamically if mid price is available
-            r_rate = 0.045
-            T_val = 0.5 / 365.0  # Appx half a trading day for 0DTE flow
-            
+            if bid > 0 and ask > 0:
+                mid = round((bid + ask) / 2, 2)
+            elif last > 0:
+                mid = last
+            elif bid > 0:
+                mid = bid
+            elif ask > 0:
+                mid = ask
+            else:
+                mid = 0.0
+
             calculated_iv = get_iv_newton(spot, strike, T_val, r_rate, mid, opt_type)
             if calculated_iv is not None and calculated_iv > 0:
                 bs_override = bs_greeks_engine(spot, strike, T_val, r_rate, calculated_iv, opt_type)
@@ -2079,7 +1391,7 @@ def fetch_0dte_chain(underlying="SPY"):
                 "iv": final_iv,
                 "delta": final_delta, "gamma": final_gamma,
                 "theta": final_theta, "vega": _safe_float(greeks.get("vega")),
-                "oi": int(_safe_float(snap_data.get("openInterest", 0))), "volume": int(_safe_float(trade.get("s", 0))),
+                "oi": int(_safe_float(snap_data.get("openInterest", 0), 0)), "volume": int(_safe_float(trade.get("s", 0), 0)),
             })
         chain.sort(key=lambda x: x["strike"])
         return chain, "OK"
@@ -2087,14 +1399,27 @@ def fetch_0dte_chain(underlying="SPY"):
         return [], f"Error: {str(e)}"
 
 def compute_gex_profile(chain, spot):
-    """Compute Gamma Exposure profile using vectorized pandas/numpy.
+    """Compute Gamma Exposure (GEX) profile using vectorized pandas/numpy.
     
-    Replaces the previous DuckDB implementation which was massive overkill
-    for <200 row option chain aggregations. Pure pandas is >100x faster.
+    Formula per strike:
+        GEX_strike = sign × OI × 100 × |γ| × S² × 0.01 / 1,000,000
     
-    Includes optional bid/ask volume imbalance weighting for improved
-    signal quality: options traded at the ask (buyer-initiated) are weighted
-    more heavily as dealer-short positions.
+    Where:
+        sign   = +1 for calls, -1 for puts (SpotGamma convention)
+        OI     = open interest contracts
+        100    = shares per contract
+        γ      = option gamma (∂²V/∂S²)
+        S²×0.01 = dollar-gamma scaling ($ move per 1% spot change)
+        1e6    = express result in millions of USD
+    
+    Returns:
+        dict[float, float]: {strike: GEX_in_$M, ...}
+        Positive GEX → dealer-long gamma → resistance/mean-reversion
+        Negative GEX → dealer-short gamma → acceleration/trend-following
+    
+    H2 doc: The raw number is millions of USD of gamma exposure per 1% 
+    move in the underlying. It is NOT directly comparable to SpotGamma's 
+    proprietary GEX index which uses additional normalizations.
     """
     if spot <= 0 or not chain:
         return {}
@@ -2105,29 +1430,13 @@ def compute_gex_profile(chain, spot):
         if not required.issubset(df.columns):
             return {}
         
-        # GEX sign convention (SpotGamma standard):
-        # Call OI → +1 → positive GEX = resistance ceiling (dealers sell into rallies)
-        # Put OI  → -1 → negative GEX = acceleration zone (dealers sell into drops)
         sign = np.where(df["type"] == "call", 1.0, -1.0)
         
-        # Bid/ask volume imbalance weight (improves signal quality)
-        # Trades near ask price → likely buyer-initiated → dealer is shorter
-        if "bid" in df.columns and "ask" in df.columns and "mid" in df.columns:
-            bid = df["bid"].fillna(0).values
-            ask = df["ask"].fillna(0).values
-            mid = df["mid"].fillna(0).values
-            spread = np.maximum(ask - bid, 0.01)
-            # Weight: 1.0 at mid, up to 1.5 at ask, down to 0.5 at bid
-            ask_bias = np.clip((mid - bid) / spread, 0.0, 1.0)
-            weight = 0.5 + ask_bias  # range [0.5, 1.5]
-        else:
-            weight = 1.0
         
         df["gex"] = (
             sign * df["oi"].fillna(0) * 100
             * df["gamma"].abs()
             * (spot ** 2) * 0.01
-            * weight
             / 1_000_000
         )
         
@@ -2138,11 +1447,18 @@ def compute_gex_profile(chain, spot):
         return {}
 
 def find_gamma_flip(gex_profile):
-    if not gex_profile: return None
+    if not gex_profile:
+        return None
     strikes = sorted(gex_profile.keys())
     for i in range(1, len(strikes)):
-        if gex_profile[strikes[i - 1]] <= 0 and gex_profile[strikes[i]] > 0: return strikes[i]
-    vals = list(gex_profile.values())
+        g0 = gex_profile[strikes[i - 1]]
+        g1 = gex_profile[strikes[i]]
+        if g0 == 0:
+            return strikes[i - 1]
+        if g0 * g1 < 0:
+            t = -g0 / (g1 - g0)
+            return strikes[i - 1] + t * (strikes[i] - strikes[i - 1])
+    vals = [gex_profile[s] for s in strikes]
     return strikes[0] if all(v >= 0 for v in vals) else strikes[-1]
 
 
@@ -2169,9 +1485,9 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
     vix = (vix_data or {}).get("vix") or 20.0
     contango = (vix_data or {}).get("contango")
 
-    # Compute GEX if not provided
     if gex_profile is None:
         gex_profile = compute_gex_profile(chain, spot / 10)
+        gex_profile = {k: v * 10 for k, v in gex_profile.items()}
 
     gamma_flip_spy = find_gamma_flip(gex_profile)
     gamma_flip = gamma_flip_spy * 10 if gamma_flip_spy else None
@@ -2179,17 +1495,11 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
     max_pain = max_pain_spy * 10 if max_pain_spy else None
     pcr = compute_pcr(chain)
 
-    # Expected move from VIX (annualized → daily)
     daily_em = spot * (vix / 100) / (TRADING_DAYS_PER_YEAR ** 0.5)
 
     score = 0.0
-    signals = []  # list of (name, value, weight, direction_str, color)
+    signals = []
 
-    # ──────────────────────────────────────────────────────────
-    # SIGNAL 1: Gamma Regime (weight: 3.0)
-    # Positive net GEX = dealers long gamma → mean-reversion (bullish, damped)
-    # Negative net GEX = dealers short gamma → trend-following (bearish, volatile)
-    # ──────────────────────────────────────────────────────────
     if gex_profile:
         net_gex = sum(gex_profile.values())
         if net_gex > 0:
@@ -2206,21 +1516,14 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
                            "NEUTRAL — Near gamma-neutral zone", "#FF8C00"))
         score += contrib
 
-    # ──────────────────────────────────────────────────────────
-    # SIGNAL 2: GEX Tilt — Call-side vs Put-side gamma mass
-    # More call gamma above spot = resistance (bearish pressure)
-    # More put gamma below spot = support (bullish floor)
-    # ──────────────────────────────────────────────────────────
     if gex_profile and gamma_flip:
         above_gex = sum(v for k, v in gex_profile.items() if k * 10 > spot)
         below_gex = sum(v for k, v in gex_profile.items() if k * 10 < spot)
         total_abs = abs(above_gex) + abs(below_gex)
         if total_abs > 0:
 
-            # Positive tilt = more call gamma above = cap/resistance = slightly bearish for breakout
-            # But if we're below gamma flip, net puts dominate = bearish
             if spot > gamma_flip:
-                contrib = 1.5  # above flip = bullish regime
+                contrib = 1.5
                 signals.append(("GEX Tilt", f"Above Gamma Flip (Δ{spot-gamma_flip:+.0f})", contrib,
                                "BULLISH — Spot above dealer flip point", "#00CC44"))
             else:
@@ -2229,16 +1532,10 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
                                "BEARISH — Spot below dealer flip point", "#FF4444"))
             score += contrib
 
-    # ──────────────────────────────────────────────────────────
-    # SIGNAL 3: Typical Price vs Average (weight: 2.5)
-    # Typical Price position, not VWAP
-    # Price > typical price average = buyers in control
-    # Price < typical price average = sellers in control
-    # ──────────────────────────────────────────────────────────
     vwap_dev = (spot - vwap) / vwap * 100
     if abs(vwap_dev) > 0.05:
         if vwap_dev > 0:
-            contrib = min(vwap_dev * 8, 2.5)  # scaled, capped at 2.5
+            contrib = min(vwap_dev * 8, 2.5)
             signals.append(("Typical Price vs Avg", f"{vwap_dev:+.2f}% above", contrib,
                            f"BULLISH — Spot ${spot:,.0f} above daily typical price (H+L+C)/3 ${vwap:,.0f}", "#00CC44"))
         else:
@@ -2250,11 +1547,6 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
         signals.append(("Typical Price vs Avg", f"{vwap_dev:+.2f}%", 0.0,
                        "NEUTRAL — Spot at typical price equilibrium", "#888888"))
 
-    # ──────────────────────────────────────────────────────────
-    # SIGNAL 4: Put/Call Ratio (weight: 2.0)
-    # Low PCR (<0.7) = extreme call buying = bullish sentiment
-    # High PCR (>1.2) = extreme put buying = bearish sentiment / hedging
-    # ──────────────────────────────────────────────────────────
     if pcr is not None:
         if pcr < 0.7:
             contrib = 2.0
@@ -2278,21 +1570,16 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
                            "NEUTRAL — Balanced call/put flow", "#888888"))
         score += contrib
 
-    # ──────────────────────────────────────────────────────────
-    # SIGNAL 5: Max Pain Gravity (weight: 1.5)
-    # SPX tends to pin near max pain at expiry (dealer hedging effect)
-    # If spot > max_pain: bearish pull. If spot < max_pain: bullish pull.
-    # ──────────────────────────────────────────────────────────
     if max_pain:
         mp_dist = spot - max_pain
         mp_pct = mp_dist / spot * 100
         if abs(mp_pct) > 0.3:
             if mp_dist > 0:
-                contrib = -1.5  # spot above max pain → pull down
+                contrib = -1.5
                 signals.append(("Max Pain Gravity", f"${max_pain:,.0f} ({mp_pct:+.1f}%)", contrib,
                                f"BEARISH PULL — Expiry magnet ${abs(mp_dist):.0f} pts below spot", "#FF4444"))
             else:
-                contrib = 1.5  # spot below max pain → pull up
+                contrib = 1.5
                 signals.append(("Max Pain Gravity", f"${max_pain:,.0f} ({mp_pct:+.1f}%)", contrib,
                                f"BULLISH PULL — Expiry magnet ${abs(mp_dist):.0f} pts above spot", "#00CC44"))
             score += contrib
@@ -2300,15 +1587,6 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
             signals.append(("Max Pain Gravity", f"${max_pain:,.0f} ({mp_pct:+.1f}%)", 0.0,
                            "PINNED — Spot near max pain; expect low range", "#888888"))
 
-    # ──────────────────────────────────────────────────────────
-    # SIGNAL 6: Vol Regime (weight: 2.0)
-    # Combined VIX Term Structure + VIX Level into single signal
-    # to avoid double-counting volatility. Uses a 2×2 grid:
-    #   contango + low vol  = +1.5 (bullish)
-    #   contango + elevated = +0.5 (neutral-ish)
-    #   backwardation + moderate = -1.0
-    #   backwardation + crisis  = -2.0
-    # ──────────────────────────────────────────────────────────
     if contango is not None:
         is_contango = bool(contango)
         if is_contango and vix < 20:
@@ -2326,7 +1604,7 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
             vol_desc = "BEARISH — Backwardation + moderate VIX: stress building"
             vol_color = "#FF4444"
             vol_val = f"Backwardation, VIX {vix:.1f}"
-        else:  # backwardation + vix > 30
+        else:
             contrib = -2.0
             vol_desc = "CRISIS — Backwardation + extreme VIX: panic regime"
             vol_color = "#FF4444"
@@ -2334,7 +1612,6 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
         signals.append(("Vol Regime", vol_val, contrib, vol_desc, vol_color))
         score += contrib
     elif vix is not None:
-        # Fallback if contango data unavailable — use VIX level only
         if vix < 15:
             contrib = 0.5
             signals.append(("Vol Regime", f"VIX {vix:.1f}", contrib,
@@ -2353,22 +1630,20 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
                            "CRISIS — Extreme fear", "#FF4444"))
         score += contrib
 
-    # ──────────────────────────────────────────────────────────
-    # SIGNAL 7: RSI(14) — Momentum Oscillator (weight: ±1.0/1.5)
-    # ──────────────────────────────────────────────────────────
     try:
         import numpy as np
         spy_hist = get_spy_history().tail(60)
         if spy_hist is not None and len(spy_hist) >= 20:
             _closes = spy_hist["Close"]
-            # RSI(14) calculation
             _delta_r = _closes.diff()
-            _gain = _delta_r.where(_delta_r > 0, 0.0).rolling(14).mean()
-            _loss = (-_delta_r.where(_delta_r < 0, 0.0)).rolling(14).mean()
-            _rs = _gain / _loss.replace(0, np.nan)
-            _rs = np.nan_to_num(_rs, nan=50.0, posinf=100.0, neginf=0.0)
+            _gain = _delta_r.where(_delta_r > 0, 0.0).ewm(alpha=1 / 14, adjust=False).mean()
+            _loss = (-_delta_r.where(_delta_r < 0, 0.0)).ewm(alpha=1 / 14, adjust=False).mean()
+            _loss_safe = _loss.replace(0, np.nan)
+            _rs = _gain / _loss_safe
             _rsi = 100.0 - (100.0 / (1.0 + _rs))
-            rsi_val = float(_rsi.iloc[-1]) if not _rsi.empty else 50.0
+            _rsi = _rsi.where(_loss > 0, 100.0)
+            _rsi = _rsi.where(~((_gain == 0) & (_loss == 0)), 50.0)
+            rsi_val = float(_rsi.iloc[-1]) if not _rsi.empty and np.isfinite(_rsi.iloc[-1]) else 50.0
 
             if rsi_val >= 70:
                 contrib = -1.0
@@ -2392,7 +1667,6 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
                                "NEUTRAL — No directional edge from momentum", "#888888"))
             score += contrib
 
-            # SIGNAL 8: MACD(12,26,9) — Trend Following (weight: ±0.5/1.5)
             _ema12 = _closes.ewm(span=12, adjust=False).mean()
             _ema26 = _closes.ewm(span=26, adjust=False).mean()
             _macd_line = _ema12 - _ema26
@@ -2402,7 +1676,6 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
             hist_now = float(_histogram.iloc[-1])
             hist_prev = float(_histogram.iloc[-2]) if len(_histogram) >= 2 else 0.0
 
-            # Crossover detection
             if hist_now > 0 and hist_prev <= 0:
                 contrib = 1.5
                 signals.append(("MACD", f"Histogram {hist_now:+.2f}", contrib,
@@ -2425,13 +1698,10 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
                                "NEUTRAL — No MACD signal", "#888888"))
             score += contrib
     except Exception:
-        pass  # Technical signals are optional; don't break if yf fails
+        pass
 
-    # ──────────────────────────────────────────────────────────
-    # DECISION: weighted score → direction + confidence
-    # ──────────────────────────────────────────────────────────
     max_possible = sum(abs(s[2]) for s in signals) or 1.0
-    normalized = score / max_possible  # -1.0 to +1.0
+    normalized = score / max_possible
 
     if score >= 4.0:
         direction, color = "BULLISH", "#00CC44"
@@ -2449,7 +1719,6 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
         direction, color = "NEUTRAL", "#FF8C00"
         confidence = "LOW"
 
-    # Expected range based on direction + VIX
     if "BULLISH" in direction:
         range_low = f"${spot:,.0f}"
         range_high = f"${spot + daily_em * 0.6:,.0f}"
@@ -2469,7 +1738,7 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
         "normalized": round(normalized, 2),
         "daily_em": round(daily_em, 1),
         "expected_range": f"{range_low} – {range_high}",
-        "signals": signals,  # list of (name, value, weight, description, color)
+        "signals": signals,
         "spot": spot,
         "vwap": vwap,
         "gamma_flip": gamma_flip,
@@ -2478,66 +1747,6 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
         "vix": vix,
     }
 
-
-def compute_max_pain(chain):
-    """O(N) prefix-sum max pain using Kahan Summation."""
-    if not chain: return None
-    strikes = sorted(set(opt["strike"] for opt in chain))
-    if not strikes: return None
-    
-    call_oi, put_oi = {}, {}
-    for opt in chain:
-        k = opt["strike"]
-        if opt["type"] == "call": call_oi[k] = call_oi.get(k, 0) + opt.get("oi", 0)
-        else: put_oi[k] = put_oi.get(k, 0) + opt.get("oi", 0)
-
-    if sum(call_oi.values()) == 0 and sum(put_oi.values()) == 0: return None
-
-    s0 = strikes[0]
-    pain = 0.0
-    pain_c = 0.0
-    for k in strikes:
-        c, p = call_oi.get(k, 0), put_oi.get(k, 0)
-        val = 0
-        if s0 > k: val = c * (s0 - k)
-        if s0 < k: val = p * (k - s0)
-        y = val - pain_c
-        t = pain + y
-        pain_c = (t - pain) - y
-        pain = t
-
-    min_pain, mp_strike = pain, s0
-    cum_call_left = call_oi.get(s0, 0)
-    total_put = sum(put_oi.values())
-    cum_put_left = put_oi.get(s0, 0)
-
-    for i in range(1, len(strikes)):
-        gap = strikes[i] - strikes[i - 1]
-        put_right = total_put - cum_put_left
-        val = (gap * cum_call_left) - (gap * put_right)
-        y = val - pain_c
-        t = pain + y
-        pain_c = (t - pain) - y
-        pain = t
-
-        if pain < min_pain:
-            min_pain = pain
-            mp_strike = strikes[i]
-
-        cum_call_left += call_oi.get(strikes[i], 0)
-        cum_put_left += put_oi.get(strikes[i], 0)
-
-    return mp_strike
-
-
-def compute_pcr(chain):
-    call_oi = sum(o.get("oi", 0) for o in chain if o["type"] == "call")
-    put_oi = sum(o.get("oi", 0) for o in chain if o["type"] == "put")
-    return round(put_oi / call_oi, 2) if call_oi > 0 else None
-
-# ════════════════════════════════════════════════════════════════════
-# CBOE GEX 
-# ════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=300)
 def fetch_cboe_gex(ticker="SPX"):
@@ -2575,7 +1784,7 @@ def compute_cboe_gex_profile(spot, option_df, expiry_limit_days=365, strike_pct=
     if df.empty: return {}
 
     df["gex"] = spot * df["gamma"] * df["open_interest"] * 100 * spot * 0.01
-    df["gex"] = df.apply(lambda r: -r["gex"] if r["type"] == "P" else r["gex"], axis=1)
+    df["gex"] = np.where(df["type"] == "P", -df["gex"], df["gex"])
 
     by_strike = df.groupby("strike")["gex"].sum() / 1_000_000
     return {k / 10: v for k, v in by_strike.items()}
@@ -2584,7 +1793,7 @@ def compute_cboe_total_gex(spot, option_df):
     if option_df is None or option_df.empty or spot <= 0: return None
     df = option_df.copy()
     df["gex"] = spot * df["gamma"] * df["open_interest"] * 100 * spot * 0.01
-    df["gex"] = df.apply(lambda r: -r["gex"] if r["type"] == "P" else r["gex"], axis=1)
+    df["gex"] = np.where(df["type"] == "P", -df["gex"], df["gex"])
     return round(df["gex"].sum() / 1_000_000_000, 4)
 
 def compute_cboe_pcr(option_df):
@@ -2609,7 +1818,7 @@ def fetch_vix_data():
     except Exception as e:
         logger.debug(f"Error caught: {e}")
     if result["vix"] is not None and result["vix9d"] is not None:
-        result["contango"] = result["vix"] > result["vix9d"]
+        result["contango"] = result["vix9d"] < result["vix"]
     return result
 
 
@@ -2627,7 +1836,6 @@ def _score_option(opt, chain_ivs, spot_spy, dte=0):
     mid       = opt.get("mid", 0)
     vol, oi   = opt.get("volume", 0), max(opt.get("oi", 1), 1)
 
-    # DTE-aware delta target: 0DTE wants 0.35-0.45, longer-dated 0.25-0.35
     if dte == 0:
         target_delta, sigma_delta = 0.40, 0.08
     elif dte <= 7:
@@ -2704,11 +1912,10 @@ def generate_recommendation(chain, spx_metrics, vix_data):
     max_pain = max_pain_spy * 10 if max_pain_spy else None
     contango = vix_data.get("contango")
 
-    # --- Time-of-day gating ---
-    PST = pytz.timezone("US/Pacific")
-    now_pst = datetime.now(PST)
-    hour_et = now_pst.hour + 3   # PST → ET offset
-    if hour_et >= 15:   # After 3 PM ET — no new 0DTE entries
+    ET = pytz.timezone("US/Eastern")
+    now_et = datetime.now(ET)
+    hour_et = now_et.hour
+    if hour_et >= 15:
         return {
             "recommendation": "NO TRADE — Too Late in Session",
             "rationale": "0DTE entries after 3 PM ET carry excessive theta risk.",
@@ -2716,23 +1923,17 @@ def generate_recommendation(chain, spx_metrics, vix_data):
             "confidence": "LOW", "strike_spx": 0, "opt_type": "", "mid_price": 0
         }
 
-    # --- Expected Move check ---
-    # VIX → 1-day expected move for SPX
     daily_em = spot * (vix_val / 100) / (TRADING_DAYS_PER_YEAR ** 0.5)
     
-    # --- Weighted Signal Scoring (max ±10) ---
     score = 0.0
     met, failed = [], []
 
-    # VWAP: highest weight — institutional anchor
     vwap_dev = (spot - vwap) / vwap * 100
     if vwap_dev > 0.1:
         score += 3.0; met.append(f"Spot {vwap_dev:+.2f}% above VWAP")
     elif vwap_dev < -0.1:
         score -= 3.0; failed.append(f"Spot {vwap_dev:+.2f}% below VWAP")
-    # else: flat VWAP — neutral, no score
 
-    # Gamma Flip: second highest
     if gamma_flip:
         gf_dev = (spot - gamma_flip) / spot * 100
         if spot > gamma_flip:
@@ -2740,7 +1941,6 @@ def generate_recommendation(chain, spx_metrics, vix_data):
         else:
             score -= 2.5; failed.append(f"Spot {gf_dev:+.1f}% below Gamma Flip ({int(gamma_flip)})")
 
-    # PCR
     if pcr is not None:
         if pcr < 0.7:
             score += 2.0; met.append(f"PCR {pcr:.2f} — Strong Bullish Skew")
@@ -2751,19 +1951,16 @@ def generate_recommendation(chain, spx_metrics, vix_data):
         elif pcr > 1.0:
             score -= 1.0; failed.append(f"PCR {pcr:.2f} — Mild Bearish Skew")
 
-    # VIX term structure
     if contango is not None:
         if contango:
             score += 1.5; met.append("VIX Contango — Regime Stable")
         else:
             score -= 1.5; failed.append("VIX Backwardation — Regime Unstable")
 
-    # Max Pain gravity: if spot far from max pain, fade the move
     if max_pain:
         mp_dist = spot - max_pain
         mp_pct = mp_dist / spot * 100
         if abs(mp_pct) > 0.5:
-            # Spot will be pulled back toward max pain at expiry — fade
             if mp_pct > 0:
                 score -= 1.0
                 failed.append(f"Max Pain gravity {int(max_pain)} ({mp_pct:+.1f}% below spot)")
@@ -2771,14 +1968,13 @@ def generate_recommendation(chain, spx_metrics, vix_data):
                 score += 1.0
                 met.append(f"Max Pain gravity {int(max_pain)} ({mp_pct:+.1f}% above spot)")
 
-    # --- Decision thresholds ---
-    BULL_THRESHOLD = 4.0   # need strong confluence to trade
+    BULL_THRESHOLD = 4.0
     BEAR_THRESHOLD = -4.0
 
     if score >= BULL_THRESHOLD:
-        bias, direction = "bull", "bullish"
+        bias, _ = "bull", "bullish"
     elif score <= BEAR_THRESHOLD:
-        bias, direction = "bear", "bearish"
+        bias, _ = "bear", "bearish"
         met, failed = failed, met
     else:
         return {
@@ -2793,7 +1989,7 @@ def generate_recommendation(chain, spx_metrics, vix_data):
     target = find_target_strike(chain, bias, dte=0)
     if not target:
         return {
-            "recommendation": f"NO TRADE — No Suitable Option",
+            "recommendation": "NO TRADE — No Suitable Option",
             "rationale": f"No viable {bias} options passed liquidity filters.",
             "stats": "", "action": "", "conditions_met": met, "conditions_failed": failed,
             "confidence": "LOW", "strike_spx": 0, "opt_type": "", "mid_price": 0
@@ -2802,11 +1998,10 @@ def generate_recommendation(chain, spx_metrics, vix_data):
     strike_spx = round(target["strike"] * 10, 0)
     mid = target.get("mid", 0)
 
-    # --- Expected move sanity: don't buy if strike is beyond 1 daily EM ---
     dist_to_strike = abs(strike_spx - spot)
     if dist_to_strike > daily_em * 1.5:
         return {
-            "recommendation": f"NO TRADE — Strike Too Far OTM",
+            "recommendation": "NO TRADE — Strike Too Far OTM",
             "rationale": f"Strike {int(strike_spx)} is ${dist_to_strike:.0f} from spot, "
                          f"exceeding 1.5× daily EM (${daily_em:.0f}). Low P(ITM).",
             "stats": f"Daily EM: ±${daily_em:.1f} | Strike dist: ${dist_to_strike:.0f}",
@@ -2819,10 +2014,9 @@ def generate_recommendation(chain, spx_metrics, vix_data):
     bd = target.get("_breakdown", {})
     delta_pct = round(abs(target["delta"]) * 100)
 
-    # --- Find hedge wall ---
     hedge_wall = None
     if gex_profile:
-        for gk, gv in sorted(gex_profile.items(), key=lambda x: abs(x[1]), reverse=True):
+        for gk, _ in sorted(gex_profile.items(), key=lambda x: abs(x[1]), reverse=True):
             gk_spx = gk * 10
             if (bias == "bull" and gk_spx > strike_spx) or (bias == "bear" and gk_spx < strike_spx):
                 hedge_wall = gk_spx
@@ -2859,10 +2053,6 @@ def generate_recommendation(chain, spx_metrics, vix_data):
         "mid_price": mid,
     }
 
-
-# ════════════════════════════════════════════════════════════════════
-# CRYPTO WHALE FLOWS & ON-CHAIN DATA
-# ════════════════════════════════════════════════════════════════════
 
 _COINBASE_MAP = {"BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD"}
 
@@ -2949,30 +2139,70 @@ _LIQ_COINS = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]
 
 @st.cache_data(ttl=180)
 def get_liquidations():
+    """Fetch crypto liquidation data.
+    
+    M16 fix: Coinglass public API requires an API key for most endpoints.
+    Without a key, it returns 403 and we returned fake zeros. Now we
+    clearly indicate data unavailability instead of showing misleading zeros.
+    """
     result = {}
     for coin in _LIQ_COINS:
         try:
-            r = requests.get("https://open-api.coinglass.com/public/v2/liquidation_chart", params={"ex": "Bybit", "pair": f"{coin}USDT", "interval": "0"}, headers={"Accept": "application/json"}, timeout=10)
-            if r.status_code in (403, 429):
-                result[coin] = {"long_liq": 0, "short_liq": 0, "total": 0}; continue
-            data = r.json().get("data", {})
-            long_liq, short_liq = float(data.get("longLiquidationUsd", 0) or 0), float(data.get("shortLiquidationUsd", 0) or 0)
+            data = _fetch_robust_json(
+                "https://open-api.coinglass.com/public/v2/liquidation_chart",
+                params={"ex": "Bybit", "pair": f"{coin}USDT", "interval": "0"},
+                timeout=10,
+            )
+            if not data or data.get("code") != "0":
+                result[coin] = {"long_liq": 0, "short_liq": 0, "total": 0, "unavailable": True}
+                continue
+            liq_data = data.get("data", {})
+            long_liq = float(liq_data.get("longLiquidationUsd", 0) or 0)
+            short_liq = float(liq_data.get("shortLiquidationUsd", 0) or 0)
             result[coin] = {"long_liq": round(long_liq, 2), "short_liq": round(short_liq, 2), "total": round(long_liq + short_liq, 2)}
         except Exception:
-            result[coin] = {"long_liq": 0, "short_liq": 0, "total": 0}
+            result[coin] = {"long_liq": 0, "short_liq": 0, "total": 0, "unavailable": True}
     return result
 
-# ════════════════════════════════════════════════════════════════════
-# MACRO OVERVIEW & CALENDAR
-# ════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=3600)
 def get_macro_overview(fred_key):
+    """Fetch macro economic indicators.
+    
+    M2 fix: Parallelized FRED API calls with ThreadPoolExecutor(max_workers=5)
+    to reduce latency from sequential 9-call waterfall to ~2 parallel batches.
+    """
     if not fred_key: return None
+    import concurrent.futures
+    
+    SERIES = {
+        "cpi": ("CPIAUCSL", 24),
+        "pce": ("PCEPILFE", 24),
+        "unemp": ("UNRATE", 6),
+        "dgs2": ("DGS2", 3),
+        "dgs10": ("DGS10", 3),
+        "fedfunds": ("FEDFUNDS", 6),
+        "hy": ("BAMLH0A0HYM2", 6),
+        "m2": ("M2SL", 18),
+        "gdp": ("GDPC1", 12),
+    }
+    
+    raw = {}
+    def _fetch(key_info):
+        key, (series_id, months) = key_info
+        try:
+            return key, fred_series(series_id, fred_key, months)
+        except Exception:
+            return key, None
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+        for key, df in pool.map(_fetch, SERIES.items()):
+            raw[key] = df
+    
     signals = {}
-
+    
     try:
-        df_cpi = fred_series("CPIAUCSL", fred_key, 24)
+        df_cpi = raw.get("cpi")
         if df_cpi is not None and len(df_cpi) >= 13:
             cpi_yoy = round((df_cpi["value"].iloc[-1] / df_cpi["value"].iloc[-13] - 1) * 100, 2)
             if cpi_yoy < 2.5: cpi_score, cpi_label, cpi_color = 2, f"Cooling ({cpi_yoy:.1f}%)", "#00CC44"
@@ -2983,7 +2213,7 @@ def get_macro_overview(fred_key):
     except Exception as e:
         logger.debug(f"Error caught: {e}")
     try:
-        df_pce = fred_series("PCEPILFE", fred_key, 24)
+        df_pce = raw.get("pce")
         if df_pce is not None and len(df_pce) >= 13:
             pce_yoy = round((df_pce["value"].iloc[-1] / df_pce["value"].iloc[-13] - 1) * 100, 2)
             if pce_yoy < 2.5: pce_score, pce_label, pce_color = 2, f"Near Target ({pce_yoy:.1f}%)", "#00CC44"
@@ -2993,7 +2223,7 @@ def get_macro_overview(fred_key):
     except Exception as e:
         logger.debug(f"Error caught: {e}")
     try:
-        df_unemp = fred_series("UNRATE", fred_key, 6)
+        df_unemp = raw.get("unemp")
         if df_unemp is not None and not df_unemp.empty:
             urate = df_unemp["value"].iloc[-1]
             trend = "↑" if urate > (df_unemp["value"].iloc[-2] if len(df_unemp) > 1 else urate) else "↓"
@@ -3005,7 +2235,7 @@ def get_macro_overview(fred_key):
     except Exception as e:
         logger.debug(f"Error caught: {e}")
     try:
-        df_2y, df_10y = fred_series("DGS2", fred_key, 3), fred_series("DGS10", fred_key, 3)
+        df_2y, df_10y = raw.get("dgs2"), raw.get("dgs10")
         if df_2y is not None and df_10y is not None and not df_2y.empty and not df_10y.empty:
             spread = round(df_10y["value"].iloc[-1] - df_2y["value"].iloc[-1], 2)
             if spread > 0.5: yc_score, yc_label, yc_color = 2, f"Steep (+{spread:.2f}% — Growth)", "#00CC44"
@@ -3016,7 +2246,7 @@ def get_macro_overview(fred_key):
     except Exception as e:
         logger.debug(f"Error caught: {e}")
     try:
-        df_ff = fred_series("FEDFUNDS", fred_key, 6)
+        df_ff = raw.get("fedfunds")
         if df_ff is not None and not df_ff.empty:
             ffr = df_ff["value"].iloc[-1]
             prev_ffr = df_ff["value"].iloc[-2] if len(df_ff) > 1 else ffr
@@ -3030,7 +2260,7 @@ def get_macro_overview(fred_key):
     except Exception as e:
         logger.debug(f"Error caught: {e}")
     try:
-        df_hy = fred_series("BAMLH0A0HYM2", fred_key, 6)
+        df_hy = raw.get("hy")
         if df_hy is not None and not df_hy.empty:
             hy = df_hy["value"].iloc[-1]
             hy_trend = "↑" if hy > (df_hy["value"].iloc[-2] if len(df_hy) > 1 else hy) else "↓"
@@ -3042,7 +2272,7 @@ def get_macro_overview(fred_key):
     except Exception as e:
         logger.debug(f"Error caught: {e}")
     try:
-        df_m2 = fred_series("M2SL", fred_key, 18)
+        df_m2 = raw.get("m2")
         if df_m2 is not None and len(df_m2) >= 13:
             m2_yoy = round((df_m2["value"].iloc[-1] / df_m2["value"].iloc[-13] - 1) * 100, 2)
             if m2_yoy > 5: m2_score, m2_label, m2_color = -1, f"Expanding Rapidly ({m2_yoy:+.1f}% YoY)", "#FF4444"
@@ -3052,7 +2282,7 @@ def get_macro_overview(fred_key):
     except Exception as e:
         logger.debug(f"Error caught: {e}")
     try:
-        df_gdp = fred_series("GDPC1", fred_key, 12)
+        df_gdp = raw.get("gdp")
         if df_gdp is not None and len(df_gdp) >= 5:
             latest_gdp, prev_gdp, year_ago_gdp = df_gdp["value"].iloc[-1], df_gdp["value"].iloc[-2], df_gdp["value"].iloc[-5]
             gdp_yoy, gdp_q = round((latest_gdp / year_ago_gdp - 1) * 100, 2), round((latest_gdp / prev_gdp - 1) * 4 * 100, 2)
@@ -3176,20 +2406,15 @@ def get_macro_calendar(fred_key=None, days_back=0):
         if d: static_events.append(("GDP (Advance Estimate)", d, "HIGH"))
 
     FOMC_APPROX = [
-        # 2025
         _date(2025,3,19), _date(2025,5,7), _date(2025,6,18), _date(2025,7,30),
         _date(2025,9,17), _date(2025,10,29), _date(2025,12,10),
-        # 2026
         _date(2026,1,28), _date(2026,3,18), _date(2026,4,29), _date(2026,6,17),
         _date(2026,7,29), _date(2026,9,16), _date(2026,10,28), _date(2026,12,16),
-        # 2027 (projected — 8 meetings per year, ~6 week cadence)
         _date(2027,1,27), _date(2027,3,17), _date(2027,4,28), _date(2027,6,16),
         _date(2027,7,28), _date(2027,9,15), _date(2027,10,27), _date(2027,12,15),
-        # 2028 (projected)
         _date(2028,1,26), _date(2028,3,15), _date(2028,4,26), _date(2028,6,14),
         _date(2028,7,26), _date(2028,9,13), _date(2028,10,25), _date(2028,12,13),
     ]
-    # Detect if all hardcoded FOMC dates are in the past — warn about data gap
     if FOMC_APPROX and today > max(FOMC_APPROX):
         logger.warning(
             "FOMC_APPROX dates are exhausted (last: %s). "
@@ -3223,7 +2448,6 @@ def get_ticker_exchange(ticker):
         "NasdaqGM": "NASDAQ", "NYSE": "NYSE", "NYSEMkt": "AMEX", "BATS": "BATS",
         "CBOE": "CBOE", "PINK": "OTC",
     }
-    # Known tickers that are definitely on NYSE or other exchanges
     NYSE_KNOWN = {
         "JPM","BAC","WFC","GS","MS","C","AXP","V","MA","BRK-B","XOM","CVX","JNJ",
         "PG","KO","WMT","HD","UNH","MMM","IBM","GE","CAT","BA","RTX","LMT","HON",
@@ -3247,19 +2471,16 @@ def get_ticker_exchange(ticker):
         if "nasdaq" in exch_lower: return f"NASDAQ:{ticker}"
         if "nyse" in exch_lower or "new york" in exch_lower: return f"NYSE:{ticker}"
         if "amex" in exch_lower or "arca" in exch_lower: return f"AMEX:{ticker}"
-        # Use quoteType / market to differentiate
         market = info.get("market", "")
         if market in ("us_market",):
             qt = info.get("quoteType", "")
             if qt == "EQUITY":
-                # Check if symbol sounds NASDAQ-like (4+ letters, no -) or NYSE-like
                 clean = ticker.upper().replace("-","")
                 if len(clean) >= 4 and clean.isalpha():
                     return f"NASDAQ:{ticker}"
                 return f"NYSE:{ticker}"
     except Exception as e:
         logger.debug(f"Error caught: {e}")
-    # Fallback: try NYSE first (more large-caps on NYSE than NASDAQ)
     return f"NYSE:{ticker}"
 
 
@@ -3270,7 +2491,6 @@ def get_full_financials(ticker):
         t = get_yf_ticker(ticker)
         if t is None: return {}
         
-        # Try multiple attribute names for compatibility across yfinance versions
         income, cashflow, balance = None, None, None
         for attr in ["quarterly_financials", "quarterly_income_stmt"]:
             try:
@@ -3368,7 +2588,6 @@ def get_earnings_matrix(ticker):
             return None
         info = t.info or {}
 
-        # ── Determine fiscal year end month ──
         fiscal_end_month = info.get("fiscalYearEnd") or info.get("lastFiscalYearEnd")
         if isinstance(fiscal_end_month, str):
             _month_map = {"january": 1, "february": 2, "march": 3, "april": 4,
@@ -3378,7 +2597,6 @@ def get_earnings_matrix(ticker):
         elif not isinstance(fiscal_end_month, int):
             fiscal_end_month = 12
 
-        # Map each fiscal quarter-end month → Q label
         import calendar
         _q_month_labels = {}
         for qi in range(4):
@@ -3397,15 +2615,12 @@ def get_earnings_matrix(ticker):
             """Determine fiscal year from calendar month/year."""
             return year if month <= fiscal_end_month else year + 1
 
-        quarterly = {}   # {fy: {q_label: eps_actual}}
-        estimates = {}   # {fy: {q_label: eps_estimate}}
-        surprise_pct = {}  # {fy: {q_label: surprise_%}}
-        beats = {}       # {fy: {q_label: True/False/None}}
-        revenue_q = {}   # {fy: {q_label: revenue}}
+        quarterly = {}
+        estimates = {}
+        surprise_pct = {}
+        beats = {}
+        revenue_q = {}
 
-        # ────────────────────────────────────────────────
-        # SOURCE 1: earnings_dates (best for actual + estimate + surprise)
-        # ────────────────────────────────────────────────
         try:
             ed = t.earnings_dates
             if ed is not None and not ed.empty:
@@ -3415,7 +2630,6 @@ def get_earnings_matrix(ticker):
                     ql = _month_to_qlabel(month)
                     fy = _fiscal_year(month, year)
 
-                    # Reported EPS
                     actual = row.get("Reported EPS")
                     if actual is not None and not (isinstance(actual, float) and math.isnan(actual)):
                         actual = round(float(actual), 2)
@@ -3423,7 +2637,6 @@ def get_earnings_matrix(ticker):
                             quarterly[fy] = {}
                         quarterly[fy][ql] = actual
 
-                    # EPS Estimate
                     est = row.get("EPS Estimate")
                     if est is not None and not (isinstance(est, float) and math.isnan(est)):
                         est = round(float(est), 2)
@@ -3431,23 +2644,18 @@ def get_earnings_matrix(ticker):
                             estimates[fy] = {}
                         estimates[fy][ql] = est
 
-                    # Surprise %
                     surp = row.get("Surprise(%)")
                     if surp is not None and not (isinstance(surp, float) and math.isnan(surp)):
                         if fy not in surprise_pct:
                             surprise_pct[fy] = {}
                         surprise_pct[fy][ql] = round(float(surp), 1)
 
-                    # Beat/miss
                     if actual is not None and est is not None:
                         if fy not in beats:
                             beats[fy] = {}
                         beats[fy][ql] = actual >= est
         except Exception as e:
             logger.debug(f"Error caught: {e}")
-        # ────────────────────────────────────────────────
-        # SOURCE 2: quarterly_financials + quarterly_income_stmt (fills EPS + revenue gaps)
-        # ────────────────────────────────────────────────
         _income_sources = []
         try:
             _qf = t.quarterly_financials
@@ -3470,7 +2678,6 @@ def get_earnings_matrix(ticker):
                     ql = _month_to_qlabel(month)
                     fy = _fiscal_year(month, year)
 
-                    # EPS — only if not already filled by earnings_dates
                     if fy not in quarterly or ql not in quarterly.get(fy, {}):
                         for key in ["Diluted EPS", "Basic EPS", "Basic Continuous Operations"]:
                             if key in income.index:
@@ -3481,7 +2688,6 @@ def get_earnings_matrix(ticker):
                                     quarterly[fy][ql] = round(float(v), 2)
                                     break
 
-                    # Revenue — try more keys
                     if fy not in revenue_q or ql not in revenue_q.get(fy, {}):
                         for key in ["Total Revenue", "Revenue", "Operating Revenue", "Net Revenue"]:
                             if key in income.index:
@@ -3493,13 +2699,9 @@ def get_earnings_matrix(ticker):
                                     break
             except Exception as e:
                 logger.debug(f"Error caught: {e}")
-        # ────────────────────────────────────────────────
-        # SOURCE 3: t.earnings (legacy — fills older years)
-        # ────────────────────────────────────────────────
         try:
             earnings_obj = t.earnings
             if isinstance(earnings_obj, dict):
-                # quarterly earnings: list of {date, actual, estimate}
                 for qe in earnings_obj.get("quarterly", []):
                     try:
                         dt = pd.to_datetime(qe.get("date"))
@@ -3533,7 +2735,6 @@ def get_earnings_matrix(ticker):
                         continue
         except Exception as e:
             logger.debug(f"Error caught: {e}")
-        # Also try quarterly_earnings attribute (some yfinance versions)
         try:
             qe_df = t.quarterly_earnings
             if qe_df is not None and not qe_df.empty:
@@ -3561,7 +2762,6 @@ def get_earnings_matrix(ticker):
 
         years = sorted(quarterly.keys())
 
-        # ── Annual totals ──
         annual = {}
         annual_revenue = {}
         for yr in years:
@@ -3572,7 +2772,6 @@ def get_earnings_matrix(ticker):
             if rev_vals:
                 annual_revenue[yr] = sum(rev_vals)
 
-        # ── YoY growth (EPS) ──
         yoy_growth = {}
         annual_growth = {}
         for yr in years:
@@ -3587,7 +2786,6 @@ def get_earnings_matrix(ticker):
             if cur_ann is not None and prev_ann is not None and prev_ann != 0:
                 annual_growth[yr] = round((cur_ann - prev_ann) / abs(prev_ann) * 100, 1)
 
-        # ── Revenue YoY growth ──
         rev_growth = {}
         annual_rev_growth = {}
         for yr in years:
@@ -3602,7 +2800,6 @@ def get_earnings_matrix(ticker):
             if cur_rev is not None and prev_rev is not None and prev_rev != 0:
                 annual_rev_growth[yr] = round((cur_rev - prev_rev) / abs(prev_rev) * 100, 1)
 
-        # ── Beat/miss streak & rate ──
         beat_list = []
         for yr in sorted(quarterly.keys()):
             for ql in q_labels:
@@ -3621,7 +2818,6 @@ def get_earnings_matrix(ticker):
                 streak = -abs(streak)
         beat_rate = round(sum(1 for b in beat_list if b) / len(beat_list) * 100, 0) if beat_list else 0
 
-        # ── Compute estimate-based surprise where missing ──
         for yr in years:
             for ql in q_labels:
                 act = quarterly.get(yr, {}).get(ql)
@@ -3636,7 +2832,6 @@ def get_earnings_matrix(ticker):
                     if ql not in beats[yr]:
                         beats[yr][ql] = act >= est
 
-        # ── Valuation multiples ──
         valuations = {}
         price = _safe_float(info.get("currentPrice") or info.get("regularMarketPrice"), 0)
         if price > 0:
@@ -3649,11 +2844,12 @@ def get_earnings_matrix(ticker):
             pcf = round(price / (opcf / shares), 1) if opcf > 0 and shares > 0 else 0
             ev_ebitda = _safe_float(info.get("enterpriseToEbitda"), 0)
             forward_eps = _safe_float(info.get("forwardEps"), 0)
+            fwd_pe_calc = round(price / forward_eps, 1) if forward_eps > 0 else 0
 
             valuations = {
                 "P/E": {
                     "Last 4Q": f"{trailing_pe:.1f}x" if trailing_pe > 0 else "—",
-                    "Forward": f"{forward_pe:.1f}x" if forward_pe > 0 else "—",
+                    "Forward": f"{fwd_pe_calc:.1f}x" if fwd_pe_calc > 0 else (f"{forward_pe:.1f}x" if forward_pe > 0 else "—"),
                 },
                 "EV/EBITDA": {
                     "Last 4Q": f"{ev_ebitda:.1f}x" if ev_ebitda > 0 else "—",
@@ -3675,7 +2871,6 @@ def get_earnings_matrix(ticker):
 
         currency = info.get("currency", "USD")
 
-        # ── Analyst Price Targets (Top 5 tracked) ──
         analyst_targets = []
         try:
             ud = t.upgrades_downgrades
@@ -3705,7 +2900,6 @@ def get_earnings_matrix(ticker):
         except Exception as e:
             logger.debug(f"Error caught: {e}")
 
-        # ── Analyst Ratings Consensus ──
         analyst_ratings = {}
         try:
             rec_key = info.get("recommendationKey", "") or ""
@@ -3715,7 +2909,6 @@ def get_earnings_matrix(ticker):
             target_low    = _safe_float(info.get("targetLowPrice"), 0)
             target_high   = _safe_float(info.get("targetHighPrice"), 0)
 
-            # Period breakdown from recommendations_summary
             strong_buy = buy = hold = sell = strong_sell = 0
             try:
                 rs = t.recommendations_summary
@@ -3729,7 +2922,6 @@ def get_earnings_matrix(ticker):
             except Exception:
                 pass
 
-            # Fallback: derive counts from upgrades_downgrades if summary empty
             if (strong_buy + buy + hold + sell + strong_sell) == 0:
                 try:
                     ud2 = t.upgrades_downgrades
@@ -3759,7 +2951,6 @@ def get_earnings_matrix(ticker):
 
             total_rated = strong_buy + buy + hold + sell + strong_sell
             if total_rated == 0 and num_analysts > 0:
-                # No breakdown available but we know count — leave zeros
                 pass
 
             _consensus_label = rec_key.replace("_", " ").title() if rec_key else ""
@@ -3866,13 +3057,8 @@ def get_stock_news(ticker, finnhub_key=None, newsapi_key=None):
     return results
 
 
-# ════════════════════════════════════════════════════════════════════
-# POLYMARKET MISPRICING ALGORITHM
-# ════════════════════════════════════════════════════════════════════
-
 def _poly_liquidity_score(market):
     vol   = _safe_float(market.get("volume", 0))
-    vol24 = _safe_float(market.get("volume24hr", 0))
     liq   = _safe_float(market.get("liquidity", 0))
     if vol > 1_000_000 and liq > 100_000:  return 1.0   
     if vol > 250_000  and liq > 30_000:    return 0.80
@@ -3908,20 +3094,14 @@ def score_poly_mispricing(markets, base_rate_fn=None):
             vol24 = _safe_float(m.get("volume24hr", 0))
             activity_ratio = min(vol24 / vol, 1.0) if vol > 0 else 0.0
 
-            # --- EDGE: gap between raw crowd price and liquidity-adjusted fair value ---
             edge = abs(raw_yes - adj_prob)
 
-            # Confidence: how much to trust this edge (high liq + active = trustworthy)
             confidence = liq_score * activity_ratio
 
-            # Volume weight: normalize 24h volume on a log scale
             vol_weight = min(math.log1p(vol24) / math.log1p(1_000_000), 1.0) if vol24 > 0 else 0.0
 
-            # Mispricing score: edge × (1 + confidence) × volume
-            # Unlike old formula, deep-liq markets aren't suppressed
             mispricing_score = round(edge * (1.0 + confidence) * vol_weight, 5)
 
-            # Spread for display
             spread_str = ""
             best_bid = _safe_float(m.get("bestBid", 0))
             best_ask = _safe_float(m.get("bestAsk", 0)) or _safe_float(m.get("bestOffer", 0))
@@ -3929,17 +3109,16 @@ def score_poly_mispricing(markets, base_rate_fn=None):
                 spread = best_ask - best_bid
                 spread_str = f"{spread*100:.1f}¢"
 
-            # --- ACTION SIGNALS (clear, no ambiguity) ---
             if liq_score < 0.40 and raw_yes > 0.70 and edge > 0.05:
-                signal, signal_color = "BET NO", "#FF4444"       # crowd overpriced YES
+                signal, signal_color = "BET NO", "#FF4444"
             elif liq_score < 0.40 and raw_yes < 0.30 and edge > 0.05:
-                signal, signal_color = "BET YES", "#00CC44"      # crowd overpriced NO
+                signal, signal_color = "BET YES", "#00CC44"
             elif liq_score >= 0.70 and raw_yes > 0.65:
-                signal, signal_color = "CONFIRMED", "#00CC44"    # deep market agrees
+                signal, signal_color = "CONFIRMED", "#00CC44"
             elif liq_score >= 0.70 and raw_yes < 0.35:
-                signal, signal_color = "CONTRARIAN", "#FF4444"   # deep market prices NO
+                signal, signal_color = "CONTRARIAN", "#FF4444"
             else:
-                signal, signal_color = "WATCH", "#FF8C00"        # wait for clarity
+                signal, signal_color = "WATCH", "#FF8C00"
 
             results.append({
                 "title": title[:80], "url": m.get("slug", ""),
@@ -3962,10 +3141,6 @@ def score_poly_mispricing(markets, base_rate_fn=None):
     results.sort(key=lambda x: x["mispricing_score"], reverse=True)
     return results[:15]
 
-
-# ════════════════════════════════════════════════════════════════════
-# GEO TAB — DATA FETCHERS & CONSTANTS
-# ════════════════════════════════════════════════════════════════════
 
 GEO_FINANCIAL_NETWORKS = [
     {"name": "Bloomberg",  "channel_id": "UCIALMKvObZNtJ6AmdCLP7Lg", "embed_url": "https://www.youtube.com/embed/iEpJwprxDdk?autoplay=1&mute=1"},
@@ -4026,6 +3201,7 @@ GEO_IMPACT_TICKERS = {
 }
 
 
+@st.cache_data(ttl=300)
 def fetch_military_aircraft() -> "pd.DataFrame":
     import pandas as _pd
     try:
@@ -4133,7 +3309,6 @@ def _strip_llm_json(raw: str) -> str:
     """Strip markdown code fences and trailing commas from LLM output."""
     text = re.sub(r"^```(?:json)?\s*", "", raw.strip())
     text = re.sub(r"```\s*$", "", text).strip()
-    # Remove trailing commas before ] or } (common LLM hallucination)
     text = re.sub(r",\s*([\]}])", r"\1", text)
     return text
 
@@ -4174,7 +3349,6 @@ def fetch_ai_hotspots_json(gemini_api_key: str) -> list:
         if not isinstance(parsed, list):
             logger.warning("AI hotspots returned non-list JSON")
             return []
-        # Validate each entry has the required keys
         valid = []
         for item in parsed:
             if isinstance(item, dict) and "lat" in item and "lon" in item and "name" in item:
@@ -4284,9 +3458,6 @@ def fetch_ais_vessels():
 
     return list(seen.values())
 
-# ════════════════════════════════════════════════════════════════════
-# CRYPTO — INSTITUTIONAL BTC ETF FLOWS
-# ════════════════════════════════════════════════════════════════════
 
 _ETF_TICKERS = ["IBIT", "FBTC", "ARKB", "BITB", "GBTC", "HODL", "BRRR", "EZBC", "BTCO", "BTCW"]
 _ETF_COLORS = {"IBIT": "#00CC44", "FBTC": "#00AA88", "ARKB": "#44BB66", "BITB": "#66CC88", "GBTC": "#FF4444", "HODL": "#55DD99", "BRRR": "#33CC77", "EZBC": "#77DDAA", "BTCO": "#88CCBB", "BTCW": "#99BBAA"}
@@ -4328,15 +3499,14 @@ def _fetch_yahoo_v8_chart(ticker, range_str="5d", interval="1d"):
 
 @st.cache_data(ttl=600)
 def fetch_btc_etf_flows():
+    """M1 fix: Parallelized with ThreadPoolExecutor to reduce ~20s sleep to ~2s."""
     import pandas as _pd
-    import time as _time
-    all_flows = {}
+    import concurrent.futures
     
-    for ticker in _ETF_TICKERS:
+    def _fetch_single(ticker):
         try:
-            _time.sleep(1.0 + (_time.time() % 1.5))
             rows = _fetch_yahoo_v8_chart(ticker, range_str="5d", interval="1d")
-            if not rows or len(rows) < 2: continue
+            if not rows or len(rows) < 2: return ticker, {}
             ticker_flows = {}
             for i in range(1, len(rows)):
                 prev_close = rows[i - 1]["close"]
@@ -4346,13 +3516,17 @@ def fetch_btc_etf_flows():
                 if prev_close <= 0 or curr_close <= 0: continue
                 vwap = (curr_high + curr_low + curr_close) / 3.0
                 direction = 1.0 if (curr_close - prev_close) >= 0 else -1.0
-                # Express in billions (raw value)
                 ticker_flows[_pd.Timestamp.fromtimestamp(ts).normalize()] = round((volume * vwap * direction) / 1e9, 4)
-            if ticker_flows: all_flows[ticker] = ticker_flows
-            _time.sleep(1.0)
+            return ticker, ticker_flows
         except Exception as e:
-            logger.error("BTC ETF Flow specific fallback error for %s: %s", ticker, str(e))
-            continue
+            logger.error("BTC ETF Flow error for %s: %s", ticker, str(e))
+            return ticker, {}
+    
+    all_flows = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+        for ticker, flows in pool.map(_fetch_single, _ETF_TICKERS):
+            if flows:
+                all_flows[ticker] = flows
 
     if not all_flows: return None
     df = _pd.DataFrame(all_flows)
@@ -4371,12 +3545,11 @@ def fetch_btc_etf_flows_fallback():
             try:
                 tk = get_yf_ticker(ticker)
                 if tk is None: continue
-                hist = tk.history(period="60d")
+                hist = tk.history(period="35d")
                 if hist is None or hist.empty or len(hist) < 2: continue
                 prev_close = hist["Close"].shift(1)
                 vwap = (hist["High"] + hist["Low"] + hist["Close"]) / 3.0
                 direction = np.where((hist["Close"] - prev_close) >= 0, 1.0, -1.0)
-                # Express in billions (raw value)
                 all_data[ticker] = ((hist["Volume"] * vwap * direction) / 1e9).iloc[1:]
             except Exception as e:
                 logger.error("BTC ETF Fallback flow error for %s: %s", ticker, str(e))
@@ -4391,10 +3564,6 @@ def fetch_btc_etf_flows_fallback():
     except Exception:
         return None
 
-
-# ════════════════════════════════════════════════════════════════════
-# FEATURE 1: GLOBAL WEI MONITOR (World Equity Indices)
-# ════════════════════════════════════════════════════════════════════
 
 _GLOBAL_INDICES = {
     "Americas": [
@@ -4438,7 +3607,6 @@ def get_global_indices():
             ticker_meta[ticker] = {"name": name, "flag": flag, "region": region}
 
     try:
-        # Bulk download: 35 trading-day history for sparkline + volatility
         data = yf.download(all_tickers, period="35d", progress=False, threads=True)
         if data.empty:
             return pd.DataFrame()
@@ -4447,7 +3615,6 @@ def get_global_indices():
         for ticker in all_tickers:
             try:
                 meta = ticker_meta[ticker]
-                # Handle MultiIndex columns from yf.download
                 if isinstance(data.columns, pd.MultiIndex):
                     close = data["Close"][ticker].dropna()
                 else:
@@ -4460,12 +3627,9 @@ def get_global_indices():
                 prev = float(close.iloc[-2])
                 change = round(current - prev, 2)
                 pct = round(change / prev * 100, 2) if prev != 0 else 0.0
-                assert isinstance(pct, float)
 
-                # Sparkline: last 2 trading days (intraday proxy from close values)
                 sparkline = close.tail(10).tolist()
 
-                # 10D and 30D annualized volatility
                 returns = close.pct_change().dropna()
                 vol_10d = round(float(returns.tail(10).std() * np.sqrt(TRADING_DAYS_PER_YEAR) * 100), 2) if len(returns) >= 10 else 0.0
                 vol_30d = round(float(returns.tail(30).std() * np.sqrt(TRADING_DAYS_PER_YEAR) * 100), 2) if len(returns) >= 30 else 0.0
@@ -4495,10 +3659,6 @@ def get_global_indices():
         return pd.DataFrame()
 
 
-# ════════════════════════════════════════════════════════════════════
-# FEATURE 2: NET LIQUIDITY INDICATOR (FRED: WALCL - WTREGEN - RRPONTSYD)
-# ════════════════════════════════════════════════════════════════════
-
 @st.cache_data(ttl=3600)
 def get_net_liquidity(fred_key, lookback=365):
     """Calculate Net Liquidity = WALCL - WTREGEN - RRPONTSYD from FRED.
@@ -4519,13 +3679,10 @@ def get_net_liquidity(fred_key, lookback=365):
         if walcl.empty or wtregen.empty or rrp.empty:
             return None
 
-        # Align to weekly (Wednesday) — use forward-fill to handle different frequencies
         walcl = walcl.set_index("date").resample("W-WED")["value"].last().ffill()
         wtregen = wtregen.set_index("date").resample("W-WED")["value"].last().ffill()
-        # RRPONTSYD is in billions, convert to millions to match WALCL/WTREGEN
         rrp = rrp.set_index("date").resample("W-WED")["value"].last().ffill() * 1000
 
-        # Align indices
         df = pd.DataFrame({
             "WALCL": walcl,
             "TGA": wtregen,
@@ -4536,7 +3693,7 @@ def get_net_liquidity(fred_key, lookback=365):
             return None
 
         df["Net_Liquidity"] = df["WALCL"] - df["TGA"] - df["RRP"]
-        df["Net_Liquidity_T"] = df["Net_Liquidity"] / 1e6  # Convert millions to trillions
+        df["Net_Liquidity_T"] = df["Net_Liquidity"] / 1e6
         df = df.reset_index().rename(columns={"date": "Date"})
         return df
     except requests.exceptions.RequestException as e:
@@ -4546,10 +3703,6 @@ def get_net_liquidity(fred_key, lookback=365):
         logger.error("Net liquidity calculation error", extra={"error": str(e)})
         return None
 
-
-# ════════════════════════════════════════════════════════════════════
-# FEATURE 3: YIELD CURVE EVOLUTION (FRED: DGS1MO through DGS30)
-# ════════════════════════════════════════════════════════════════════
 
 _YIELD_MATURITIES = [
     ("DGS1MO", "1M"), ("DGS3MO", "3M"), ("DGS6MO", "6M"),
@@ -4580,10 +3733,8 @@ def get_yield_curve_history(fred_key, lookback_weeks=52):
         combined = pd.DataFrame(all_data).dropna(how="all")
         combined = combined.ffill()
 
-        # Sample weekly for animation frames
         combined = combined.resample("W-FRI").last().dropna(how="all")
 
-        # Melt to long format for Plotly
         maturity_map = {"1M": 1/12, "3M": 0.25, "6M": 0.5, "1Y": 1, "2Y": 2,
                         "3Y": 3, "5Y": 5, "7Y": 7, "10Y": 10, "20Y": 20, "30Y": 30}
 
@@ -4603,10 +3754,6 @@ def get_yield_curve_history(fred_key, lookback_weeks=52):
         logger.error("Yield curve history fetch failed", extra={"error": str(e)})
         return None
 
-
-# ════════════════════════════════════════════════════════════════════
-# FEATURE 4: CROSS-ASSET VOLATILITY MONITOR
-# ════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=600)
 def get_cross_asset_volatility():
@@ -4636,10 +3783,8 @@ def get_cross_asset_volatility():
                 prev = float(close.iloc[-2])
                 pct = round((current - prev) / prev * 100, 2) if prev else 0.0
 
-                # Percentile rank over 6 months
                 pct_rank = round((close < current).mean() * 100, 1)
 
-                # Determine regime
                 if pct_rank < 25:
                     regime = "LOW"
                 elif pct_rank < 75:
@@ -4669,10 +3814,6 @@ def get_cross_asset_volatility():
         return None
 
 
-# ════════════════════════════════════════════════════════════════════
-# FEATURE 5: MACRO CORRELATION MATRIX (Pearson + Spearman)
-# ════════════════════════════════════════════════════════════════════
-
 @st.cache_data(ttl=3600)
 def get_macro_correlation_matrix(lookback_days=60):
     """Compute Pearson and Spearman correlation matrices for cross-asset analysis.
@@ -4680,14 +3821,14 @@ def get_macro_correlation_matrix(lookback_days=60):
     FEAT-06: Expanded from 5 to 7 assets (added ^TNX + HYG).
     Returns dict with {pearson, spearman, labels, lookback_days} or None.
     """
-    import numpy as np
+
     if yf is None:
         return None
 
     assets_bulk = {
         "GLD": "Gold", "USO": "Oil", "UUP": "Dollar", "^TNX": "10Y Yield", "HYG": "HY Credit",
     }
-    assets = {
+    _all_label_map = {
         "SPY": "S&P 500", "TLT": "Bonds (20Y)",
         **assets_bulk
     }
@@ -4706,22 +3847,19 @@ def get_macro_correlation_matrix(lookback_days=60):
         spy_hist = get_spy_history().tail(lookback_days + 10)
         tlt_hist = get_tlt_history().tail(lookback_days + 10)
         if spy_hist is not None and not spy_hist.empty and "Close" in spy_hist.columns:
-            closes["SPY"] = spy_hist["Close"].values[:len(closes)] if len(spy_hist) >= len(closes) else spy_hist["Close"].reindex(closes.index)
+            closes["SPY"] = spy_hist["Close"].reindex(closes.index)
         if tlt_hist is not None and not tlt_hist.empty and "Close" in tlt_hist.columns:
-            closes["TLT"] = tlt_hist["Close"].values[:len(closes)] if len(tlt_hist) >= len(closes) else tlt_hist["Close"].reindex(closes.index)
+            closes["TLT"] = tlt_hist["Close"].reindex(closes.index)
 
-        # Drop columns that are all NaN
         closes = closes.dropna(axis=1, how="all")
         returns = closes.pct_change().dropna().tail(lookback_days)
 
         if returns.empty or len(returns) < 10:
             return None
 
-        # Rebuild assets label map with whatever columns survived
-        _all_assets = {**{"SPY": "S&P 500", "TLT": "Bonds (20Y)"}, **assets_bulk}
         pearson = returns.corr(method="pearson")
         spearman = returns.corr(method="spearman")
-        labels = [_all_assets.get(t, t) for t in pearson.columns]
+        labels = [_all_label_map.get(t, t) for t in pearson.columns]
         
         pearson.columns = labels; pearson.index = labels
         spearman.columns = labels; spearman.index = labels
@@ -4737,14 +3875,10 @@ def get_macro_correlation_matrix(lookback_days=60):
         return None
 
 
-# ════════════════════════════════════════════════════════════════════
-# FEATURE 6: SECTOR RELATIVE ROTATION GRAPH (RRG)
-# ════════════════════════════════════════════════════════════════════
-
 @st.cache_data(ttl=3600)
 def get_sector_rrg():
     """Calculate Relative Rotation Graph data: RS-Ratio vs RS-Momentum for sector ETFs vs SPY."""
-    import numpy as np
+
     if yf is None:
         return None
 
@@ -4792,31 +3926,25 @@ def get_sector_rrg():
                 if len(etf_close) < 60:
                     continue
 
-                # Align to common dates
                 aligned = pd.DataFrame({"etf": etf_close, "spy": spy_close}).dropna()
                 if len(aligned) < 60:
                     continue
 
-                # Relative Strength = ETF / SPY
                 rs = aligned["etf"] / aligned["spy"]
-                # Normalize RS to 100-centered using 60-day SMA
                 rs_sma = rs.rolling(60).mean()
                 rs_ratio = (rs / rs_sma * 100).dropna()
 
                 if rs_ratio.empty:
                     continue
 
-                # RS-Momentum = rate of change of RS-Ratio
-                rs_momentum = rs_ratio.pct_change(periods=10) * 100 + 100  # centered at 100
+                rs_momentum = rs_ratio.pct_change(periods=10) * 100 + 100
 
                 current_ratio = float(rs_ratio.iloc[-1])
                 current_momentum = float(rs_momentum.dropna().iloc[-1]) if not rs_momentum.dropna().empty else 100.0
 
-                # Trail: last 4 weekly points for animation
                 trail_ratio = rs_ratio.resample("W").last().dropna().tail(4).tolist()
                 trail_momentum = rs_momentum.resample("W").last().dropna().tail(4).tolist()
 
-                # Quadrant classification
                 if current_ratio >= 100 and current_momentum >= 100:
                     quadrant = "LEADING"
                 elif current_ratio >= 100 and current_momentum < 100:
@@ -4845,10 +3973,6 @@ def get_sector_rrg():
         return None
 
 
-# ════════════════════════════════════════════════════════════════════
-# FEATURE 7: IV TERM STRUCTURE (SPY ATM IV across 5+ expiries)
-# ════════════════════════════════════════════════════════════════════
-
 @st.cache_data(ttl=600)
 def get_iv_term_structure(ticker="SPY"):
     """Get ATM implied volatility across multiple expiration dates."""
@@ -4859,7 +3983,6 @@ def get_iv_term_structure(ticker="SPY"):
         if tk is None:
             return None
 
-        # Get current price
         fi = tk.fast_info
         price = getattr(fi, "last_price", None)
         if price is None or float(price) <= 0:
@@ -4872,14 +3995,11 @@ def get_iv_term_structure(ticker="SPY"):
         if not exps:
             return None
 
-        # Take up to 8 expiries for the term structure
         selected_exps = exps[:min(8, len(exps))]
         today = datetime.today().date()
 
-        # Helper defined once outside loop — avoids redefining on every expiry iteration
         def _interp_atm_iv(df_side, spot):
             df_side = df_side.copy()
-            # Filter out rows with NaN or zero IV before finding nearest strikes
             if "impliedVolatility" in df_side.columns:
                 df_side = df_side[df_side["impliedVolatility"].notna() & (df_side["impliedVolatility"] > 0)]
             if df_side.empty:
@@ -4915,13 +4035,11 @@ def get_iv_term_structure(ticker="SPY"):
                 call_iv = _interp_atm_iv(calls, price) if not calls.empty and "strike" in calls.columns else None
                 put_iv = _interp_atm_iv(puts, price) if not puts.empty and "strike" in puts.columns else None
 
-                # Add _dist to original calls before nsmallest (interp_atm only modifies a copy)
                 if not calls.empty and "strike" in calls.columns:
                     calls["_dist"] = (calls["strike"] - price).abs()
                 atm_call = calls.nsmallest(1, "_dist") if not calls.empty and "_dist" in calls.columns else pd.DataFrame()
 
 
-                # Average call and put ATM IV
                 ivs = [v for v in [call_iv, put_iv] if v is not None and v > 0]
                 if not ivs:
                     continue
@@ -4945,10 +4063,6 @@ def get_iv_term_structure(ticker="SPY"):
         logger.error("IV term structure fetch failed", extra={"error": str(e)})
         return None
 
-
-# ════════════════════════════════════════════════════════════════════
-# FEATURE 7B: IV SKEW SURFACE — 25-DELTA PUT/CALL SKEW
-# ════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=600)
 def get_iv_skew(ticker="SPY"):
@@ -4982,9 +4096,6 @@ def get_iv_skew(ticker="SPY"):
         selected_exps = exps[:min(6, len(exps))]
         today = datetime.today().date()
         r = get_risk_free_rate()
-        import numpy as np
-        from scipy.stats import norm
-
         results = []
         for exp in selected_exps:
             try:
@@ -4999,7 +4110,6 @@ def get_iv_skew(ticker="SPY"):
                 dte = max((exp_date - today).days, 1)
                 T = dte / 365.0
 
-                # ATM IV (average call + put)
                 calls["_dist"] = (calls["strike"] - price).abs()
                 atm_call = calls.nsmallest(1, "_dist")
                 atm_iv_c = float(atm_call["impliedVolatility"].iloc[0]) if not atm_call.empty else None
@@ -5011,26 +4121,22 @@ def get_iv_skew(ticker="SPY"):
                 ivs = [v for v in (atm_iv_c, atm_iv_p) if v]
                 atm_iv = sum(ivs) / len(ivs) if ivs else None
 
-                # Find 25-delta call strike (Vectorized)
                 otm_calls = calls[calls["strike"] >= price].copy()
                 if not otm_calls.empty and "impliedVolatility" in otm_calls.columns:
-                    K = otm_calls["strike"].values
                     sigma = np.maximum(otm_calls["impliedVolatility"].fillna(0.2).values, 0.01)
-                    d1 = (np.log(price / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-                    otm_calls["_delta"] = np.abs(norm.cdf(d1))
+                    g_c = bs_greeks_vectorized(price, otm_calls["strike"].values, T, r, sigma, "call")
+                    otm_calls["_delta"] = np.abs(g_c["delta"])
                     otm_calls["_d25_diff"] = (otm_calls["_delta"] - 0.25).abs()
                     c25_row = otm_calls.nsmallest(1, "_d25_diff")
                     iv_25c = float(c25_row["impliedVolatility"].iloc[0]) if not c25_row.empty else None
                 else:
                     iv_25c = None
 
-                # Find 25-delta put strike (Vectorized)
                 otm_puts = puts[puts["strike"] <= price].copy()
                 if not otm_puts.empty and "impliedVolatility" in otm_puts.columns:
-                    K = otm_puts["strike"].values
                     sigma = np.maximum(otm_puts["impliedVolatility"].fillna(0.2).values, 0.01)
-                    d1 = (np.log(price / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-                    otm_puts["_delta"] = np.abs(norm.cdf(d1) - 1.0)
+                    g_p = bs_greeks_vectorized(price, otm_puts["strike"].values, T, r, sigma, "put")
+                    otm_puts["_delta"] = np.abs(g_p["delta"])
                     otm_puts["_d25_diff"] = (otm_puts["_delta"] - 0.25).abs()
                     p25_row = otm_puts.nsmallest(1, "_d25_diff")
                     iv_25p = float(p25_row["impliedVolatility"].iloc[0]) if not p25_row.empty else None
@@ -5061,10 +4167,6 @@ def get_iv_skew(ticker="SPY"):
         return None
 
 
-# ════════════════════════════════════════════════════════════════════
-# FEATURE 7C: REALIZED VS IMPLIED VOLATILITY SPREAD
-# ════════════════════════════════════════════════════════════════════
-
 @st.cache_data(ttl=600)
 def get_rv_iv_spread(ticker="SPY"):
     """Compute 20-day realized vol vs front-month ATM IV.
@@ -5084,11 +4186,9 @@ def get_rv_iv_spread(ticker="SPY"):
         if h is None or len(h) < 25:
             return None
 
-        # 20-day realized volatility (annualized, close-to-close) using log returns
         returns = np.log(h["Close"] / h["Close"].shift(1)).dropna()
         rv20 = float(returns.tail(20).std() * np.sqrt(TRADING_DAYS_PER_YEAR) * 100)
 
-        # Front-month ATM IV and target ~30 DTE
         iv_data = get_iv_term_structure(ticker)
         if iv_data and len(iv_data) > 0:
             best_iv = min(iv_data, key=lambda x: abs(x["dte"] - 30))
@@ -5103,9 +4203,9 @@ def get_rv_iv_spread(ticker="SPY"):
 
         spread = rv20 - front_iv
         if spread > thresh:
-            signal, signal_color = "BUY VOL", "#00CC44"   # RV > IV → IV is cheap → buy options
+            signal, signal_color = "BUY VOL", "#00CC44"
         elif spread < -thresh:
-            signal, signal_color = "SELL VOL", "#FF4444"   # RV < IV → IV is expensive → sell options
+            signal, signal_color = "SELL VOL", "#FF4444"
         else:
             signal, signal_color = "NEUTRAL", "#888888"
 
@@ -5122,11 +4222,6 @@ def get_rv_iv_spread(ticker="SPY"):
         return None
 
 
-# ════════════════════════════════════════════════════════════════════
-# FEATURE 7D: CFTC COMMITMENT OF TRADERS (COT) INSTITUTIONAL POSITIONING
-# ════════════════════════════════════════════════════════════════════
-
-@st.cache_data(ttl=86400)
 @st.cache_data(ttl=3600)
 def get_cot_positioning():
     """Fetch CFTC Commitment of Traders data for key futures contracts.
@@ -5137,10 +4232,9 @@ def get_cot_positioning():
     import io
     import zipfile
     
-    # Contract code map: CFTC commodity code → display name
     CONTRACT_MAP = {
         "13874+": ("S&P 500 (ES)", "ES"),
-        "13874A": ("S&P 500 (ES)", "ES"),  # alternate CFTC code
+        "13874A": ("S&P 500 (ES)", "ES"),
         "209742": ("Nasdaq 100 (NQ)", "NQ"),
         "088691": ("Gold (GC)", "GC"),
         "067651": ("WTI Crude (CL)", "CL"),
@@ -5151,7 +4245,6 @@ def get_cot_positioning():
     results = []
 
     try:
-        # Try current year first, then previous year if not yet available
         for yr in [year, year - 1]:
             url = f"https://www.cftc.gov/files/dea/history/deacot{yr}.zip"
             try:
@@ -5167,7 +4260,6 @@ def get_cot_positioning():
                         raw_text = io.TextIOWrapper(f, encoding='utf-8', errors='replace')
                         reader = _csv.DictReader(raw_text)
                         
-                        # Collect last 2 weeks of data for each contract
                         contract_data = {}
                         for row in reader:
                             cftc_code = (row.get("CFTC_Contract_Market_Code") or "").strip()
@@ -5175,7 +4267,6 @@ def get_cot_positioning():
                                 continue
                             name, symbol = CONTRACT_MAP[cftc_code]
                             try:
-                                # Handle both old and new CFTC CSV column naming conventions
                                 _nc_long_keys = ["NonComm_Positions_Long_All", "Noncommercial Positions-Long (All)", "NonComm_Positions_Long_All_Num"]
                                 _nc_short_keys = ["NonComm_Positions_Short_All", "Noncommercial Positions-Short (All)", "NonComm_Positions_Short_All_Num"]
                                 noncomm_long = int(float(next((row.get(k) for k in _nc_long_keys if row.get(k)), 0) or 0))
@@ -5192,7 +4283,6 @@ def get_cot_positioning():
                             except (ValueError, TypeError):
                                 continue
 
-                        # Get latest + previous for weekly change
                         for cftc_code, entries in contract_data.items():
                             entries.sort(key=lambda x: x["date"], reverse=True)
                             if not entries:
@@ -5227,10 +4317,6 @@ def get_cot_positioning():
         logger.error("CFTC COT fetch failed", extra={"error": str(e)})
         return None
 
-
-# ════════════════════════════════════════════════════════════════════
-# FEATURE 7E: ECONOMIC SURPRISE INDEX (ESI PROXY)
-# ════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=3600)
 def get_economic_surprise_index(fred_key=None):
@@ -5283,7 +4369,6 @@ def get_economic_surprise_index(fred_key=None):
         if not items:
             return None
 
-        # Average of market-mover surprises (or all if insufficient)
         mover_items = [i for i in items if i["is_market_mover"]]
         avg_pool = mover_items if len(mover_items) >= 2 else items
         avg_surprise = sum(i["surprise_pct"] for i in avg_pool) / len(avg_pool)
@@ -5306,19 +4391,13 @@ def get_economic_surprise_index(fred_key=None):
         return None
 
 
-# ════════════════════════════════════════════════════════════════════
-# FEATURE 8: GAMMA SQUEEZE SCANNER
-# ════════════════════════════════════════════════════════════════════
-
 @st.cache_data(ttl=3600)
 def get_gamma_squeeze_scanner():
     """Scan for gamma squeeze candidates: high short interest + high options volume."""
-    import numpy as np
+
     if yf is None:
         return None
 
-    # Universe of meme/squeeze-prone stocks + high SI names
-    # Removed delisted tickers (BBBY, WISH, GOEV)
     SCAN_UNIVERSE = [
         "GME", "AMC", "KOSS", "BB", "NOK", "PLTR", "SOFI",
         "RIVN", "LCID", "MARA", "RIOT", "COIN", "CVNA", "UPST",
@@ -5327,12 +4406,10 @@ def get_gamma_squeeze_scanner():
     ]
 
     try:
-        # Bulk download for volume and price data
         data = yf.download(SCAN_UNIVERSE, period="30d", progress=False, threads=True)
         if data.empty:
             return []
 
-        # PRE-FILTER to avoid N+1 .info() calls!
         pre_filtered = []
         for ticker in SCAN_UNIVERSE:
             try:
@@ -5349,7 +4426,6 @@ def get_gamma_squeeze_scanner():
                 avg_vol_20d = float(volume.tail(20).mean())
                 latest_vol = float(volume.iloc[-1])
 
-                # Volume surge ratio
                 vol_ratio = round(latest_vol / avg_vol_20d, 2) if avg_vol_20d > 0 else 0.0
                 if vol_ratio > 0.5:
                     pre_filtered.append({
@@ -5362,7 +4438,6 @@ def get_gamma_squeeze_scanner():
             except (KeyError, IndexError):
                 continue
 
-        # Top 10 by volume surge to fetch .info
         pre_filtered.sort(key=lambda x: x["vol_ratio"], reverse=True)
         top_candidates = pre_filtered[:10]
 
@@ -5375,7 +4450,6 @@ def get_gamma_squeeze_scanner():
                 latest_vol = cand["latest_vol"]
                 vol_ratio = cand["vol_ratio"]
 
-                # Short interest data via yfinance info
                 tk = get_yf_ticker(ticker)
                 if tk is None:
                     continue
@@ -5383,7 +4457,6 @@ def get_gamma_squeeze_scanner():
                 short_pct = _safe_float(info.get("shortPercentOfFloat", 0), default=0) * 100
                 short_ratio = _safe_float(info.get("shortRatio", 0))
 
-                # Score: combine short interest + volume surge
                 squeeze_score = 0.0
                 if short_pct > 20:
                     squeeze_score += 3.0
@@ -5405,7 +4478,6 @@ def get_gamma_squeeze_scanner():
                 if squeeze_score < 1.0:
                     continue
 
-                # Signal classification
                 if squeeze_score >= 5:
                     signal = "🔴 HIGH SQUEEZE"
                 elif squeeze_score >= 3:
@@ -5424,7 +4496,7 @@ def get_gamma_squeeze_scanner():
                     "avg_vol": int(avg_vol_20d),
                     "latest_vol": int(latest_vol),
                 })
-            except (KeyError, IndexError) as e:
+            except (KeyError, IndexError):
                 continue
 
         rows.sort(key=lambda x: x["squeeze_score"], reverse=True)
@@ -5433,10 +4505,6 @@ def get_gamma_squeeze_scanner():
         logger.error("Gamma squeeze scanner failed", extra={"error": str(e)})
         return []
 
-
-# ════════════════════════════════════════════════════════════════════
-# FEATURE 9: DYNAMIC EARNINGS CALENDAR (Finnhub)
-# ════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=3600)
 def get_finnhub_earnings_calendar(finnhub_key, days_ahead=14):
@@ -5462,12 +4530,19 @@ def get_finnhub_earnings_calendar(finnhub_key, days_ahead=14):
         rows = []
         for e in earnings:
             symbol = e.get("symbol", "")
-            if not symbol or "." in symbol:  # Skip non-US
-                continue
+            if not symbol or "." in symbol:
+                if symbol and "." in symbol:
+                    suffix = symbol.split(".")[-1].upper()
+                    if suffix in ("A", "B"):
+                        pass
+                    elif len(suffix) >= 2:
+                        continue
+                elif not symbol:
+                    continue
             rows.append({
                 "ticker": symbol,
                 "date": e.get("date", ""),
-                "hour": e.get("hour", ""),  # bmo, amc, dmh
+                "hour": e.get("hour", ""),
                 "eps_estimate": e.get("epsEstimate"),
                 "eps_actual": e.get("epsActual"),
                 "revenue_estimate": e.get("revenueEstimate"),
@@ -5484,10 +4559,6 @@ def get_finnhub_earnings_calendar(finnhub_key, days_ahead=14):
         logger.error("Finnhub earnings calendar error", extra={"error": str(e)})
         return None
 
-
-# ════════════════════════════════════════════════════════════════════
-# FEATURE 10: OPTIONS-IMPLIED EXPECTED MOVE
-# ════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=600)
 def get_expected_move(ticker):
@@ -5511,7 +4582,6 @@ def get_expected_move(ticker):
         if not exps:
             return None
 
-        # Use nearest expiry
         exp = exps[0]
         chain = tk.option_chain(exp)
         if chain is None:
@@ -5533,7 +4603,6 @@ def get_expected_move(ticker):
             
         F = price * math.exp((r - q) * T)
 
-        # Find ATM strike using Forward F
         calls["_dist"] = (calls["strike"] - F).abs()
         puts["_dist"] = (puts["strike"] - F).abs()
         atm_call = calls.nsmallest(1, "_dist")
@@ -5545,7 +4614,6 @@ def get_expected_move(ticker):
         call_mid = (float(atm_call["bid"].iloc[0]) + float(atm_call["ask"].iloc[0])) / 2
         put_mid = (float(atm_put["bid"].iloc[0]) + float(atm_put["ask"].iloc[0])) / 2
 
-        # If bid/ask is 0, use lastPrice
         if call_mid <= 0:
             call_mid = float(atm_call["lastPrice"].iloc[0])
         if put_mid <= 0:
@@ -5572,17 +4640,12 @@ def get_expected_move(ticker):
         return None
 
 
-# ════════════════════════════════════════════════════════════════════
-# FEATURE 11: AI-POWERED GUIDANCE SUMMARIES
-# ════════════════════════════════════════════════════════════════════
-
 @st.cache_data(ttl=3600)
 def get_ai_earnings_summary(ticker, gemini_api_key, finnhub_key=None, newsapi_key=None):
     """Aggregate recent earnings news and summarize with Gemini AI."""
     if not gemini_api_key or genai is None:
         return {"error": "NO_KEY"}
     try:
-        # Check if event has happened
         try:
             tk = get_yf_ticker(ticker)
             if tk is not None:
@@ -5602,14 +4665,12 @@ def get_ai_earnings_summary(ticker, gemini_api_key, finnhub_key=None, newsapi_ke
         except Exception:
             pass
 
-        # Gather recent news
         news_items = get_stock_news(ticker, finnhub_key=finnhub_key, newsapi_key=newsapi_key)
         if not news_items:
             return {"error": "NO_NEWS"}
 
         headlines = "\n".join([f"- {n['title']} ({n['source']}, {n['date']})" for n in news_items[:10]])
 
-        # Get basic financial context
         q = yahoo_quote(ticker)
         price_ctx = f"Current price: ${q['price']:,.2f}, Change: {q['pct']:+.2f}%" if q else ""
 
@@ -5644,10 +4705,6 @@ def get_ai_earnings_summary(ticker, gemini_api_key, finnhub_key=None, newsapi_ke
         logger.error("AI earnings summary failed", extra={"ticker": ticker, "error": str(e)})
         return None
 
-
-# ════════════════════════════════════════════════════════════════════
-# FEATURE 12: VISUAL MARGIN EXPANSION CHART DATA
-# ════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=1800)
 def get_margin_chart_data(ticker):
@@ -5713,49 +4770,50 @@ def get_risk_neutral_density(ticker="SPY", expiry=None):
         calls = calls.sort_values("strike")
         K = calls["strike"].values
         
-        # Smoothed Prices (use Black-Scholes using given IV instead of noisy market prices directly)
-        C = np.array([bs_price(price, k, T, r, sigma, side="call") for k, sigma in zip(K, calls["impliedVolatility"].values)])
-        
-        if len(K) < 3: return None
-        
+        sigmas = np.maximum(calls["impliedVolatility"].astype(float).values, 1e-6)
+        C = np.empty(len(K), dtype=np.float64)
+        for i, (k, sigma) in enumerate(zip(K, sigmas)):
+            C[i] = bs_price(price, float(k), T, r, float(sigma), side="call")
+
+        if len(K) < 3:
+            return None
+
         dK1 = K[1:-1] - K[:-2]
         dK2 = K[2:] - K[1:-1]
-        
+        span = K[2:] - K[:-2]
+        if np.any(dK1 <= 0) or np.any(dK2 <= 0) or np.any(span <= 0):
+            return None
+
         dC1 = (C[1:-1] - C[:-2]) / dK1
         dC2 = (C[2:] - C[1:-1]) / dK2
-        
-        d2C_dK2 = 2 * (dC2 - dC1) / (K[2:] - K[:-2])
-        
+        d2C_dK2 = 2.0 * (dC2 - dC1) / span
+
         rnd = np.exp(r * T) * d2C_dK2
-        rnd = np.maximum(rnd, 0)
-        
-        area = np.trapezoid(rnd, K[1:-1])
+        rnd = np.maximum(rnd, 0.0)
+
+        area = float(np.trapezoid(rnd, K[1:-1]))
         if area > 0:
             rnd = rnd / area
-            
-        rows = []
-        for i in range(len(rnd)):
-            rows.append({
-                "strike": float(K[i+1]),
-                "density": float(rnd[i])
-            })
-            
-        return rows
+
+        return [
+            {"strike": float(K[i + 1]), "density": float(rnd[i])}
+            for i in range(len(rnd))
+            if np.isfinite(rnd[i])
+        ]
     except Exception as e:
         logger.error("RND fetch failed", extra={"error": str(e)})
         return None
 
 
-# ════════════════════════════════════════════════════════════════════
-# SOVEREIGN 10Y YIELDS BY COUNTRY
-# ════════════════════════════════════════════════════════════════════
 @st.cache_data(ttl=300)
 def get_sovereign_10y_yields():
-    """Fetch 10-year sovereign bond yields for major countries via Yahoo Finance."""
+    """Fetch 10-year sovereign bond yields for major countries.
+    
+    M4 fix: Uses yf.download() bulk fetch instead of individual tk.history()
+    calls, reducing ~13 sequential API calls to a single bulk request.
+    """
     SOVEREIGN_10Y = [
         ("^TNX",   "United States",  "🇺🇸"),
-        ("^TYX",   "US 30Y (ref)",   "🇺🇸"),  # used internally; we relabel
-        # European
         ("DE10Y.F",   "Germany",     "🇩🇪"),
         ("FR10Y.F",   "France",      "🇫🇷"),
         ("IT10Y.F",   "Italy",       "🇮🇹"),
@@ -5763,28 +4821,37 @@ def get_sovereign_10y_yields():
         ("GB10Y.F",   "UK",          "🇬🇧"),
         ("PT10Y.F",   "Portugal",    "🇵🇹"),
         ("GR10Y.F",   "Greece",      "🇬🇷"),
-        # Asia-Pacific
         ("JP10Y.F",   "Japan",       "🇯🇵"),
         ("AU10Y.F",   "Australia",   "🇦🇺"),
         ("IN10Y.F",   "India",       "🇮🇳"),
         ("CN10Y.F",   "China",       "🇨🇳"),
-        # Americas
         ("BR10Y.F",   "Brazil",      "🇧🇷"),
         ("MX10Y.F",   "Mexico",      "🇲🇽"),
     ]
+    if yf is None:
+        return []
+    ticker_meta = {ticker: (country, flag) for ticker, country, flag in SOVEREIGN_10Y}
+    all_tickers = [ticker for ticker, _, _ in SOVEREIGN_10Y]
+    
+    try:
+        data = yf.download(all_tickers, period="5d", progress=False, threads=True)
+        if data.empty:
+            return []
+    except Exception:
+        return []
+    
     results = []
-    for ticker, country, flag in SOVEREIGN_10Y:
-        if "30Y" in country:
-            continue  # skip 30Y ref
+    for ticker in all_tickers:
         try:
-            tk = get_yf_ticker(ticker)
-            if tk is None:
+            country, flag = ticker_meta[ticker]
+            if isinstance(data.columns, pd.MultiIndex):
+                close = data["Close"][ticker].dropna()
+            else:
+                close = data["Close"].dropna()
+            if close.empty or len(close) < 2:
                 continue
-            h = tk.history(period="5d")
-            if h.empty:
-                continue
-            current = float(h["Close"].iloc[-1])
-            prev = float(h["Close"].iloc[-2]) if len(h) > 1 else current
+            current = float(close.iloc[-1])
+            prev = float(close.iloc[-2])
             chg = current - prev
             results.append({
                 "country": country,
@@ -5795,24 +4862,17 @@ def get_sovereign_10y_yields():
             })
         except Exception:
             continue
-    # Sort by yield descending (highest first)
     results.sort(key=lambda x: x["yield_pct"], reverse=True)
     return results
 
 
-# ════════════════════════════════════════════════════════════════════
-# SOVEREIGN CDS RISK — PROXY VIA ETFs & SPREADS
-# ════════════════════════════════════════════════════════════════════
 @st.cache_data(ttl=600)
 def get_sovereign_cds_proxy():
     """Approximate sovereign credit risk using spread proxies.
     
-    Since real-time CDS data requires Bloomberg/Refinitiv, we proxy using:
-    - EM bond ETF spreads (EMB, LEMB)
-    - Individual country ETF performance (inverse = stress)
-    - FRED series for credit spreads where available
+    M5 fix: Uses multi_quotes() batch fetch instead of individual yahoo_quote()
+    calls, reducing ~12 sequential API calls to a single bulk request.
     """
-    # High-risk sovereign proxies — ETFs that track sovereign bonds
     SOVEREIGN_RISK = [
         ("EMB",    "EM Sov. Bonds (USD)",  "🌍"),
         ("LEMB",   "EM Local Currency",     "🌍"),
@@ -5827,47 +4887,52 @@ def get_sovereign_cds_proxy():
         ("GREK",   "Greece",               "🇬🇷"),
         ("ARGT",   "Argentina",            "🇦🇷"),
     ]
+    ticker_meta = {ticker: (label, flag) for ticker, label, flag in SOVEREIGN_RISK}
+    all_tickers = [ticker for ticker, _, _ in SOVEREIGN_RISK]
+    
+    qs = multi_quotes(all_tickers)
+    quote_map = {q["ticker"]: q for q in qs} if qs else {}
+    
     results = []
-    for ticker, label, flag in SOVEREIGN_RISK:
-        try:
-            q = yahoo_quote(ticker)
-            if q:
-                # Negative performance = higher risk
-                risk_signal = "HIGH" if q["pct"] < -1.5 else ("ELEVATED" if q["pct"] < -0.5 else ("MODERATE" if q["pct"] < 0 else "LOW"))
-                risk_color = "#FF4444" if risk_signal == "HIGH" else "#FF8C00" if risk_signal == "ELEVATED" else "#FFCC00" if risk_signal == "MODERATE" else "#00CC44"
-                results.append({
-                    "label": label,
-                    "flag": flag,
-                    "ticker": ticker,
-                    "price": q["price"],
-                    "pct": q["pct"],
-                    "risk_signal": risk_signal,
-                    "risk_color": risk_color,
-                })
-        except Exception:
+    for ticker in all_tickers:
+        q = quote_map.get(ticker)
+        if not q:
             continue
-    # Sort by pct ascending (worst performers = highest risk first)
+        label, flag = ticker_meta[ticker]
+        pct = q["pct"]
+        risk_signal = "HIGH" if pct < -1.5 else ("ELEVATED" if pct < -0.5 else ("MODERATE" if pct < 0 else "LOW"))
+        risk_color = "#FF4444" if risk_signal == "HIGH" else "#FF8C00" if risk_signal == "ELEVATED" else "#FFCC00" if risk_signal == "MODERATE" else "#00CC44"
+        results.append({
+            "label": label,
+            "flag": flag,
+            "ticker": ticker,
+            "price": q["price"],
+            "pct": pct,
+            "risk_signal": risk_signal,
+            "risk_color": risk_color,
+        })
     results.sort(key=lambda x: x["pct"])
     return results
 
 
-# ════════════════════════════════════════════════════════════════════
-# CENTRAL BANK POLICY RATES
-# ════════════════════════════════════════════════════════════════════
 @st.cache_data(ttl=3600)
 def get_central_bank_rates(fred_key=None):
-    """Fetch central bank policy rates from FRED and other sources."""
-    # FRED series for central bank rates
+    """Fetch central bank policy rates from FRED and other sources.
+    
+    M6 fix: Parallelized FRED API calls with ThreadPoolExecutor(max_workers=5)
+    to reduce latency from sequential 7-call waterfall.
+    """
+    import concurrent.futures
+    
     RATES = [
-        ("Federal Reserve (US)",    "🇺🇸", "FEDFUNDS",      fred_key),
-        ("ECB (Eurozone)",          "🇪🇺", "ECBDFR",        fred_key),
-        ("Bank of England (UK)",    "🇬🇧", "BOERUKM",       fred_key),
-        ("Bank of Japan",           "🇯🇵", "IRSTCB01JPM156N", fred_key),
-        ("Bank of Canada",          "🇨🇦", "IRSTCB01CAM156N", fred_key),
-        ("Reserve Bank (AU)",       "🇦🇺", "IRSTCB01AUM156N", fred_key),
-        ("Swiss National Bank",     "🇨🇭", "IRSTCB01CHM156N", fred_key),
+        ("Federal Reserve (US)",    "🇺🇸", "FEDFUNDS"),
+        ("ECB (Eurozone)",          "🇪🇺", "ECBDFR"),
+        ("Bank of England (UK)",    "🇬🇧", "BOERUKM"),
+        ("Bank of Japan",           "🇯🇵", "IRSTCB01JPM156N"),
+        ("Bank of Canada",          "🇨🇦", "IRSTCB01CAM156N"),
+        ("Reserve Bank (AU)",       "🇦🇺", "IRSTCB01AUM156N"),
+        ("Swiss National Bank",     "🇨🇭", "IRSTCB01CHM156N"),
     ]
-    # Hardcoded fallback rates (updated as of early 2026) for when FRED key is missing
     FALLBACK = {
         "Federal Reserve (US)":  5.25,
         "ECB (Eurozone)":        3.75,
@@ -5877,16 +4942,28 @@ def get_central_bank_rates(fred_key=None):
         "Reserve Bank (AU)":     4.10,
         "Swiss National Bank":   1.50,
     }
-    results = []
-    for name, flag, series_id, key in RATES:
-        rate = None
-        prev_rate = None
-        if key:
+    
+    raw = {}
+    if fred_key:
+        def _fetch(item):
+            name, _, series_id = item
             try:
-                df = fred_series(series_id, key, 6)
-                if df is not None and not df.empty:
-                    rate = round(float(df["value"].iloc[-1]), 2)
-                    prev_rate = round(float(df["value"].iloc[-2]), 2) if len(df) > 1 else rate
+                df = fred_series(series_id, fred_key, 6)
+                return name, df
+            except Exception:
+                return name, None
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+            for name, df in pool.map(_fetch, RATES):
+                raw[name] = df
+    
+    results = []
+    for name, flag, series_id in RATES:
+        rate, prev_rate = None, None
+        df = raw.get(name)
+        if df is not None and not df.empty:
+            try:
+                rate = round(float(df["value"].iloc[-1]), 2)
+                prev_rate = round(float(df["value"].iloc[-2]), 2) if len(df) > 1 else rate
             except Exception:
                 pass
         if rate is None:
@@ -5899,14 +4976,10 @@ def get_central_bank_rates(fred_key=None):
             "name": name, "flag": flag, "rate": rate,
             "change": chg, "stance": stance, "stance_color": stance_color,
         })
-    # Sort by rate descending
     results.sort(key=lambda x: x["rate"], reverse=True)
     return results
 
 
-# ════════════════════════════════════════════════════════════════════
-# YIELD CURVE INVERSIONS MONITOR
-# ════════════════════════════════════════════════════════════════════
 @st.cache_data(ttl=300)
 def get_yield_curve_inversions(fred_key=None):
     """Check key yield curve spreads for inversions."""
@@ -5918,19 +4991,33 @@ def get_yield_curve_inversions(fred_key=None):
         ("10Y - 1Y",  "DGS10", "DGS1",  "Near-term vs long-term outlook"),
         ("30Y - 2Y",  "DGS30", "DGS2",  "Full curve slope"),
     ]
+    import concurrent.futures
+    
+    all_series = set()
+    for label, long_series, short_series, desc in SPREADS:
+        all_series.add(long_series)
+        all_series.add(short_series)
+    
+    raw = {}
+    if fred_key:
+        def _fetch(sid):
+            try:
+                return sid, fred_series(sid, fred_key, 5)
+            except Exception:
+                return sid, None
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+            for sid, df in pool.map(_fetch, all_series):
+                raw[sid] = df
+    
     results = []
     for label, long_series, short_series, desc in SPREADS:
         long_val, short_val = None, None
-        if fred_key:
-            try:
-                df_l = fred_series(long_series, fred_key, 5)
-                df_s = fred_series(short_series, fred_key, 5)
-                if df_l is not None and not df_l.empty:
-                    long_val = float(df_l["value"].iloc[-1])
-                if df_s is not None and not df_s.empty:
-                    short_val = float(df_s["value"].iloc[-1])
-            except Exception:
-                pass
+        df_l = raw.get(long_series)
+        df_s = raw.get(short_series)
+        if df_l is not None and not df_l.empty:
+            long_val = float(df_l["value"].iloc[-1])
+        if df_s is not None and not df_s.empty:
+            short_val = float(df_s["value"].iloc[-1])
         if long_val is not None and short_val is not None:
             spread = round(long_val - short_val, 3)
             inverted = spread < 0
@@ -5949,9 +5036,6 @@ def get_yield_curve_inversions(fred_key=None):
     return results
 
 
-# ════════════════════════════════════════════════════════════════════
-# STOCK PROFITABILITY & BALANCE SHEET METRICS
-# ════════════════════════════════════════════════════════════════════
 @st.cache_data(ttl=600)
 def get_profitability_metrics(ticker):
     """Fetch profitability ratios: gross margin, operating margin, EBITDA margin, net margin, ROA, ROE."""
@@ -5967,7 +5051,6 @@ def get_profitability_metrics(ticker):
         except Exception:
             pass
 
-        # Try from info dict first
         gross_margin = info.get("grossMargins")
         op_margin = info.get("operatingMargins")
         ebitda_margin = info.get("ebitdaMargins")
@@ -5975,7 +5058,6 @@ def get_profitability_metrics(ticker):
         roa = info.get("returnOnAssets")
         roe = info.get("returnOnEquity")
 
-        # Fallback: compute from financials if info blocked
         if gross_margin is None or op_margin is None:
             try:
                 inc = None
@@ -5985,7 +5067,7 @@ def get_profitability_metrics(ticker):
                         inc = val
                         break
                 if inc is not None and not inc.empty:
-                    q = inc.columns[0]  # most recent quarter
+                    q = inc.columns[0]
                     rev = None
                     for k in ["Total Revenue", "Revenue"]:
                         if k in inc.index:
@@ -6019,7 +5101,6 @@ def get_profitability_metrics(ticker):
             except Exception:
                 pass
 
-        # Compute ROA/ROE from balance sheet if needed
         if roa is None or roe is None:
             try:
                 bs = None
@@ -6047,14 +5128,14 @@ def get_profitability_metrics(ticker):
                                 if k in bs.index:
                                     ta = float(bs.loc[k, q])
                                     if ta > 0:
-                                        roa = (net_inc * 4) / ta  # annualize
+                                        roa = (net_inc * 4) / ta
                                     break
                         if roe is None:
                             for k in ["Total Stockholders Equity", "Stockholders Equity", "Total Equity Gross Minority Interest"]:
                                 if k in bs.index:
                                     eq = float(bs.loc[k, q])
                                     if eq > 0:
-                                        roe = (net_inc * 4) / eq  # annualize
+                                        roe = (net_inc * 4) / eq
                                     break
             except Exception:
                 pass
@@ -6093,7 +5174,6 @@ def get_balance_sheet_metrics(ticker):
         current_ratio = info.get("currentRatio")
         quick_ratio = info.get("quickRatio")
 
-        # Fallback: compute from balance sheet
         if total_cash is None or total_debt is None:
             try:
                 bs = None
@@ -6135,7 +5215,6 @@ def get_balance_sheet_metrics(ticker):
                         if ca and cl and cl > 0:
                             current_ratio = round(ca / cl, 2)
                     if quick_ratio is None and current_ratio is not None:
-                        # Approximate: quick = (current assets - inventory) / current liabilities
                         inv = None
                         for k in ["Inventory"]:
                             if k in bs.index:
@@ -6163,13 +5242,7 @@ def get_balance_sheet_metrics(ticker):
         return None
 
 
-# ════════════════════════════════════════════════════════════════════
-# MARKET-RELEVANT NEWS FILTER
-# ════════════════════════════════════════════════════════════════════
-
-# Keywords that signal market/geopolitical relevance
 _MARKET_KEYWORDS = {
-    # Markets & Finance
     "market", "stock", "equit", "bond", "treasury", "yield", "rate", "fed ",
     "federal reserve", "fomc", "monetary", "inflation", "cpi", "pce", "gdp",
     "recession", "rally", "selloff", "sell-off", "crash", "bull", "bear",
@@ -6178,28 +5251,23 @@ _MARKET_KEYWORDS = {
     "nikkei", "hang seng", "index", "futures", "options", "derivative",
     "hedge fund", "short sell", "insider", "sec ", "regulat", "investm",
     "analyst", "upgrade", "downgrade", "target price", "eps",
-    # Macro
     "central bank", "ecb", "boj", "boe", "rba", "pboc", "rate hike",
     "rate cut", "taper", "quantitative", "stimulus", "fiscal", "debt",
     "deficit", "surplus", "trade war", "tariff", "sanction", "embargo",
     "currency", "dollar", "euro", "yen", "yuan", "forex", "fx ",
     "commodity", "crude", "oil", "gold", "silver", "copper", "wheat",
     "natural gas", "opec", "energy", "mining",
-    # Geopolitics that affect markets
     "geopolitic", "conflict", "war ", "military", "nato", "nuclear",
     "missile", "sanctions", "blockade", "strait", "strait of hormuz",
     "shipping", "supply chain", "semiconductor", "chip", "ai ", "tech",
     "iran", "russia", "china", "taiwan", "ukraine", "middle east",
     "gaza", "israel", "north korea", "red sea", "houthi", "suez",
-    # Crypto
     "bitcoin", "crypto", "ethereum", "etf approval", "sec crypto",
-    # Company-level moves
     "layoff", "restructur", "merger", "acquisition", "antitrust",
     "bankruptcy", "default", "credit rating", "moody", "fitch",
     "standard & poor", "downgrad",
 }
 
-# Keywords that signal irrelevant fluff
 _FLUFF_KEYWORDS = {
     "celebrity", "entertainment", "lifestyle", "recipe", "fashion",
     "horoscope", "zodiac", "dating", "reality tv", "reality show",
@@ -6224,17 +5292,14 @@ def is_market_relevant(title, source=""):
         return False
     t_lower = title.lower()
 
-    # Check for explicit fluff first
     for kw in _FLUFF_KEYWORDS:
         if kw in t_lower:
             return False
 
-    # Check for market relevance
     for kw in _MARKET_KEYWORDS:
         if kw in t_lower:
             return True
 
-    # Check source — financial sources are always relevant
     _financial_sources = {
         "reuters", "bloomberg", "cnbc", "marketwatch", "financial times",
         "ft.com", "wsj", "wall street journal", "barron", "seekingalpha",
@@ -6249,12 +5314,9 @@ def is_market_relevant(title, source=""):
         if fs in s_lower:
             return True
 
-    # Default: be inclusive but filter obvious non-market content
-    # Short titles with no market keywords → likely fluff
     if len(t_lower.split()) < 4:
         return False
 
-    # If nothing matched, let it through (conservative filter)
     return True
 
 

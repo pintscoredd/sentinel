@@ -235,10 +235,17 @@ html,body{background:#000;color:#d0d3d8;width:100%;height:100%;overflow:hidden}
     // XSS-safe HTML escaper — use for ALL external data before innerHTML
     function escHtml(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
     (function(){
+      // CesiumJS exposes an AMD loader (define/define.amd). When satellite.js
+      // (UMD) loads, it detects AMD and registers anonymously instead of
+      // attaching to window.satellite. Fix: hide define while loading satellite.js.
+      var _origDefine = window.define;
+      window.define = undefined;
       function tryLoad(urls,idx){
-        if(idx>=urls.length)return;
-        const s=document.createElement('script');s.src=urls[idx];
-        s.onerror=function(){tryLoad(urls,idx+1);};document.head.appendChild(s);
+        if(idx>=urls.length){ window.define = _origDefine; return; }
+        var s=document.createElement('script');s.src=urls[idx];
+        s.onload=function(){ window.define = _origDefine; };
+        s.onerror=function(){tryLoad(urls,idx+1);};
+        document.head.appendChild(s);
       }
       tryLoad([
         'https://cdn.jsdelivr.net/npm/satellite.js@4.1.3/dist/satellite.min.js',
@@ -512,8 +519,9 @@ async function addArcGISImagery() {
 
 function addOSMBackup() {
   try {
-    const osm = new Cesium.OpenStreetMapImageryProvider({
-      url: 'https://tile.openstreetmap.org/'
+    const osm = new Cesium.UrlTemplateImageryProvider({
+      url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      credit: 'OpenStreetMap'
     });
     const layer = new Cesium.ImageryLayer(osm);
     viewer.imageryLayers.add(layer);
@@ -920,6 +928,8 @@ function ingestSentinelData() {
   if (!DATA) return;
   if (DATA.events && DATA.events.length > 0) loadConflictEvents(DATA.events);
   if (DATA.vessels && DATA.vessels.length > 0) loadVesselEntities(DATA.vessels);
+  if (DATA.planes && DATA.planes.length > 0) loadInjectedPlanes(DATA.planes);
+  if (DATA.sats && DATA.sats.length > 0) loadInjectedSats(DATA.sats);
 }
 // SENTINEL GEO — Infrastructure Layers, Weather, Existing Layers, Layer Toggle
 
@@ -1151,20 +1161,63 @@ function loadVesselEntities(vessels) {
   });
 }
 
+// ── INJECTED PLANES (from Python backend — pre-computed positions)
+function loadInjectedPlanes(planes) {
+  const ds = getOrCreateDS('milair');
+  document.getElementById('flt-status').style.display = '';
+  planes.forEach(a => {
+    if (a.lat == null || a.lon == null) return;
+    const e = ds.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(a.lon, a.lat, (a.alt_baro||10000)*0.3048),
+      billboard: { image: makeIcon('✈','#FFDD00'), width:14, height:14, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    });
+    const cs = String(a.flight||a.hex||'MIL').trim();
+    e._sentinelType = 'milair'; e._sentinelLabel = cs; e._sentinelColor = '#FFDD00';
+    e._sentinelCategory = '✈ MILITARY AIRCRAFT';
+    e._sentinelBody = `CALLSIGN: ${cs}\nALT: ${Math.round(a.alt_baro||0)} FT\nSPEED: ${Math.round(a.gs||0)} KTS\nHEADING: ${Math.round(a.track||0)}°\nICAO: ${a.hex||'—'}`;
+    e._sentinelTags = ['MIL','INJECTED'];
+  });
+}
+
+// ── INJECTED SATELLITES (from Python backend — pre-computed positions via Skyfield)
+function loadInjectedSats(sats) {
+  const ds = getOrCreateDS('satellites');
+  document.getElementById('sat-status').style.display = '';
+  sats.forEach(s => {
+    if (s.lat == null || s.lon == null) return;
+    const altKm = s.alt_km || 400;
+    const e = ds.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(s.lon, s.lat, altKm * 1000),
+      point: { pixelSize: 4, color: Cesium.Color.fromCssColorString('#00FFFF'), disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    });
+    e._sentinelType = 'satellite'; e._sentinelLabel = String(s.name||'SAT').substring(0,80); e._sentinelColor = '#00FFFF';
+    e._sentinelCategory = '◉ SATELLITE — SKYFIELD';
+    e._sentinelBody = `NAME: ${String(s.name||'SAT').substring(0,80)}\nALT: ${Math.round(altKm)} KM\nVEL: ${(s.vel_kms||7.5).toFixed(1)} km/s\nSOURCE: Python/Skyfield`;
+    e._sentinelTags = ['SKYFIELD', 'SAT'];
+  });
+}
+
 // ── SATELLITES (CelesTrak TLE)
 async function loadSatelliteEntities() {
   const ds = getOrCreateDS('satellites');
   document.getElementById('sat-status').style.display = '';
-  if (typeof satellite === 'undefined') return;
+  // Wait for satellite.js to load (async script) — retry up to 5s
+  for (let wait = 0; wait < 5000 && typeof satellite === 'undefined'; wait += 200) {
+    await new Promise(r => setTimeout(r, 200));
+  }
+  if (typeof satellite === 'undefined') {
+    console.warn('[Sentinel] satellite.js failed to load after 5s — using injected positions only');
+    return;
+  }
   const limit = PRESETS[currentPreset]?.satLim || 2000;
-  const groups = ['stations','visual','military'];
+  const groups = ['stations','active','military'];
   let total = 0;
   let tleErrors = 0;
   for (const gid of groups) {
     if (total >= limit) break;
     try {
       const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 8000);
-      const r = await fetch(`https://celestrak.org/pub/TLE/${gid}.txt`, {signal:ctrl.signal});
+      const r = await fetch(`https://celestrak.org/NORAD/elements/gp.php?GROUP=${gid}&FORMAT=tle`, {signal:ctrl.signal});
       if (!r.ok) { console.warn(`[Sentinel] CelesTrak ${gid} HTTP ${r.status}`); continue; }
       const text = await r.text();
       const lines = text.trim().split('\n').map(l=>l.trim()).filter(l=>l);
@@ -1186,7 +1239,7 @@ async function loadSatelliteEntities() {
         }
         try {
           const satrec = satellite.twoline2satrec(tle1, tle2);
-          if (!satrec || satrec.error !== 0) { tleErrors++; continue; }
+          if (!satrec || (satrec.error !== 0 && satrec.error !== '' && satrec.error != null)) { tleErrors++; continue; }
           const now = new Date();
           const pv = satellite.propagate(satrec, now);
           if (!pv.position) continue;

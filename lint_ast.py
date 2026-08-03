@@ -24,9 +24,6 @@ import os
 import argparse
 import glob as _glob_module
 
-# ── Curated set of commonly-shadowed builtins (PEP-8 violation) ──
-# We focus on the ones that cause real runtime bugs, not obscure ones
-# like __build_class__ or copyright.
 _DANGEROUS_BUILTINS = frozenset({
     "list", "dict", "set", "tuple", "frozenset",
     "str", "int", "float", "bool", "bytes", "bytearray",
@@ -43,7 +40,6 @@ _DANGEROUS_BUILTINS = frozenset({
     "NotImplementedError", "ZeroDivisionError", "OverflowError",
 })
 
-# ── Names that should NOT be flagged as unused ──
 _UNUSED_EXCEPTIONS = frozenset({
     "_", "__all__", "__version__", "__author__", "__doc__",
 })
@@ -72,13 +68,9 @@ def check(file_path, *, enable_unused=True, enable_shadow=True, enable_annotatio
         print(f"{file_path}: SyntaxError: {e}")
         return results
 
-    # ────────────────────────────────────────────────────────────────
-    # Core Checker — undefined variable detection + scope tracking
-    # ────────────────────────────────────────────────────────────────
     class Checker(ast.NodeVisitor):
         def __init__(self):
             self.defined = set(dir(builtins))
-            # Python module-level magic globals
             self.defined.update({
                 "__file__", "__name__", "__doc__", "__spec__",
                 "__loader__", "__package__", "__builtins__",
@@ -88,9 +80,9 @@ def check(file_path, *, enable_unused=True, enable_shadow=True, enable_annotatio
             self.errors = []
             self.scopes = [self.defined]
 
-            self.assignments = []  # [(name, lineno, scope_depth, is_import, is_method)]
-            self.usages = set()    # set of name strings that were read (Load ctx)
-            self._in_class_depth = 0  # tracks nesting inside class bodies
+            self.assignments = []
+            self.usages = set()
+            self._in_class_depth = 0
 
             self.shadow_warnings = []
 
@@ -177,9 +169,15 @@ def check(file_path, *, enable_unused=True, enable_shadow=True, enable_annotatio
             self.generic_visit(node)
 
         def visit_Global(self, node):
-            """Handle global declarations."""
+            """Handle global declarations.
+            
+            L14 fix: `global x` declares that `x` refers to the MODULE scope,
+            not the current (function) scope. Must add to scopes[0] (module),
+            not scopes[-1] (current). Otherwise inner functions using `global`
+            create a false-positive 'undefined variable' for the global name.
+            """
             for name in node.names:
-                self.scopes[-1].add(name)
+                self.scopes[0].add(name)
 
         def visit_Nonlocal(self, node):
             """Handle nonlocal declarations."""
@@ -256,11 +254,9 @@ def check(file_path, *, enable_unused=True, enable_shadow=True, enable_annotatio
                 self.scopes[-1].add(arg.arg)
             for arg in node.args.posonlyargs:
                 self.scopes[-1].add(arg.arg)
-            # Register decorator names in outer scope
             for dec in node.decorator_list:
                 self.visit(dec)
 
-            # Visit return and argument annotations
             if enable_annotations:
                 if node.returns:
                     self._visit_annotation(node.returns)
@@ -275,9 +271,52 @@ def check(file_path, *, enable_unused=True, enable_shadow=True, enable_annotatio
             self.generic_visit(node)
             self.scopes.pop()
 
+        def visit_Match(self, node):
+            """Handle match/case statements (Python 3.10+ PEP 634)."""
+            self.visit(node.subject)
+            for case in node.cases:
+                self._visit_match_pattern(case.pattern)
+                if case.guard:
+                    self.visit(case.guard)
+                for stmt in case.body:
+                    self.visit(stmt)
+
+        def _visit_match_pattern(self, pattern):
+            """Walk match patterns and register any captured names."""
+            if pattern is None:
+                return
+            if hasattr(ast, 'MatchAs') and isinstance(pattern, ast.MatchAs):
+                if pattern.pattern:
+                    self._visit_match_pattern(pattern.pattern)
+                if pattern.name:
+                    self._record_def(pattern.name, pattern.lineno)
+            elif hasattr(ast, 'MatchStar') and isinstance(pattern, ast.MatchStar):
+                if pattern.name:
+                    self._record_def(pattern.name, pattern.lineno)
+            elif hasattr(ast, 'MatchMapping') and isinstance(pattern, ast.MatchMapping):
+                for key in pattern.keys:
+                    self.visit(key)
+                for pat in pattern.patterns:
+                    self._visit_match_pattern(pat)
+                if pattern.rest:
+                    self._record_def(pattern.rest, pattern.lineno)
+            elif hasattr(ast, 'MatchClass') and isinstance(pattern, ast.MatchClass):
+                self.visit(pattern.cls)
+                for pat in pattern.patterns:
+                    self._visit_match_pattern(pat)
+                for pat in pattern.kwd_patterns:
+                    self._visit_match_pattern(pat)
+            elif hasattr(ast, 'MatchOr') and isinstance(pattern, ast.MatchOr):
+                for pat in pattern.patterns:
+                    self._visit_match_pattern(pat)
+            elif hasattr(ast, 'MatchSequence') and isinstance(pattern, ast.MatchSequence):
+                for pat in pattern.patterns:
+                    self._visit_match_pattern(pat)
+            elif hasattr(ast, 'MatchValue') and isinstance(pattern, ast.MatchValue):
+                self.visit(pattern.value)
+
         def visit_ClassDef(self, node):
             self._record_def(node.name, node.lineno)
-            # Register decorator names and base classes in outer scope
             for dec in node.decorator_list:
                 self.visit(dec)
             for base in node.bases:
@@ -300,11 +339,12 @@ def check(file_path, *, enable_unused=True, enable_shadow=True, enable_annotatio
                     self.errors.append((node.lineno, node.id))
             elif isinstance(node.ctx, ast.Store):
                 self.scopes[-1].add(node.id)
+            elif isinstance(node.ctx, ast.Del):
+                pass
 
         def _visit_annotation(self, node):
             """Walk a type annotation subtree, checking that all Name references resolve."""
             if isinstance(node, ast.Name):
-                # Check if name is resolvable (builtin, imported, or defined)
                 found = False
                 for scope in reversed(self.scopes):
                     if node.id in scope:
@@ -313,10 +353,8 @@ def check(file_path, *, enable_unused=True, enable_shadow=True, enable_annotatio
                 if not found:
                     self.annotation_errors.append((node.lineno, node.id))
             elif isinstance(node, ast.Attribute):
-                # For X.Y, only check the root X
                 self._visit_annotation(node.value)
             elif isinstance(node, ast.Subscript):
-                # For Generic[T], check both Generic and T
                 self._visit_annotation(node.value)
                 self._visit_annotation(node.slice)
             elif isinstance(node, ast.Tuple):
@@ -326,58 +364,45 @@ def check(file_path, *, enable_unused=True, enable_shadow=True, enable_annotatio
                 for elt in node.elts:
                     self._visit_annotation(elt)
             elif isinstance(node, ast.BinOp):
-                # Union syntax: X | Y (Python 3.10+)
                 self._visit_annotation(node.left)
                 self._visit_annotation(node.right)
             elif isinstance(node, ast.Constant):
-                # String annotations (forward references) — parse and re-check
                 if isinstance(node.value, str):
                     try:
                         inner = ast.parse(node.value, mode='eval').body
                         self._visit_annotation(inner)
                     except SyntaxError:
-                        pass  # Malformed string annotation; don't crash
+                        pass
 
     checker = Checker()
     checker.visit(tree)
 
-    # ── Collect undefined variable errors ──
     if checker.errors:
         for line, name in sorted(set(checker.errors)):
             results["undefined"].append((line, name, "possibly undefined"))
 
-    # Unused variable detection
     if enable_unused:
         used_names = checker.usages
         for name, lineno, scope_depth, is_import, is_method in checker.assignments:
-            # Skip conventional exceptions
             if name in _UNUSED_EXCEPTIONS:
                 continue
-            # Skip dunder names (magic methods, __init__, etc.)
             if name.startswith("__") and name.endswith("__"):
                 continue
-            # Skip private/protected convention (_name) at module level
-            # as they may be used by importers
             if name.startswith("_") and scope_depth == 0:
                 continue
-            # Skip class/function defs at module level (they are typically APIs)
             if scope_depth == 0 and not is_import:
                 continue
-            # Skip class methods (called dynamically by visitor frameworks, ORMs, etc.)
             if is_method:
                 continue
             if name not in used_names:
                 results["unused"].append((lineno, name, "assigned but never used"))
 
-    # Builtin shadowing warnings
     if enable_shadow and checker.shadow_warnings:
         for line, name in sorted(set(checker.shadow_warnings)):
             results["shadow"].append((line, name, f"shadows builtin '{name}'"))
 
-    # Annotation errors
     if enable_annotations and checker.annotation_errors:
         for line, name in sorted(set(checker.annotation_errors)):
-            # Don't double-report if already in undefined
             if not any(e[0] == line and e[1] == name for e in results["undefined"]):
                 results["annotations"].append((line, name, "unresolved type annotation"))
 
@@ -477,11 +502,9 @@ Examples:
 
     args = parser.parse_args()
 
-    # Determine file list
     files_to_lint = []
 
     if args.targets is None or len(args.targets) == 0:
-        # Default: lint project files
         default_files = ["data_fetchers.py", "sentinel_app.py", "ui_components.py"]
         files_to_lint = [f for f in default_files if os.path.isfile(f)]
         if not files_to_lint:
@@ -492,14 +515,12 @@ Examples:
             if os.path.isfile(target):
                 files_to_lint.append(target)
             elif os.path.isdir(target):
-                # Glob within directory
                 pattern = os.path.join(target, args.glob)
                 matched = sorted(_glob_module.glob(pattern, recursive=True))
                 if not matched:
                     print(f"Warning: no files matched pattern '{pattern}'")
                 files_to_lint.extend(matched)
             else:
-                # Try as a glob pattern directly
                 matched = sorted(_glob_module.glob(target, recursive=True))
                 if matched:
                     files_to_lint.extend(matched)
@@ -510,7 +531,6 @@ Examples:
         print("No files to lint.")
         sys.exit(1)
 
-    # Remove duplicates while preserving order
     seen = set()
     unique_files = []
     for f in files_to_lint:
@@ -540,7 +560,6 @@ Examples:
         total_issues += count
         file_summaries.append((f, results))
 
-    # ── Summary table ──
     if args.summary or len(files_to_lint) > 1:
         print(f"\n{'═'*60}")
         print(f"  SUMMARY")

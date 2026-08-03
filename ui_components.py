@@ -11,16 +11,14 @@ import pytz
 
 try:
     import plotly.graph_objects as go
-    import plotly.express as px
 except ImportError:
     go = None
-    px = None
 
 from data_fetchers import (
     _safe_float, _safe_int, _esc, fmt_p, pct_color,
     fred_series, _parse_poly_field,
-    multi_quotes, market_snapshot_str,
-    GEO_FINANCIAL_NETWORKS, GEO_WEBCAM_FEEDS,
+    multi_quotes,
+    GEO_FINANCIAL_NETWORKS,
     GEO_THEATERS, GEO_IMPACT_TICKERS, GEO_SHIPPING_LANES,
     gdelt_news, newsapi_headlines,
     fetch_conflict_events_json, fetch_military_aircraft_json,
@@ -34,9 +32,6 @@ try:
 except ImportError:
     _np = None
 
-# ════════════════════════════════════════════════════════════════════
-# CHART HELPERS
-# ════════════════════════════════════════════════════════════════════
 
 CHART_LAYOUT = dict(
     paper_bgcolor="#000000", plot_bgcolor="#050505",
@@ -165,16 +160,11 @@ def cpi_vs_rates_chart(fred_key, height=250):
             font=dict(size=11, color="#FF6600"), x=0))
     return fig
 
-# ════════════════════════════════════════════════════════════════════
-# RENDER HELPERS
-# ════════════════════════════════════════════════════════════════════
 
-# ── Module-level timezone objects (avoids repeated construction) ──
 TZ_PACIFIC = pytz.timezone("US/Pacific")
 TZ_EASTERN = pytz.timezone("US/Eastern")
 TZ_UTC = pytz.utc
 
-# ── Named constants ──
 TRADING_DAYS_PER_YEAR = 252
 DEFAULT_RISK_FREE_RATE = 0.045
 
@@ -375,13 +365,10 @@ def render_stat_arb_cards(data):
         direction = row.get("direction", f"{t1} ~ {t2}")
         entry_thresh = row.get("entry_thresh", 2.0)
         
-        # Color encoding based on Z-Score vs dynamic threshold
         z_color = "#FF4444" if z > entry_thresh else ("#00CC44" if z < -entry_thresh else "#FF8C00" if abs(z) > entry_thresh * 0.6 else "#888")
         
-        # Cointegration status indicator
         coint_dot = "\U0001f7e2" if coint else "\U0001f534"
         
-        # Format the signal label — detect Long/Short in signal text
         sig_color = "#00CC44" if "Long" in sig else "#FF4444" if "Short" in sig else "#888"
         if "Neutral" in sig: sig_color = "#888"
         
@@ -406,13 +393,9 @@ def render_stat_arb_cards(data):
     html += '</div>'
     return html
 
-# ════════════════════════════════════════════════════════════════════
-# INSIDER TRANSACTIONS
-# ════════════════════════════════════════════════════════════════════
 
 def classify_role(raw_role):
     if not raw_role: return "Insider"
-    # Preserve the full spelled-out position
     return raw_role.strip()[:60]
 
 def render_insider_cards(data, ticker="", role_map=None):
@@ -499,9 +482,6 @@ def render_insider_cards(data, ticker="", role_map=None):
                  + '</div>')
     return html
 
-# ════════════════════════════════════════════════════════════════════
-# POLYMARKET HELPERS
-# ════════════════════════════════════════════════════════════════════
 
 _POLY_OUTCOME_SUFFIX = re.compile(
     r'[-/](?:yes|no|above|below|over|under|before|after|true|false|\d+[a-z%]*)$',
@@ -516,10 +496,8 @@ def _clean_poly_slug(slug):
     if not slug:
         return slug
     slug = slug.strip().strip('/')
-    # Remove path component if present (market sub-paths)
     if '/' in slug:
         slug = slug.split('/')[0]
-    # Iteratively strip known outcome suffixes
     for _ in range(3):
         cleaned = _POLY_OUTCOME_SUFFIX.sub('', slug)
         if cleaned == slug:
@@ -529,11 +507,9 @@ def _clean_poly_slug(slug):
 
 def poly_url(evt):
     """Build correct Polymarket PARENT event URL — never a sub-market outcome URL."""
-    # Prefer event-level slug directly from the events endpoint
     slug = evt.get("slug", "") or ""
     if slug:
         return f"https://polymarket.com/event/{_clean_poly_slug(slug)}"
-    # Fall back to building from title
     title = evt.get("title", "") or evt.get("question", "") or ""
     if title:
         auto_slug = re.sub(r'[^a-z0-9]+', '-', title.lower())[:70].strip('-')
@@ -607,8 +583,8 @@ def render_poly_card(evt, show_unusual=False):
             p = max(0.0, min(100.0, p_raw * 100))
             bar_c = "#00CC44" if p >= 50 else ("#FF8C00" if p >= 20 else "#FF4444")
             is_winner = is_settled and p_raw >= 0.95
-            winner_tag = (f' &nbsp;<span style="background:#00CC44;color:#000;'
-                          f'font-size:9px;font-weight:700;padding:1px 5px">✓ WINNER</span>'
+            winner_tag = (' &nbsp;<span style="background:#00CC44;color:#000;'
+                          'font-size:9px;font-weight:700;padding:1px 5px">✓ WINNER</span>'
                           if is_winner else "")
             outcome_name = _esc(str(name)[:35])
             prob_rows += (
@@ -659,9 +635,186 @@ def render_poly_card(evt, show_unusual=False):
             f'<div style="color:#444;font-size:10px;margin-top:6px;letter-spacing:0.5px">{vol_str}{count_str}</div>'
             f'</div>')
 
-# ════════════════════════════════════════════════════════════════════
-# GEMINI AI
-# ════════════════════════════════════════════════════════════════════
+
+import pathlib as _mem_pathlib
+import json as _mem_json
+
+_MEMORY_DIR = _mem_pathlib.Path.home() / ".sentinel"
+_MEMORY_FILE = _MEMORY_DIR / "memory.json"
+_MAX_MEMORY_ENTRIES = 50
+
+def load_memory():
+    """Load persistent memory from disk. Returns dict with 'summaries' and 'positions'."""
+    try:
+        if _MEMORY_FILE.exists():
+            data = _mem_json.loads(_MEMORY_FILE.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+            data.setdefault("summaries", [])
+            data.setdefault("positions", [])
+            data.setdefault("theses", [])
+            data.setdefault("alerts_history", [])
+            return data
+    except Exception:
+        pass
+    return {"summaries": [], "positions": [], "theses": [], "alerts_history": []}
+
+def save_memory(memory_data):
+    """Save persistent memory to disk. Trims to _MAX_MEMORY_ENTRIES."""
+    try:
+        _MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+        for key in ["summaries", "positions", "theses", "alerts_history"]:
+            if key in memory_data and len(memory_data[key]) > _MAX_MEMORY_ENTRIES:
+                memory_data[key] = memory_data[key][-_MAX_MEMORY_ENTRIES:]
+        _MEMORY_FILE.write_text(
+            _mem_json.dumps(memory_data, indent=2, default=str),
+            encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+def summarize_and_persist(chat_history, gemini_key):
+    """Summarize current session and persist to memory. Called on clear/exit."""
+    if not chat_history or len(chat_history) < 2 or not gemini_key:
+        return
+    try:
+        from google import genai
+        from google.genai import types as _gtypes
+        client = genai.Client(api_key=gemini_key)
+        transcript = []
+        for m in chat_history[-20:]:
+            role = "USER" if m["role"] == "user" else "SENTINEL"
+            content = m["content"][:300]
+            transcript.append(f"{role}: {content}")
+        prompt = (
+            "Summarize this Sentinel AI conversation in 3-5 bullet points. "
+            "Focus on: positions discussed, tickers analyzed, theses formed, "
+            "key conclusions, and any trade ideas. Be specific with numbers.\n\n"
+            + "\n".join(transcript)
+        )
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+            config=_gtypes.GenerateContentConfig(temperature=0.1, max_output_tokens=256),
+        )
+        summary = response.text
+        memory = load_memory()
+        memory["summaries"].append({
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "summary": summary,
+            "msg_count": len(chat_history),
+        })
+        save_memory(memory)
+    except Exception:
+        pass
+
+def get_memory_context():
+    """Build a context string from persistent memory for injection into AI."""
+    memory = load_memory()
+    if not any(memory.get(k) for k in ["summaries", "positions", "theses"]):
+        return ""
+    parts = ["PERSISTENT MEMORY (from previous sessions):"]
+    if memory.get("theses"):
+        parts.append("  Active Theses: " + "; ".join(memory["theses"][-5:]))
+    if memory.get("positions"):
+        parts.append("  Tracked Positions: " + "; ".join(memory["positions"][-10:]))
+    if memory.get("summaries"):
+        recent = memory["summaries"][-3:]
+        for s in recent:
+            parts.append(f"  [{s['date']}] {s['summary'][:200]}")
+    return "\n".join(parts)
+
+
+def parse_chained_commands(user_input):
+    """Split input on ' then ' to support command chaining.
+    Returns a list of individual commands.
+    Example: '/flash NVDA then /scenario NVDA' → ['/flash NVDA', '/scenario NVDA']
+    """
+    import re as _chain_re
+    parts = _chain_re.split(r'\s+then\s+', user_input.strip(), flags=_chain_re.IGNORECASE)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def detect_sentiment_divergence(watchlist=None):
+    """Detect divergences between price action and sentiment signals.
+    Returns a list of divergence alerts."""
+    from data_fetchers import yahoo_quote, get_vix_full, calc_stock_fear_greed, multi_quotes
+    divergences = []
+    try:
+        vix = get_vix_full()
+        spy_q = yahoo_quote("SPY")
+        if vix and spy_q:
+            vix_level = vix.get("current", 0)
+            spy_pct = spy_q.get("pct", 0)
+            if spy_pct > 0.3 and vix_level > 20:
+                divergences.append({
+                    "type": "VIX/SPY",
+                    "signal": "HIDDEN FEAR",
+                    "detail": f"SPY +{spy_pct:.2f}% but VIX elevated at {vix_level:.1f} — institutions hedging despite rally",
+                    "severity": "HIGH" if vix_level > 25 else "MEDIUM",
+                    "color": "#FF4444" if vix_level > 25 else "#FF8C00",
+                })
+            elif spy_pct < -0.3 and vix_level < 16:
+                divergences.append({
+                    "type": "VIX/SPY",
+                    "signal": "STEALTH ACCUMULATION",
+                    "detail": f"SPY {spy_pct:+.2f}% but VIX only {vix_level:.1f} — smart money not hedging = buying the dip",
+                    "severity": "MEDIUM",
+                    "color": "#00CC44",
+                })
+
+        if vix:
+            pcr = vix.get("pcr", 0)
+            if pcr and spy_q:
+                if pcr > 1.1 and spy_pct > 0.5:
+                    divergences.append({
+                        "type": "PCR/PRICE",
+                        "signal": "HEDGE WALL",
+                        "detail": f"PCR {pcr:.2f} (bearish) vs SPY +{spy_pct:.2f}% — massive put buying despite rally = squeeze fuel",
+                        "severity": "HIGH",
+                        "color": "#FF6600",
+                    })
+                elif pcr < 0.7 and spy_pct < -0.3:
+                    divergences.append({
+                        "type": "PCR/PRICE",
+                        "signal": "COMPLACENCY",
+                        "detail": f"PCR {pcr:.2f} (bullish) but SPY {spy_pct:+.2f}% — no hedging during decline = further downside risk",
+                        "severity": "HIGH",
+                        "color": "#FF4444",
+                    })
+
+        if watchlist:
+            tickers = watchlist[:8]
+            quotes = multi_quotes(tickers)
+            for q in quotes:
+                tkr = q["ticker"]
+                pct = q.get("pct", 0)
+                try:
+                    fg = calc_stock_fear_greed(tkr)
+                    if fg:
+                        fg_score = fg.get("score", 50)
+                        if fg_score < 30 and pct > 1.0:
+                            divergences.append({
+                                "type": f"{tkr}",
+                                "signal": "SQUEEZE SETUP",
+                                "detail": f"{tkr} F&G={fg_score} (fear) but +{pct:.2f}% — sentiment lagging price = potential squeeze",
+                                "severity": "HIGH",
+                                "color": "#00CC44",
+                            })
+                        elif fg_score > 75 and pct < -1.0:
+                            divergences.append({
+                                "type": f"{tkr}",
+                                "signal": "BULL TRAP",
+                                "detail": f"{tkr} F&G={fg_score} (greed) but {pct:+.2f}% — euphoria meets selling = distribution",
+                                "severity": "HIGH",
+                                "color": "#FF4444",
+                            })
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return divergences
+
 
 SENTINEL_PROMPT = """You are SENTINEL — a systematic financial and geopolitical intelligence analyst. Your role is to synthesize injected live market data into structured, quantified analysis that an institutional trader could act on. You do not speculate without grounding. You do not use vague language when numbers are available. You are direct, data-first, and skeptical of consensus.
 
@@ -880,11 +1033,59 @@ SENTINEL BRIEFING — {EXACT DATE FROM INJECTION} {TIME PST}
     CONFIDENCE : [per name]
   ⚠️ Research only, not financial advice.
 
+═══ /screen [CRITERIA] — NATURAL LANGUAGE SCREENER ═══
+  Parse the user's natural language criteria into a structured stock screen.
+  SCREEN: [criteria summary] — [date PST]
+  Criteria parsed:
+    [List each filter extracted from natural language, e.g., "P/E < 15", "Market Cap > $10B", "Insider buying"]
+  Results (top 10 by conviction):
+    For each match:
+    [TICKER] — [Company] | [Price] [%chg]
+      Match: [Which criteria this stock satisfies, with specific numbers]
+      Catalyst: [Why now — upcoming event, technical setup, or flow signal]
+      Risk: [Primary risk in one sentence]
+  NOTE: Use injected market data and your knowledge of current fundamentals. State data freshness.
+  If a criterion cannot be screened with available data, say so explicitly.
+  CONFIDENCE: [level] — [data limitation caveat]
+
+═══ /narrative — REAL-TIME MARKET NARRATIVE ═══
+  Generate a concise "what just happened" digest of the last few hours.
+  MARKET NARRATIVE — [date PST, time]
+  ▌ HEADLINE MOVES (last 2-4 hours):
+    [Asset] moved [%/points] because [specific catalyst with source]
+    [Repeat for top 3-5 moves]
+  ▌ FLOW SIGNALS:
+    [Notable institutional flow, dark pool, or options activity]
+  ▌ NARRATIVE SHIFT:
+    [Has the market narrative changed? What was the story this morning vs now?]
+  ▌ WHAT TO WATCH NEXT:
+    [Specific upcoming event/level in next 1-4 hours with price trigger]
+  Keep under 300 words. Data-first, no filler.
+
+═══ /divergence — SENTIMENT DIVERGENCE ANALYSIS ═══
+  Analyze injected SENTIMENT DIVERGENCE DATA to identify mismatches between
+  price action, positioning, and sentiment indicators.
+  DIVERGENCE REPORT — [date PST]
+  For each divergence detected:
+    [TYPE] — [SIGNAL NAME]
+    Detail: [Specific numbers showing the mismatch]
+    Historical precedent: [What happened last time this divergence appeared]
+    Actionable read: [What a trader should do — specific setup or avoidance]
+    Timeline: [How long these divergences typically take to resolve]
+  If no divergences: state "Signals aligned" and explain the dominant regime.
+
+═══ /alert — AUTO-ALERT STATUS ═══
+  Report on the current state of watchlist monitoring.
+  Show what has changed since last check, what thresholds are approaching,
+  and what requires attention. Use injected market data.
+
 ═══ OUTPUT RULES ═══
 - Use the exact section headers and dividers shown above.
 - Numbers before narrative in every section. The first thing in every bullet is a data point, not a sentence.
 - Every sentence must add information that could not be inferred from any other sentence.
 - No padding sentences. No summary sentences that restate what was just said. No transitional filler.
+- COMMAND CHAINING: Users may chain commands with 'then' (e.g., '/flash NVDA then /scenario NVDA'). Execute each command in sequence, producing output for each.
+- MEMORY: If PERSISTENT MEMORY is injected, reference it naturally. Acknowledge returning themes or positions. Track evolution of previously discussed theses.
 - Plain-English questions get the same analytical rigor without the slash-command structure — but still follow the quantification, contradiction, and second-order rules."""
 
 GEMINI_MODELS = [
@@ -896,9 +1097,9 @@ GEMINI_MODELS = [
 
 def format_gemini_msg(raw: str) -> str:
     import re as _re
-    raw = _re.sub(r'`([^`\n]+)`', r'\1', raw)          # strip backtick code spans
-    raw = _re.sub(r'\*\*([^*]+)\*\*', r'\1', raw)    # strip bold **
-    raw = _re.sub(r'\*([^*\n]+)\*', r'\1', raw)       # strip italic *
+    raw = _re.sub(r'`([^`\n]+)`', r'\1', raw)
+    raw = _re.sub(r'\*\*([^*]+)\*\*', r'\1', raw)
+    raw = _re.sub(r'\*([^*\n]+)\*', r'\1', raw)
     raw = raw.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
     return raw.replace("\n", "<br>")
 
@@ -936,6 +1137,9 @@ def gemini_response(user_msg, history, context=""):
             ctx_sections.append(context)
         if getattr(st.session_state, "geo_watch", None):
             ctx_sections.append(f"USER GEO WATCHLIST: {st.session_state.geo_watch}")
+        _mem_ctx = get_memory_context()
+        if _mem_ctx:
+            ctx_sections.append(_mem_ctx)
 
         header = "\n".join(ctx_sections)
         full_user_msg = f"{header}\n\n{user_msg}" if header else user_msg
@@ -969,7 +1173,7 @@ def gemini_response(user_msg, history, context=""):
                 soft = ["not found", "404", "429", "quota", "resource_exhausted",
                         "unavailable", "deprecated", "invalid argument"]
                 if any(x in err_str.lower() for x in soft):
-                    continue          # try next model
+                    continue
                 
                 yield f"⚠️ Gemini error ({model_name}): {e}"
                 return
@@ -981,9 +1185,6 @@ def gemini_response(user_msg, history, context=""):
     except Exception as e:
         yield f"⚠️ Error: {e}"
 
-# ════════════════════════════════════════════════════════════════════
-# 0DTE TAB HELPERS
-# ════════════════════════════════════════════════════════════════════
 
 def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
     """Renders the Gamma Exposure (GEX) Plotly SPX candlestick chart with GEX levels.
@@ -992,27 +1193,21 @@ def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
     import pandas as pd
     if not gex or go is None: return None
 
-    # Identify Call and Put walls
-    # GEX is dict {spy_strike: gex_m} -> SPX strike = spy_strike * 10
     call_gex = [(k*10, v) for k, v in gex.items() if v > 0]
     put_gex = [(k*10, v) for k, v in gex.items() if v < 0]
     
-    # Sort by absolute GEX
     call_gex.sort(key=lambda x: x[1], reverse=True)
     put_gex.sort(key=lambda x: abs(x[1]), reverse=True)
     
-    # Take top 7 for Call Walls, top 5 for Put Walls
     top_calls = call_gex[:7]
     top_puts = put_gex[:5]
     
-    # Fetch ^SPX intraday data — 5-minute candles, today's session only
     df = yf.download("^SPX", period="1d", interval="5m", progress=False)
     
     fig = go.Figure()
     
     if df is not None and not df.empty:
         df = df.dropna()
-        # Filter to today's session only
         import pytz as _ptz
         _et = _ptz.timezone("US/Eastern")
         _today = pd.Timestamp.now(tz=_et).normalize()
@@ -1020,14 +1215,12 @@ def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
             df.index = df.index.tz_localize("US/Eastern")
         df = df[df.index >= _today]
         if len(df) < 2:
-            # Fallback: if no data today (weekend/holiday), use last trading day
             df = yf.download("^SPX", period="1d", interval="5m", progress=False)
             if df is not None and not df.empty:
                 df = df.dropna()
         if df is None or df.empty or len(df) < 2:
-            pass  # Will still render GEX levels without candles
+            pass
         else:
-            # Check MultiIndex
             if isinstance(df.columns, pd.MultiIndex):
                 close_col = df.columns[df.columns.get_level_values(0) == "Close"][0]
                 open_col = df.columns[df.columns.get_level_values(0) == "Open"][0]
@@ -1050,7 +1243,6 @@ def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
                 decreasing_line_color="#FF4444"
             ))
 
-    # Add Call Wall lines
     for i, (strike, gex_val) in enumerate(top_calls):
         line_width = 3 if i == 0 else 1.5
         line_dash = "solid" if i <= 2 else "dash"
@@ -1064,7 +1256,6 @@ def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
             annotation_font=dict(color=color, size=11, family="IBM Plex Mono")
         )
 
-    # Add Put Wall lines
     for i, (strike, gex_val) in enumerate(top_puts):
         line_width = 3 if i == 0 else 1.5
         line_dash = "solid" if i == 0 else "dash"
@@ -1078,7 +1269,6 @@ def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
             annotation_font=dict(color=color, size=11, family="IBM Plex Mono")
         )
 
-    # Add Gamma Flip and Max Pain
     if gf_spy:
         gf_spx = gf_spy * 10
         fig.add_hline(
@@ -1099,7 +1289,6 @@ def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
             annotation_font=dict(color="#AA44FF", size=11, family="IBM Plex Mono")
         )
 
-    # Spot line
     if spot_spx:
         fig.add_hline(
             y=spot_spx,
@@ -1109,8 +1298,6 @@ def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
             annotation_position="top left"
         )
 
-    # Initial y-axis framing: show ±display_pct around spot price so
-    # GEX levels far from the current price don't zoom the chart out.
     y_lo, y_hi = None, None
     if spot_spx and spot_spx > 0:
         y_lo = spot_spx * (1 - display_pct)
@@ -1118,10 +1305,6 @@ def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
 
     fig.update_layout(**CHART_LAYOUT)
     fig.update_layout(
-        # uirevision: stable key so Streamlit re-renders (fragment refresh)
-        # do NOT reset the user's zoom/pan state.  This is the correct fix
-        # for the old "jumping" bug — previously solved (incorrectly) by
-        # locking autorange, which caused scroll/drag to PAN instead of ZOOM.
         uirevision="0dte_gex_chart",
         xaxis_rangeslider_visible=False,
         height=500,
@@ -1134,11 +1317,6 @@ def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
         yaxis=dict(
             showgrid=True, gridcolor="#111", color="#555",
             side="right", tickformat=".0f",
-            # fixedrange=False: allow user to zoom/scale the y-axis.
-            # Do NOT set autorange=False here — that causes Plotly to treat
-            # y-axis scroll/drag as PAN (moves the viewport) instead of
-            # ZOOM (stretches the scale).  uirevision above preserves the
-            # user's chosen range across Streamlit re-renders.
             fixedrange=False,
             range=[y_lo, y_hi] if y_lo is not None else None,
             uirevision="0dte_gex_chart",
@@ -1267,10 +1445,6 @@ font-family:monospace">TRADE LOG</div>
 <div style="display:flex;flex-wrap:wrap;gap:2px">{html}</div>
 </div>"""
 
-# ════════════════════════════════════════════════════════════════════
-# GEO TAB — RENDER FUNCTION
-# ════════════════════════════════════════════════════════════════════
-
 
 def _geo_network_embed_html(network):
     """HTML block: single financial network live stream with robust fallback."""
@@ -1281,9 +1455,6 @@ def _geo_network_embed_html(network):
     else:
         embed_url += "?enablejsapi=1"
 
-    # Build an HTML page with a primary iframe and a JS fallback.
-    # If the live_stream?channel= embed fails (shows "unavailable"),
-    # the onerror / onload handler swaps to a channel /live page.
     channel_id = network.get("channel_id", "")
     fallback_url = f"https://www.youtube.com/channel/{channel_id}/live" if channel_id else ""
 
@@ -1331,7 +1502,6 @@ def _geo_network_embed_html(network):
 
 def _geo_webcam_region_html(region_cams):
     """HTML block: webcam feeds for a specific region in a uniform CSS grid."""
-    # Determine column count: 2 columns for <=4 cams, 3 for more
     cols = 2 if len(region_cams) <= 4 else 3
     items = ""
     for cam in region_cams:
@@ -1368,10 +1538,6 @@ def _geo_webcam_region_html(region_cams):
     )
 
 
-# ════════════════════════════════════════════════════════════════════
-# CRYPTO ETF FLOWS CHART
-# ════════════════════════════════════════════════════════════════════
-
 def render_crypto_etf_chart(df, height=420, is_estimated=False):
     """Render a dark-themed stacked bar chart of daily BTC Spot ETF net flows.
 
@@ -1388,7 +1554,6 @@ def render_crypto_etf_chart(df, height=420, is_estimated=False):
 
     fig = go.Figure()
 
-    # Stacked bars — one trace per ETF
     etf_cols = [c for c in df.columns if c in _ETF_TICKERS]
     for ticker in etf_cols:
         color = _ETF_COLORS.get(ticker, "#FF8C00")
@@ -1402,7 +1567,6 @@ def render_crypto_etf_chart(df, height=420, is_estimated=False):
             hovertemplate=f"<b>{ticker}</b><br>%{{x|%b %d}}<br>$%{{y:,.2f}}B<extra></extra>",
         ))
 
-    # Cumulative trendline
     if "Total" in df.columns:
         cumulative = df["Total"].cumsum()
         fig.add_trace(go.Scatter(
@@ -1414,7 +1578,6 @@ def render_crypto_etf_chart(df, height=420, is_estimated=False):
             yaxis="y2",
             hovertemplate="<b>Cumulative</b><br>%{x|%b %d}<br>$%{y:,.2f}B<extra></extra>",
         ))
-
 
 
     fig.update_layout(
@@ -1479,7 +1642,6 @@ def render_geo_tab():
     import streamlit.components.v1 as _components
     import pathlib as _pathlib
 
-    # ── Header ────────────────────────────────────────────────────────────────
     st.markdown(
         '<div class="bb-ph">🌍 GEOPOLITICAL INTELLIGENCE — LIVE GLOBE + SURVEILLANCE MATRIX</div>',
         unsafe_allow_html=True,
@@ -1491,7 +1653,6 @@ def render_geo_tab():
         unsafe_allow_html=True,
     )
 
-    # ── 1. 3D Globe ───────────────────────────────────────────────────────────
     st.markdown(
         '<div class="bb-ph">🌐 3D INTELLIGENCE GLOBE — CESIUMJS · SATELLITE TILES · INFRASTRUCTURE</div>',
         unsafe_allow_html=True,
@@ -1503,7 +1664,6 @@ def render_geo_tab():
         unsafe_allow_html=True,
     )
 
-    # ── Fetch dynamic geo data and inject into globe.html ──────────────
     with st.spinner("Loading geo intelligence feeds…"):
         _geo_events  = fetch_conflict_events_json()
         _geo_planes  = fetch_military_aircraft_json()
@@ -1511,16 +1671,12 @@ def render_geo_tab():
         _geo_vessels = fetch_ais_vessels()
         _geo_infra   = GEO_SHIPPING_LANES
 
-    # ── Merge AI-discovered hotspots (runs once / 12h) ─────────────
     gemini_key = getattr(st.session_state, "gemini_key", None) or ""
     if gemini_key:
         ai_events = fetch_ai_hotspots_json(gemini_key)
         if ai_events:
             _geo_events = list(_geo_events) + ai_events
 
-    # Build JSON injection script
-    # SECURITY: Escape '</script>' and '<!--' sequences that could break
-    # out of the <script> block. Base64 eliminates all angle brackets.
     import base64 as _b64
     _sentinel_data_json = json.dumps({
         "events":  _geo_events,
@@ -1529,10 +1685,8 @@ def render_geo_tab():
         "vessels": _geo_vessels,
         "infra":   _geo_infra,
     }, default=str, ensure_ascii=True)
-    # Base64-encode to prevent </script> breakout
     _sentinel_b64 = _b64.b64encode(_sentinel_data_json.encode('utf-8')).decode('ascii')
 
-    # Inject Cesium Ion token if available (from secrets.toml or sidebar override)
     _cesium_token = ""
     try:
         _cesium_token = st.session_state.cesium_ion_token.get_secret_value()
@@ -1540,7 +1694,6 @@ def render_geo_tab():
         pass
     _cesium_inject = ""
     if _cesium_token:
-        # Base64-encode the token to avoid XSS via malicious token values
         _cesium_b64 = _b64.b64encode(_cesium_token.encode('utf-8')).decode('ascii')
         _cesium_inject = f'window.__CESIUM_ION_TOKEN__ = atob("{_cesium_b64}");'
 
@@ -1548,11 +1701,9 @@ def render_geo_tab():
         f'<script>{_cesium_inject}window.__SENTINEL_DATA__ = JSON.parse(atob("{_sentinel_b64}"));</script>\n'
     )
 
-    # Read globe.html from disk and prepend injected data
     globe_path = _pathlib.Path(__file__).parent / "globe.html"
     try:
         globe_html = globe_path.read_text(encoding="utf-8")
-        # Inject data right after <head> so it's available before globe JS runs
         if '<head>' in globe_html:
             globe_html = globe_html.replace('<head>', '<head>\n' + _inject_script, 1)
         else:
@@ -1563,7 +1714,6 @@ def render_geo_tab():
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-    # ── 2. Live Network Selector ──────────────────────────────────────────────
     st.markdown(
         '<div class="bb-ph" style="margin-top:4px">📺 LIVE FINANCIAL NETWORK</div>',
         unsafe_allow_html=True,
@@ -1578,7 +1728,6 @@ def render_geo_tab():
         label_visibility="collapsed",
     )
 
-    # Find the selected network and embed it
     net_obj = next((n for n in GEO_FINANCIAL_NETWORKS if n["name"] == selected_network), GEO_FINANCIAL_NETWORKS[0])
     _components.html(_geo_network_embed_html(net_obj), height=1000, scrolling=True)
 
@@ -1589,7 +1738,6 @@ def render_geo_tab():
         unsafe_allow_html=True,
     )
 
-    # ── 4. Theater intel feed + commodity radar ────────────────────────────────
     geo_col1, geo_col2 = st.columns([3, 1])
 
     with geo_col1:
@@ -1626,7 +1774,6 @@ def render_geo_tab():
                     unsafe_allow_html=True,
                 )
 
-            # NewsAPI layer (if key available)
             newsapi_key = st.session_state.get("newsapi_key")
             if newsapi_key:
                 with st.spinner("Loading NewsAPI layer…"):

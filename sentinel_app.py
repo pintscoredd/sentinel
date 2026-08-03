@@ -5,7 +5,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 try:
-    import yfinance as yf  # noqa: F401 — used indirectly via data_fetchers ticker objects
+    import yfinance as yf
 except ImportError:
     st.error("Missing: yfinance — check requirements.txt"); st.stop()
 
@@ -14,15 +14,15 @@ try:
 except ImportError:
     st.error("Missing: plotly"); st.stop()
 
-import requests, pandas as pd, json, pathlib, re
+import pathlib
 import numpy as np
 from scipy.stats import norm as _norm_dist
 from datetime import datetime, timedelta
 import pytz
 
 from data_fetchers import (
-    _safe_float, _safe_int, _esc, fmt_p, pct_color, _is_english,
-    yahoo_quote, get_futures, get_heatmap_data, multi_quotes,
+    _safe_float, _esc, fmt_p, pct_color,
+    yahoo_quote, get_futures, multi_quotes,
     fred_series, polymarket_events, polymarket_markets,
     fear_greed_crypto, calc_stock_fear_greed,
     crypto_markets, crypto_global,
@@ -32,7 +32,7 @@ from data_fetchers import (
     score_options_chain, score_poly_mispricing,
     get_earnings_calendar, is_market_open,
     get_macro_overview, get_macro_calendar, get_ticker_exchange,
-    get_full_financials, get_stock_news, get_earnings_matrix,
+    get_full_financials, get_earnings_matrix,
     is_0dte_market_open, get_stock_snapshot, get_spx_metrics,
     fetch_0dte_chain, compute_gex_profile, compute_max_pain, compute_pcr,
     find_gamma_flip, fetch_vix_data, compute_spx_direction,
@@ -40,21 +40,17 @@ from data_fetchers import (
     fetch_cboe_gex, compute_cboe_gex_profile, compute_cboe_total_gex, compute_cboe_pcr,
     build_brief_context,
     fetch_btc_etf_flows, fetch_btc_etf_flows_fallback, _ETF_TICKERS,
-    stat_arb_screener, get_finra_short_volume, bs_greeks_engine,
-    smart_money_conviction_buys,
-    # ─── New Feature Imports ───
+    stat_arb_screener, get_finra_short_volume, bs_greeks_engine, bs_price,
+    smart_money_conviction_buys, get_risk_free_rate,
     get_global_indices, get_net_liquidity, get_yield_curve_history,
     get_cross_asset_volatility, get_macro_correlation_matrix,
     get_sector_rrg, get_iv_term_structure, get_gamma_squeeze_scanner,
-    get_expected_move,
-    get_ai_earnings_summary, get_margin_chart_data,
     get_vix_full, get_spy_history,
-    # ─── FEAT additions ───
     get_iv_skew, get_rv_iv_spread, get_cot_positioning, get_economic_surprise_index,
-    # ─── Macro Sovereign + Stock Fundamentals + News Filter ───
-    get_sovereign_10y_yields, get_sovereign_cds_proxy, get_central_bank_rates,
+    get_sovereign_10y_yields, get_central_bank_rates,
     get_yield_curve_inversions, get_profitability_metrics, get_balance_sheet_metrics,
-    filter_market_news, is_market_relevant,
+    is_market_relevant,
+    logger,
 )
 from ui_components import (
     CHART_LAYOUT, dark_fig, tv_chart,
@@ -67,6 +63,8 @@ from ui_components import (
     render_0dte_gex_chart, render_0dte_gex_decoder, render_0dte_recommendation, render_0dte_trade_log,
     render_geo_tab, render_stat_arb_cards,
     metric_card, metric_card_with_delta, sentinel_grid,
+    load_memory, save_memory, summarize_and_persist,
+    parse_chained_commands, detect_sentiment_divergence,
 )
 
 st.set_page_config(page_title="SENTINEL", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
@@ -89,9 +87,6 @@ def now_short():
     _update_time_cache()
     return st.session_state._cached_short
 
-# ════════════════════════════════════════════════════════════════════════════════
-# BLOOMBERG TERMINAL CSS — 1:1 accurate
-# ════════════════════════════════════════════════════════════════════════════════
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&display=swap');
 :root {
@@ -482,9 +477,6 @@ h1,h2,h3,h4 { color: var(--org) !important; font-family: var(--mono) !important;
 .s-panel-red   { border-top-color: var(--red); }
 </style>""", unsafe_allow_html=True)
 
-# ════════════════════════════════════════════════════════════════════
-# SESSION STATE
-# ════════════════════════════════════════════════════════════════════
 from collections import namedtuple
 
 class SecretStr(namedtuple("SecretStr", ["value"])):
@@ -502,7 +494,6 @@ def _get_secret(name, default=""):
                 return SecretStr(str(val).strip())
         except Exception:
             pass
-    # Also try nested [api_keys] section some users set up
     try:
         val = st.secrets.get("api_keys", {}).get(name, None)
         if val:
@@ -532,7 +523,6 @@ def _save_watchlist(wl):
     import os
     _wl_path = pathlib.Path(__file__).parent / ".sentinel_watchlist.json"
     try:
-        # Write to temp file in same directory, then atomically rename
         fd, tmp_path = tempfile.mkstemp(
             dir=str(_wl_path.parent), suffix=".tmp", prefix=".wl_"
         )
@@ -541,14 +531,17 @@ def _save_watchlist(wl):
                 _json.dump(wl, f)
             os.replace(tmp_path, str(_wl_path))
         except Exception:
-            # Clean up temp file on failure
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
             raise
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.error(f"Watchlist save failed: {exc}")
+        try:
+            st.toast("⚠️ Watchlist save failed — changes may not persist.", icon="⚠️")
+        except Exception:
+            pass
 
 DEFAULTS = {
     "gemini_key": _get_secret("GEMINI_API_KEY"),
@@ -561,7 +554,7 @@ DEFAULTS = {
     "watchlist": _load_watchlist(),
     "macro_theses":"", "geo_watch":"",
     "wl_add_input":"", "api_panel_open": True,
-    "master_ticker": "",  # State-preserving ticker across all tabs
+    "master_ticker": "",
 }
 for k,v in DEFAULTS.items():
     if k not in st.session_state: st.session_state[k]=v
@@ -595,14 +588,12 @@ if "_caches_warmed" not in st.session_state:
     warm_caches_on_startup(st.session_state.watchlist)
     st.session_state._caches_warmed = True
 
-# Per-render-cycle data cache — monotonic counter ensures invalidation each rerun
-_render_cycle_id = time.monotonic()
-if st.session_state.get("_render_id") != _render_cycle_id:
-    st.session_state._render_id = _render_cycle_id
-    st.session_state._vix_cache = None
-    st.session_state._spy_hist_cache = None
+if "_render_cycle_counter" not in st.session_state:
+    st.session_state._render_cycle_counter = 0
+st.session_state._render_cycle_counter += 1
+st.session_state._vix_cache = None
+st.session_state._spy_hist_cache = None
 
-# Per-session lock for protecting session_state from concurrent @st.fragment writes
 import threading
 if "_session_state_lock" not in st.session_state:
     st.session_state._session_state_lock = threading.Lock()
@@ -627,9 +618,6 @@ def get_spy_history_cached():
             st.session_state._spy_hist_cache = get_spy_history()
         return st.session_state._spy_hist_cache
 
-# ════════════════════════════════════════════════════════════════════
-# SIDEBAR
-# ════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.markdown(f"""
 <div style="background:var(--org,#FF6600);padding:6px 10px;margin-bottom:10px">
@@ -681,9 +669,6 @@ with st.sidebar:
     st.session_state.macro_theses = st.text_area("Macro theses", value=st.session_state.macro_theses, placeholder="Watching Fed pivot...", height=55)
     st.session_state.geo_watch    = st.text_area("Geo watch",    value=st.session_state.geo_watch,    placeholder="Red Sea, Taiwan...",   height=45)
 
-    # ────────────────────────────────────────────────────────────────
-    # 🚨 THRESHOLD ALERTS ENGINE
-    # ────────────────────────────────────────────────────────────────
     st.markdown('<hr style="border-top:1px solid #222;margin:8px 0">', unsafe_allow_html=True)
 
     with st.expander("🚨 THRESHOLD ALERTS", expanded=False):
@@ -693,7 +678,6 @@ with st.sidebar:
             'and optionally POST to your webhook. 5-min cooldown per alert type.</div>',
             unsafe_allow_html=True)
 
-        # Initialize alert state
         if "alert_cooldowns" not in st.session_state:
             st.session_state.alert_cooldowns = {}
         if "alert_vix_threshold" not in st.session_state:
@@ -740,7 +724,6 @@ with st.sidebar:
             type="password", placeholder="https://hooks.slack.com/...", key="alert_webhook_input",
             help="Optional webhook URL for external notifications (Slack, Discord, etc.)")
 
-        # Alert status indicator
         if st.session_state.alerts_enabled:
             _active_count = 0
             if st.session_state.alert_vix_threshold > 0: _active_count += 1
@@ -757,18 +740,15 @@ with st.sidebar:
                 '⏸ Alerts paused</div>',
                 unsafe_allow_html=True)
 
-    # ── Alert Fragment (runs in background every 30s) ──
-    # Alert History Logging
     import logging as _alert_logging
     from logging.handlers import RotatingFileHandler as _RotatingFileHandler
 
     _alert_log_path = pathlib.Path(__file__).parent / "sentinel_alerts.log"
     _alert_logger = _alert_logging.getLogger("sentinel.alerts")
     _alert_logger.setLevel(_alert_logging.INFO)
-    # Avoid duplicate handlers on Streamlit hot-reload
     if not _alert_logger.handlers:
         _alert_fh = _RotatingFileHandler(
-            str(_alert_log_path), maxBytes=5 * 1024 * 1024,  # 5 MB max
+            str(_alert_log_path), maxBytes=5 * 1024 * 1024,
             backupCount=3, encoding="utf-8",
         )
         _alert_fh.setFormatter(_alert_logging.Formatter(
@@ -788,7 +768,7 @@ with st.sidebar:
         @st.fragment(run_every="30s")
         def _run_alert_monitor():
             import time as _alert_time
-            _cooldown_secs = 300  # 5-minute cooldown
+            _cooldown_secs = 300
 
             def _can_fire(alert_key):
                 last = st.session_state.alert_cooldowns.get(alert_key, 0)
@@ -803,7 +783,6 @@ with st.sidebar:
                     try:
                         import requests
                         import logging
-                        # Block non-HTTPS webhooks
                         if not url.startswith("https://"):
                             logging.getLogger("sentinel.app").error(
                                 "Webhook URL rejected: must use HTTPS. "
@@ -815,7 +794,6 @@ with st.sidebar:
 
             _alerts_fired = []
 
-            # VIX check
             try:
                 _v = get_vix_cached()
                 if _v and _v[0] and _v[0] > st.session_state.alert_vix_threshold:
@@ -831,7 +809,6 @@ with st.sidebar:
             except Exception:
                 pass
 
-            # PCR check
             try:
                 _0c, _ = fetch_0dte_chain("SPY") if bool(_get_secret("ALPACA_API_KEY")) else (None, None)
                 _pcr_val = compute_pcr(_0c) if _0c else None
@@ -851,35 +828,34 @@ with st.sidebar:
             except Exception:
                 pass
 
-            # Ticker price checks
             _tkrs = [t.strip().upper() for t in st.session_state.get("alert_tickers", "").split(",") if t.strip()]
             _prices = st.session_state.get("alert_ticker_prices", "").split(",")
-            for i, t in enumerate(_tkrs):
-                try:
-                    _thresh = float(_prices[i].strip()) if i < len(_prices) and _prices[i].strip() else None
-                    if _thresh is None:
+            if _tkrs:
+                _qs = multi_quotes(_tkrs)
+                _qmap = {q["ticker"]: q for q in _qs} if _qs else {}
+                for i, t in enumerate(_tkrs):
+                    try:
+                        _thresh = float(_prices[i].strip()) if i < len(_prices) and _prices[i].strip() else None
+                        if _thresh is None:
+                            continue
+                        _q = _qmap.get(t)
+                        if _q and _q["price"] > _thresh:
+                            _ak = f"ticker_{t}"
+                            if _can_fire(_ak):
+                                _msg = f"🚨 {t} PRICE ALERT: ${_q['price']:.2f} > ${_thresh:.2f}"
+                                st.toast(_msg, icon="💰")
+                                _send_webhook(_msg)
+                                _mark_fired(_ak)
+                                _alerts_fired.append(_msg)
+                                _log_alert(f"TICKER_{t}", _msg,
+                                           threshold=_thresh,
+                                           actual_value=_q["price"])
+                    except Exception:
                         continue
-                    _q = yahoo_quote(t)
-                    if _q and _q["price"] > _thresh:
-                        _ak = f"ticker_{t}"
-                        if _can_fire(_ak):
-                            _msg = f"🚨 {t} PRICE ALERT: ${_q['price']:.2f} > ${_thresh:.2f}"
-                            st.toast(_msg, icon="💰")
-                            _send_webhook(_msg)
-                            _mark_fired(_ak)
-                            _alerts_fired.append(_msg)
-                            _log_alert(f"TICKER_{t}", _msg,
-                                       threshold=_thresh,
-                                       actual_value=_q["price"])
-                except Exception:
-                    continue
 
         _run_alert_monitor()
 
 
-# ════════════════════════════════════════════════════════════════════
-# HEADER + TABS
-# ════════════════════════════════════════════════════════════════════
 st.markdown(f"""
 <div style="background:#FF6600;padding:5px 14px;display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
 <div style="display:flex;align-items:center;gap:14px">
@@ -891,9 +867,6 @@ st.markdown(f"""
 
 tabs = st.tabs(["BRIEF","MARKETS","OPTIONS","MACRO","CRYPTO","POLYMARKET","GEO","EARNINGS","SENTINEL AI"])
 
-# ════════════════════════════════════════════════════════════════════
-# TAB 0 — MORNING BRIEF
-# ════════════════════════════════════════════════════════════════════
 with tabs[0]:
     st.markdown('<div class="bb-ph">⚡ SENTINEL MORNING BRIEF</div>', unsafe_allow_html=True)
 
@@ -902,8 +875,6 @@ with tabs[0]:
         ref_col, mkt_col = st.columns([1, 1])
         with ref_col:
             if st.button("↺ REFRESH ALL DATA"):
-                # Clear all critical data caches so the next render cycle
-                # fetches fresh data from APIs instead of stale cached values.
                 for _cache_fn in [
                     multi_quotes, get_vix_full, get_futures,
                     yahoo_quote, sector_etfs, calc_stock_fear_greed,
@@ -922,9 +893,8 @@ with tabs[0]:
                 f' <span style="color:#555;font-size:10px">{mkt_detail}</span></div>',
                 unsafe_allow_html=True)
 
-        # Order: SPX, SPY, DOW, RUSSELL, USD INDEX, GOLD, 10Y YIELD, WTI CRUDE, BTC
         KEY_T_ORDERED = [
-            ("^SPX",     "SPX"),
+            ("^GSPC",     "SPX"),
             ("SPY",      "S&P 500"),
             ("DIA",      "DOW JONES"),
             ("IWM",      "RUSSELL 2K"),
@@ -979,7 +949,6 @@ with tabs[0]:
                 lbl = "LOW FEAR" if v<15 else ("MODERATE" if v<25 else ("HIGH FEAR" if v<35 else "PANIC"))
                 vix_chg = f"{vix_q['pct']:+.2f}%" if vix_q else ""
                 vix_chg_c = pct_color(vix_q['pct']) if vix_q else "#888"
-                # VIX help tooltip added via markdown (can't use st.metric help here due to custom HTML)
                 st.markdown(f'<div class="fg-gauge"><div class="fg-num">{v:.2f}</div><div class="fg-lbl" style="color:#FF8C00">{lbl}</div><div style="color:{vix_chg_c};font-size:13px;font-weight:700;margin-top:4px">{vix_chg}</div><div style="color:#555;font-size:8px;margin-top:2px">VIX</div></div>', unsafe_allow_html=True)
         sfg_val, sfg_lbl = calc_stock_fear_greed()
         with s2:
@@ -999,7 +968,6 @@ with tabs[0]:
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-        # ── Watchlist with full management
         st.markdown('<div class="bb-ph">👁 WATCHLIST</div>', unsafe_allow_html=True)
 
         wl_a, wl_b = st.columns([3,1])
@@ -1015,8 +983,6 @@ with tabs[0]:
 
         wl_qs = multi_quotes(st.session_state.watchlist)
 
-        # ── FIX: Header uses same st.columns proportions as data rows
-        # Data row columns: [1.5, 2.0, 1.7, 1.7, 1.5, 0.8]
         hdr_cols = st.columns([1.5, 2.0, 1.7, 1.7, 1.5, 0.8])
         hdr_labels = ["TICKER", "PRICE", "CHG %", "CHG $", "VOLUME", "DEL"]
         for hcol, hlbl in zip(hdr_cols, hdr_labels):
@@ -1032,7 +998,6 @@ with tabs[0]:
         for q in wl_qs:
             c = "#00CC44" if q["pct"]>=0 else "#FF4444"
             arr = "▲" if q["pct"]>=0 else "▼"
-            # ── FIX: Volume color based on direction (bullish/bearish volume context)
             vol_color = "#00CC44" if q["pct"] >= 0 else "#FF4444"
             vol = f"{q['volume']/1e6:.1f}M" if q["volume"]>1e6 else f"{q['volume']/1e3:.0f}K"
             chg_str = f"+{q['change']:.2f}" if q["change"]>=0 else f"{q['change']:.2f}"
@@ -1059,13 +1024,11 @@ with tabs[0]:
                     f'padding:5px 0">{chg_str}</div>',
                     unsafe_allow_html=True)
             with crow[4]:
-                # ── FIX: Volume same font size (13px), color based on daily direction
                 st.markdown(
                     f'<div style="color:{vol_color};font-family:monospace;font-size:13px;'
                     f'padding:5px 0;font-weight:500">{vol}</div>',
                     unsafe_allow_html=True)
             with crow[5]:
-                # ── FIX: Styled delete button using CSS class
                 if st.button("✕", key=f"rm_{q['ticker']}", help=f"Remove {q['ticker']}"):
                     st.session_state.watchlist = [x for x in st.session_state.watchlist if x!=q["ticker"]]
                     _save_watchlist(st.session_state.watchlist)
@@ -1075,7 +1038,6 @@ with tabs[0]:
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-        # ── Sector Pulse
         st.markdown('<div class="bb-ph">🔄 SECTOR PULSE</div>', unsafe_allow_html=True)
         sec_df = sector_etfs()
         if not sec_df.empty:
@@ -1090,7 +1052,6 @@ with tabs[0]:
         if poly:
             active_poly = [e for e in poly if poly_status(e)[0]=="ACTIVE"]
             closed_poly = [e for e in poly if poly_status(e)[0] in ("RESOLVED","CLOSED","EXPIRED (pending resolve)")]
-            # Filter: only show markets closed within the last 2 months
             _cutoff = datetime.now(pytz.utc) - timedelta(days=60)
             _recent_closed = []
             for e in closed_poly:
@@ -1121,7 +1082,7 @@ with tabs[0]:
             seen_titles = set()
             for art in geo_arts[:8]:
                 t=art.get("title","")[:90]; u=art.get("url","#"); dom=art.get("domain","GDELT"); sd=art.get("seendate","")
-                if not is_market_relevant(t, dom): continue  # filter fluff
+                if not is_market_relevant(t, dom): continue
                 t_key = t.strip().lower()
                 if t_key in seen_titles: continue
                 seen_titles.add(t_key)
@@ -1131,15 +1092,11 @@ with tabs[0]:
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">GDELT feed temporarily unavailable. Will auto-retry.</p>', unsafe_allow_html=True)
 
-# ════════════════════════════════════════════════════════════════════
-# TAB 1 — MARKETS
-# ════════════════════════════════════════════════════════════════════
 with tabs[1]:
     st.markdown('<div class="bb-ph">📊 MARKETS — EQUITIES | OPTIONS | MOVERS | ROTATION</div>', unsafe_allow_html=True)
 
     fc, _ = st.columns([2,3])
     with fc:
-        # Stable key prevents widget recreation when master_ticker changes (double-type bug)
         def _on_flash_change():
             val = st.session_state.get("flash_main_ticker", "").upper().strip()
             if val:
@@ -1151,9 +1108,6 @@ with tabs[1]:
             on_change=_on_flash_change,
             help="Type a ticker symbol and press Enter. Heavy data loads only run once the full symbol is committed.")
 
-    # Debounce: only run heavy fetches when the committed ticker matches input.
-    # This prevents partial symbol lookups ("N", "NV", "NVD") from triggering
-    # get_full_financials, options_chain, and get_earnings_matrix on every keystroke.
     _committed_ticker = st.session_state.get("master_ticker", "")
     if flash_ticker and flash_ticker.upper().strip() == _committed_ticker:
         tkr = flash_ticker.upper().strip()
@@ -1191,14 +1145,12 @@ with tabs[1]:
             components.html(tv_chart(tv_sym, 480), height=485, scrolling=False)
 
 
-            # --- START: Financials & Market Data ---
             st.markdown('<div class="bb-ph" style="margin-top:12px">🏦 FINANCIALS & COMPANY OVERVIEW</div>', unsafe_allow_html=True)
             with st.spinner("Loading financials..."):
                 try:
                     yf_tk = get_yf_ticker(tkr)
                     _q = yahoo_quote(tkr) or {}
                     
-                    # Try to fetch extended info, but default to empty dict if Yahoo 401 blocks it
                     info = {}
                     try:
                         if yf_tk:
@@ -1207,7 +1159,6 @@ with tabs[1]:
                     except Exception:
                         pass
                     
-                    # Fallback: populate from fast_info when .info is empty/blocked
                     fi = None
                     if yf_tk:
                         try:
@@ -1218,7 +1169,6 @@ with tabs[1]:
                     if fi and not info.get('marketCap'):
                         info.setdefault('marketCap', getattr(fi, 'market_cap', None))
                     if fi and not info.get('trailingPE'):
-                        # Compute from price & EPS if available
                         _fi_price = getattr(fi, 'last_price', None)
                         _fi_eps = getattr(fi, 'earnings_per_share', None) or info.get('trailingEps')
                         if _fi_price and _fi_eps and _fi_eps != 0:
@@ -1257,7 +1207,6 @@ with tabs[1]:
                     _rev      = info.get('totalRevenue')
                     _eps      = info.get('trailingEps')
 
-                    # ── Company description ABOVE metrics ──
                     if _desc:
                         import re as _re
                         _sents = _re.split(r'(?<=[.!?])\s+', _desc.strip())
@@ -1270,7 +1219,6 @@ with tabs[1]:
                     if _sector != 'N/A' or _industry != 'N/A':
                         st.markdown(f'<div style="color:#888;font-size:10px;font-family:monospace;margin-bottom:6px">Sector: <span style="color:#FF8C00">{_sector}</span> &nbsp;|&nbsp; Industry: <span style="color:#CCC">{_industry}</span></div>', unsafe_allow_html=True)
 
-                    # Row 1: core metrics
                     f1, f2, f3, f4, f5 = st.columns(5)
                     f1.metric("Market Cap", _mc_str)
                     f2.metric("P/E (Trail)", _pe_str)
@@ -1278,7 +1226,6 @@ with tabs[1]:
                     f4.metric("EPS", f"${_eps:.2f}" if isinstance(_eps,(int,float)) else "N/A")
                     f5.metric("Beta", _beta_str)
 
-                    # Row 2: extended
                     f6, f7, f8, f9, f10 = st.columns(5)
                     f6.metric("Div Yield", _div_str)
                     f7.metric("Profit Margin", _margin_str)
@@ -1292,7 +1239,6 @@ with tabs[1]:
                         return f"${v:,.0f}"
                     f10.metric("Revenue (TTM)", _auto_scale_rev(_rev))
 
-                    # Row 3: 52w range + volume
                     f11, f12, f13 = st.columns(3)
                     f11.metric("52W High", f"${_52wh:,.2f}" if isinstance(_52wh,(int,float)) else "N/A")
                     f12.metric("52W Low",  f"${_52wl:,.2f}" if isinstance(_52wl,(int,float)) else "N/A")
@@ -1300,12 +1246,10 @@ with tabs[1]:
                     f13.metric("Avg Volume", _avg_vol_str)
 
                     if _sector != 'N/A' or _industry != 'N/A':
-                        pass  # sector/industry already shown above metrics
-                except Exception as e:
+                        pass
+                except Exception:
                     st.markdown('<div style="color:#555;font-size:11px">Financials temporarily unavailable.</div>', unsafe_allow_html=True)
-            # --- END: Financials ---
 
-            # ── PROFITABILITY PANEL ─────────────────────────────────────────
             st.markdown('<div class="bb-ph" style="margin-top:12px">📊 PROFITABILITY</div>', unsafe_allow_html=True)
             with st.spinner("Loading profitability metrics…"):
                 _prof = get_profitability_metrics(tkr)
@@ -1343,7 +1287,6 @@ with tabs[1]:
             else:
                 st.markdown('<div style="color:#555;font-size:11px;font-family:monospace">Profitability data unavailable.</div>', unsafe_allow_html=True)
 
-            # ── BALANCE SHEET PANEL ─────────────────────────────────────────
             st.markdown('<div class="bb-ph" style="margin-top:12px">🏦 BALANCE SHEET</div>', unsafe_allow_html=True)
             with st.spinner("Loading balance sheet…"):
                 _bs = get_balance_sheet_metrics(tkr)
@@ -1357,7 +1300,6 @@ with tabs[1]:
                     if label == "DEBT/EQUITY":
                         c = "#00CC44" if v < 100 else "#FF8C00" if v < 200 else "#FF4444"
                         return f'<span style="color:{c};font-weight:700">{v:.1f}%</span>'
-                    # Money values
                     abs_v = abs(v)
                     if abs_v >= 1e12:
                         s = f"${v/1e12:.2f}T"
@@ -1396,7 +1338,6 @@ with tabs[1]:
             else:
                 st.markdown('<div style="color:#555;font-size:11px;font-family:monospace">Balance sheet data unavailable.</div>', unsafe_allow_html=True)
 
-            # ── QUARTERLY FINANCIALS (Markets Tab) ─────────────────────────
             st.markdown('<div class="bb-ph" style="margin-top:12px">📊 QUARTERLY FINANCIALS</div>', unsafe_allow_html=True)
             try:
                 with st.spinner("Loading quarterly financials…"):
@@ -1454,9 +1395,7 @@ with tabs[1]:
                     st.markdown('<div style="color:#555;font-size:11px;font-family:monospace">Quarterly financials unavailable.</div>', unsafe_allow_html=True)
             except Exception:
                 pass
-            # ── END QUARTERLY FINANCIALS ────────────────────────────────────
 
-            # ── EARNINGS MATRIX (Markets Tab) ──────────────────────────────
             st.markdown('<div class="bb-ph" style="margin-top:14px">📈 EARNINGS MATRIX</div>', unsafe_allow_html=True)
             with st.spinner(f"Building Earnings Matrix for {tkr}…"):
                 _mkt_em_data = get_earnings_matrix(tkr)
@@ -1484,7 +1423,6 @@ with tabs[1]:
                 _me_br_c      = "#00CC44" if _me_beat_rate >= 75 else "#FF8C00" if _me_beat_rate >= 50 else "#FF4444"
                 _me_streak_txt = (f"🔥 {_me_streak}Q BEAT" if _me_streak > 0 else (f"⚠️ {abs(_me_streak)}Q MISS" if _me_streak < 0 else "—"))
 
-                # ── Build EPS table HTML ──
                 _me_yr_hdr = "".join(f"<th>{yr}</th>" for yr in _me_years)
                 _me_eps_html = (
                     f'<div style="color:#555;font-family:monospace;font-size:9px;margin-bottom:6px;letter-spacing:1px">'
@@ -1517,7 +1455,6 @@ with tabs[1]:
                                      if val is not None else '<td style="color:#333">—</td>')
                 _me_eps_html += "</tr></tbody></table>"
 
-                # ── Build YoY growth table HTML ──
                 _me_g_hdr  = "".join(f"<th>{yr}</th>" for yr in _me_years)
                 _me_g_html = (
                     '<div style="color:#555;font-family:monospace;font-size:9px;margin-bottom:6px;letter-spacing:1px">YoY EPS GROWTH</div>'
@@ -1537,7 +1474,6 @@ with tabs[1]:
                                    if val is not None else '<td style="color:#333">—</td>')
                 _me_g_html += "</tr></tbody></table>"
 
-                # ── Build Revenue table HTML ──
                 _me_rev_html = ""
                 if _me_revenue_q:
                     _me_rev_hdr  = "".join(f"<th>{yr}</th>" for yr in _me_years)
@@ -1570,7 +1506,6 @@ with tabs[1]:
                             _me_rev_html += '<td style="color:#333">—</td>'
                     _me_rev_html += "</tr></tbody></table>"
 
-                    # Revenue YoY growth
                     _me_rg_hdr  = "".join(f"<th>{yr}</th>" for yr in _me_years)
                     _me_rev_html += (
                         '<div style="color:#555;font-family:monospace;font-size:9px;margin:10px 0 4px;letter-spacing:1px">REVENUE YoY %</div>'
@@ -1590,7 +1525,6 @@ with tabs[1]:
                                          if val is not None else '<td style="color:#333">—</td>')
                     _me_rev_html += "</tr></tbody></table>"
 
-                # ── Build Valuation multiples HTML ──
                 _me_val_html = ""
                 if _me_vals:
                     _me_val_html = (
@@ -1607,7 +1541,6 @@ with tabs[1]:
                         _me_val_html += f'<tr><td>{_mn}</td><td style="color:{_vc(_lq)}">{_lq}</td><td style="color:{_vc(_fw)}">{_fw}</td></tr>'
                     _me_val_html += "</tbody></table>"
 
-                # ── Build Analyst Ratings HTML ──
                 _me_rat_html = ""
                 if _me_ratings:
                     _cons = _me_ratings.get("consensus","—")
@@ -1677,7 +1610,6 @@ with tabs[1]:
                             f'</div>'
                         )
 
-                # ── Render all panels as single HTML block ──
                 _em_full_html = (
                     f'<div class="em-container">'
                     f'<div class="em-header">'
@@ -1687,14 +1619,11 @@ with tabs[1]:
                     f'<span style="margin-left:auto;font-family:monospace;font-size:10px;color:{_me_streak_c};font-weight:700">{_me_streak_txt}</span>'
                     f'<span style="margin-left:12px;font-family:monospace;font-size:10px;color:{_me_br_c}">Beat Rate: {_me_beat_rate:.0f}%</span>'
                     f'</div>'
-                    # Two-column EPS + YoY tables
                     f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:8px">'
                     f'<div>{_me_eps_html}</div>'
                     f'<div>{_me_g_html}</div>'
                     f'</div>'
-                    # Revenue tables (full width)
                     f'{_me_rev_html}'
-                    # Valuation + Analyst side by side
                     f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:4px">'
                     f'<div>{_me_val_html}</div>'
                     f'<div>{_me_rat_html}</div>'
@@ -1703,7 +1632,6 @@ with tabs[1]:
                 )
                 st.markdown(_em_full_html, unsafe_allow_html=True)
 
-                # ── Quarterly Revenue Trend Chart ──
                 if _me_revenue_q:
                     _rev_chart_labels, _rev_chart_vals = [], []
                     for yr in _me_years:
@@ -1715,7 +1643,6 @@ with tabs[1]:
                     if len(_rev_chart_labels) >= 2:
                         st.markdown('<div class="bb-ph" style="margin-top:12px">📉 QUARTERLY REVENUE TREND</div>', unsafe_allow_html=True)
                         _fig_rev = dark_fig(220)
-                        # Scale y-axis properly based on actual data range
                         _rev_min = min(_rev_chart_vals) if _rev_chart_vals else 0
                         _rev_max = max(_rev_chart_vals) if _rev_chart_vals else 1
                         _rev_pad = (_rev_max - _rev_min) * 0.15 if _rev_max > _rev_min else _rev_max * 0.1
@@ -1748,7 +1675,6 @@ with tabs[1]:
                         st.plotly_chart(_fig_rev, use_container_width=True, config={"displayModeBar": False})
             else:
                 st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Earnings matrix data unavailable.</p>', unsafe_allow_html=True)
-            # ── END EARNINGS MATRIX ──────────────────────────────────────────
 
             if st.session_state.finnhub_key.get_secret_value():
                 with st.status("Loading insider intelligence…", expanded=False) as _ins_status:
@@ -1760,7 +1686,6 @@ with tabs[1]:
                 if ins:
                     st.markdown(render_insider_cards(ins[:10], tkr, role_map=officer_roles), unsafe_allow_html=True)
 
-                    # ── SMART MONEY CONVICTION BUY LIST ────────────────────
                     conviction = smart_money_conviction_buys(ins, officer_roles=officer_roles)
                     if conviction:
                         st.markdown(
@@ -1771,7 +1696,6 @@ with tabs[1]:
                             'Open market purchases only (Code: P). Noise filtered: exercises, tax withholding, gifts, awards excluded. '
                             'Score = dollar value tier + C-suite seniority bonus.</div>',
                             unsafe_allow_html=True)
-                        # Header
                         st.markdown(
                             '<div style="display:grid;grid-template-columns:1fr 90px 80px 100px 55px;gap:6px;'
                             'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
@@ -1798,7 +1722,6 @@ with tabs[1]:
                                 f'<span style="color:#00CC44;font-weight:700">{_dv_str}</span>'
                                 f'<span style="color:{_sc_c};font-weight:700;font-size:13px">{_sc}</span></div>',
                                 unsafe_allow_html=True)
-                        # Summary insight
                         _total_buys = sum(c["dollar_value"] for c in conviction)
                         _csuite_count = sum(1 for c in conviction if c["is_csuite"])
                         _total_str = f"${_total_buys / 1e6:.2f}M" if _total_buys >= 1e6 else f"${_total_buys / 1e3:.0f}K"
@@ -1837,9 +1760,6 @@ with tabs[1]:
         else:
             st.error(f"No data for '{tkr}'. Check ticker symbol.")
 
-    # ════════════════════════════════════════════════════════════════════
-    # GLOBAL WEI MONITOR — above Futures
-    # ════════════════════════════════════════════════════════════════════
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
     st.markdown('<div class="bb-ph">🌍 GLOBAL EQUITY INDICES — WORLD MARKET MONITOR</div>', unsafe_allow_html=True)
 
@@ -1910,9 +1830,6 @@ with tabs[1]:
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-    # ════════════════════════════════════════════════════════════════════
-    # SECTOR % CHANGE — above Top Movers
-    # ════════════════════════════════════════════════════════════════════
     st.markdown('<div class="bb-ph">📊 SECTOR PERFORMANCE — % CHANGE</div>', unsafe_allow_html=True)
     sec_df = sector_etfs()
     if not sec_df.empty:
@@ -1926,9 +1843,6 @@ with tabs[1]:
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-    # ════════════════════════════════════════════════════════════════════
-    # SECTOR RELATIVE ROTATION GRAPH — under % change
-    # ════════════════════════════════════════════════════════════════════
     st.markdown('<div class="bb-ph">🔄 SECTOR RELATIVE ROTATION GRAPH — RRG</div>', unsafe_allow_html=True)
 
     with st.status("Computing sector rotation…", expanded=False) as _rrg_status:
@@ -1943,7 +1857,6 @@ with tabs[1]:
         }
         fig_rrg = dark_fig(500)
 
-        # Compute dynamic axis bounds from actual data for tighter zoom
         _rrg_ratios = [s["rs_ratio"] for s in _rrg_data]
         _rrg_moms   = [s["rs_momentum"] for s in _rrg_data]
         _x_pad = max(abs(r - 100) for r in _rrg_ratios) * 1.35 + 0.3
@@ -1953,13 +1866,11 @@ with tabs[1]:
         _x0, _x1 = 100 - _x_pad, 100 + _x_pad
         _y0, _y1 = 100 - _y_pad, 100 + _y_pad
 
-        # Quadrant background fills (clipped to data range)
         fig_rrg.add_shape(type="rect", x0=100, y0=100, x1=_x1, y1=_y1, fillcolor="rgba(0,204,68,0.06)",  line_width=0, layer="below")
         fig_rrg.add_shape(type="rect", x0=100, y0=_y0, x1=_x1, y1=100, fillcolor="rgba(255,204,0,0.06)", line_width=0, layer="below")
         fig_rrg.add_shape(type="rect", x0=_x0, y0=_y0, x1=100, y1=100, fillcolor="rgba(255,68,68,0.06)",  line_width=0, layer="below")
         fig_rrg.add_shape(type="rect", x0=_x0, y0=100, x1=100, y1=_y1, fillcolor="rgba(0,170,255,0.06)", line_width=0, layer="below")
 
-        # Crosshairs
         fig_rrg.add_hline(y=100, line_dash="dot", line_color="#2A2A2A", line_width=1)
         fig_rrg.add_vline(x=100, line_dash="dot", line_color="#2A2A2A", line_width=1)
 
@@ -1983,7 +1894,6 @@ with tabs[1]:
                 showlegend=False,
             ))
 
-        # Quadrant corner labels (placed near the edges of the data range)
         _ql_x_r = _x0 + (_x1 - _x0) * 0.78
         _ql_x_l = _x0 + (_x1 - _x0) * 0.22
         _ql_y_t = _y0 + (_y1 - _y0) * 0.88
@@ -2025,9 +1935,6 @@ with tabs[1]:
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-    # ════════════════════════════════════════════════════════════════════
-    # TOP MOVERS — Gainers / Losers
-    # ════════════════════════════════════════════════════════════════════
     st.markdown('<div class="bb-ph">🏆 TOP MOVERS — S&P 500 UNIVERSE</div>', unsafe_allow_html=True)
     with st.spinner("Scanning S&P 500 for top movers…"):
         gainers, losers = top_movers()
@@ -2069,9 +1976,6 @@ with tabs[1]:
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-    # ════════════════════════════════════════════════════════════════════
-    # RISK-NEUTRAL EXPECTED MOVE (3D PROBABILITY SURFACE)
-    # ════════════════════════════════════════════════════════════════════
     st.markdown('<div class="bb-ph">🔮 3D RISK-NEUTRAL PROBABILITY SURFACE</div>', unsafe_allow_html=True)
     with st.spinner("Computing 3D probability surface…"):
         spy_q = yahoo_quote("SPY")
@@ -2080,13 +1984,10 @@ with tabs[1]:
             spy_price = spy_q["price"]
             vix_iv = vix_q["price"] / 100.0
             
-            # Days to Expiry (Y axis) and Strikes (X axis)
-            days = np.linspace(1, 90, 30) # 1 to 90 days
-            strike_pct = np.linspace(0.85, 1.15, 30) # 85% to 115% moneyness
+            days = np.linspace(1, 90, 30)
+            strike_pct = np.linspace(0.85, 1.15, 30)
             strikes = spy_price * strike_pct
             
-            # Fully vectorized 3D Risk-Neutral PDF using np.meshgrid
-            # Replaces nested Python for-loop (30x30 = 900 iterations)
             T = days / 365.0
             X_mesh, Y_mesh = np.meshgrid(strikes, T)
             sigma = vix_iv
@@ -2094,13 +1995,12 @@ with tabs[1]:
             d1 = (np.log(X_mesh / spy_price) + (0.5 * sigma**2) * Y_mesh) / (sigma * np.sqrt(Y_mesh))
             Z = np.exp(-0.5 * d1**2) / (np.sqrt(2 * np.pi) * X_mesh * sigma * np.sqrt(Y_mesh))
             
-            # Normalize Z
             Z_norm = Z / np.max(Z)
             
             colorscale = [
-                [0, 'rgb(255,40,40)'],       # Low probability (Red)
-                [0.5, 'rgb(255,255,255)'],   # Mid probability (White)
-                [1, 'rgb(40,255,40)']        # High probability (Green)
+                [0, 'rgb(255,40,40)'],
+                [0.5, 'rgb(255,255,255)'],
+                [1, 'rgb(40,255,40)']
             ]
             
             fig_3d = go.Figure(data=[go.Surface(
@@ -2148,9 +2048,6 @@ with tabs[1]:
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-    # ════════════════════════════════════════════════════════════════════
-    # STATISTICAL ARBITRAGE
-    # ════════════════════════════════════════════════════════════════════
     st.markdown('<div class="bb-ph">⚖️ STATISTICAL ARBITRAGE (Cointegration Screener)</div>', unsafe_allow_html=True)
     with st.spinner("Running Engle-Granger tests..."):
         arb_df = stat_arb_screener()
@@ -2161,9 +2058,6 @@ with tabs[1]:
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-    # ════════════════════════════════════════════════════════════════════
-    # IV TERM STRUCTURE + GAMMA SQUEEZE — under Stat Arb
-    # ════════════════════════════════════════════════════════════════════
     _iv_left, _iv_right = st.columns([3, 2])
     with _iv_left:
         st.markdown('<div class="bb-ph">📐 IV TERM STRUCTURE — ATM IMPLIED VOLATILITY</div>', unsafe_allow_html=True)
@@ -2229,9 +2123,6 @@ with tabs[1]:
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No squeeze candidates found.</p>', unsafe_allow_html=True)
 
-    # ════════════════════════════════════════════════════════════════════
-    # FEAT-03: RV vs IV Spread — Vol Premium Signal
-    # ════════════════════════════════════════════════════════════════════
     with st.spinner("Computing RV/IV spread…"):
         _rv_iv = get_rv_iv_spread(_iv_ticker.upper().strip() if '_iv_ticker' in locals() else "SPY")
     if _rv_iv:
@@ -2265,9 +2156,6 @@ with tabs[1]:
                 f'<div style="color:{_rv_iv["signal_color"]};font-size:16px;font-weight:900">{_rv_iv["signal"]}</div></div>',
                 unsafe_allow_html=True)
 
-    # ════════════════════════════════════════════════════════════════════
-    # FEAT-02: IV Skew Surface — 25-Delta Put/Call Skew
-    # ════════════════════════════════════════════════════════════════════
     with st.spinner("Computing IV skew surface…"):
         _skew_data = get_iv_skew(_iv_ticker.upper().strip() if '_iv_ticker' in locals() else "SPY")
     if _skew_data:
@@ -2290,7 +2178,6 @@ with tabs[1]:
             fig_skew.add_trace(go.Scatter(x=_sk_dtes, y=_sk_25p, name="25Δ Put IV",
                 mode="lines+markers", line=dict(color="#FF4444", width=1, dash="dash"),
                 marker=dict(size=5)))
-        # Skew as bars on secondary y-axis
         _skew_colors = ["#FF4444" if s > 0 else "#00CC44" for s in _sk_skew]
         fig_skew.add_trace(go.Bar(x=_sk_dtes, y=_sk_skew, name="Skew (P-C)",
             marker_color=_skew_colors, opacity=0.4, yaxis="y2"))
@@ -2313,23 +2200,17 @@ with tabs[1]:
         st.markdown('<div class="bb-ph">📰 MARKET NEWS — FINNHUB LIVE</div>', unsafe_allow_html=True)
         with st.spinner("Loading news…"):
             fn = finnhub_news(st.session_state.finnhub_key.get_secret_value())
-        for art in fn[:12]:  # scan more to compensate for filter
+        for art in fn[:12]:
             title=art.get("headline","")[:100]; url=art.get("url","#"); src=art.get("source","")
-            if not is_market_relevant(title, src): continue  # filter fluff
+            if not is_market_relevant(title, src): continue
             ts=art.get("datetime",0)
             d=datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else ""
             st.markdown(render_news_card(title,url,src,d,"bb-news bb-news-macro"), unsafe_allow_html=True)
 
-# ════════════════════════════════════════════════════════════════════
-# TAB 2 — OPTIONS (Payoff Builder + Options Chain + 0DTE GEX)
-# ════════════════════════════════════════════════════════════════════
 with tabs[2]:
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-    # ────────────────────────────────────────────────────────────────
-    # OPTIONS CHAIN — MIGRATED FROM MARKETS TAB
-    # ────────────────────────────────────────────────────────────────
     st.markdown('<div class="bb-ph">📋 OPTIONS INTELLIGENCE — ADAPTIVE SCORING ENGINE</div>', unsafe_allow_html=True)
 
     _opt_fc, _ = st.columns([2,3])
@@ -2384,9 +2265,6 @@ with tabs[2]:
                     _o_vix = 20.0
 
 
-                # ════════════════════════════════════════════════════════════
-                # INTEGRATED PAYOFF BUILDER — live options data
-                # ════════════════════════════════════════════════════════════
                 st.markdown('<div class="bb-ph" style="margin-top:12px">📐 OPTIONS PAYOFF — STRATEGY ENGINE</div>', unsafe_allow_html=True)
                 _LIVE_STRATS = {
                     "Long Call":             [("call",  1, 1)],
@@ -2420,7 +2298,6 @@ with tabs[2]:
                     _lv_dte_override = st.slider("DTE", min_value=1, max_value=365, value=int(_lv_dte_default), step=1, key=f"lv_dte_{_ot}")
                 _lv_legs          = _LIVE_STRATS[_lv_strat]
                 _lv_strike_indices = sorted(set(leg[2] for leg in _lv_legs if leg[0] != "stock"))
-                # Strike selectors
                 _lv_strike_vals = {}
                 _strikes_fc = []
                 if _oc is not None and not _oc.empty and "strike" in _oc.columns:
@@ -2454,17 +2331,18 @@ with tabs[2]:
                 _lv_nc=_lv_nd=_lv_ng=_lv_nt=_lv_nv=0.0
                 _lv_T = max(_lv_dte_override/365.0, 1/365.0)
                 _lv_sigma = _lv_iv_override/100.0
+                _lv_r = get_risk_free_rate()
                 for _ll_type,_ll_dir,_ll_si in _lv_legs:
                     _ll_K=_lv_strike_vals.get(_ll_si,_lv_spot); _ll_abs=abs(_ll_dir)*_lv_qty; _ll_sgn=1 if _ll_dir>0 else -1
                     if _ll_type=="stock":
                         _lv_total+=_ll_sgn*_ll_abs*100*(_lv_S-_lv_spot); _lv_nd+=_ll_sgn*_ll_abs*100
                     else:
                         _pm=_lv_get_prem(_oc if _ll_type=="call" else _op,_ll_K)
+                        _g=bs_greeks_engine(_lv_spot,_ll_K,_lv_T,_lv_r,_lv_sigma,_ll_type)
                         if _pm==0:
-                            _bsv=bs_greeks_engine(_lv_spot,_ll_K,_lv_T,0.045,_lv_sigma,_ll_type); _pm=_bsv.get("price",0.0)
+                            _pm=bs_price(_lv_spot,_ll_K,_lv_T,_lv_r,_lv_sigma,_ll_type)
                         _intr=np.maximum(_lv_S-_ll_K,0) if _ll_type=="call" else np.maximum(_ll_K-_lv_S,0)
                         _lv_total+=_ll_sgn*_ll_abs*100*(_intr-_pm); _lv_nc+=_ll_sgn*_pm*_ll_abs*100
-                        _g=bs_greeks_engine(_lv_spot,_ll_K,_lv_T,0.045,_lv_sigma,_ll_type)
                         _lv_nd+=_ll_sgn*_ll_abs*100*_g["delta"]; _lv_ng+=_ll_sgn*_ll_abs*100*_g["gamma"]
                         _lv_nt+=_ll_sgn*_ll_abs*100*_g["theta"]; _lv_nv+=_ll_sgn*_ll_abs*100*_g.get("vega",0)
                 _lv_net_debit=-_lv_nc; _lv_mp=float(np.max(_lv_total)); _lv_ml=float(np.min(_lv_total))
@@ -2516,8 +2394,8 @@ with tabs[2]:
                 _lv_gc[3].markdown(metric_card("VEGA", f"{_lv_nv:+.4f}", "#00AAFF", "14px"), unsafe_allow_html=True)
                 st.markdown(f'<div style="color:#555;font-size:9px;font-family:monospace;margin-top:4px">DTE: {_lv_dte_override}d &nbsp;|&nbsp; IV: {_lv_iv_override:.1f}% &nbsp;|&nbsp; SPOT: ${_lv_spot:,.2f} &nbsp;|&nbsp; {_lv_strat}</div>',unsafe_allow_html=True)
                 st.markdown('<hr class="bb-divider">',unsafe_allow_html=True)
-                # ── END PAYOFF BUILDER ──
-                _oscored = score_options_chain(_oc, _op, _oq["price"], vix=_o_vix, expiry_date=_opt_sel_exp, fred_key=st.session_state.get("fred_key"))
+                _fred_key_raw = st.session_state.fred_key.get_secret_value() if st.session_state.get("fred_key") and hasattr(st.session_state.fred_key, 'get_secret_value') else None
+                _oscored = score_options_chain(_oc, _op, _oq["price"], vix=_o_vix, expiry_date=_opt_sel_exp, fred_key=_fred_key_raw)
 
                 _ovix_str = f"{_o_vix:.1f}" if _o_vix else "N/A"
                 if _o_vix and _o_vix > 25:
@@ -2552,7 +2430,7 @@ with tabs[2]:
                         _bs_v = st.number_input("Implied Vol (%)", value=float(_o_vix) if _o_vix else 20.0, format="%.1f", key=f"obs_v_{_ot}")
                     with _bsc5: _bs_side = st.selectbox("Type", ["call", "put"], key=f"obs_side_{_ot}")
 
-                    _bs_res = bs_greeks_engine(_bs_s, _bs_k, _bs_t / 365.0, 0.045, _bs_v / 100.0, _bs_side)
+                    _bs_res = bs_greeks_engine(_bs_s, _bs_k, _bs_t / 365.0, get_risk_free_rate(), _bs_v / 100.0, _bs_side)
                     _brc1, _brc2, _brc3, _brc4, _brc5 = st.columns(5)
                     _brc1.metric("Delta", f"{_bs_res['delta']:.4f}", help="Rate of change of option price per $1 move in underlying. Calls: 0 to 1, Puts: -1 to 0.")
                     _brc2.metric("Gamma", f"{_bs_res['gamma']:.6f}", help="Rate of change of Delta per $1 move. High gamma = delta shifts fast (near ATM, short-dated).")
@@ -2576,9 +2454,6 @@ with tabs[2]:
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-    # ────────────────────────────────────────────────────────────────
-    # 0DTE GEX & TRADE ENGINE (kept from original SPX 0DTE tab)
-    # ────────────────────────────────────────────────────────────────
     if "trade_log_0dte" not in st.session_state:
         st.session_state.trade_log_0dte = []
 
@@ -2594,7 +2469,6 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
         def render_0dte_fragment():
             _0dte_open, _0dte_msg = is_0dte_market_open()
 
-            # ── FIX: Market status alert auto-dismisses after 3 seconds via CSS animation
             if _0dte_open:
                 st.markdown(
                     '<div class="sentinel-alert-dismiss" style="font-family:monospace;font-size:12px;'
@@ -2726,9 +2600,7 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
 
             st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-            # ── SPX DIRECTION PREDICTOR ─────────────────────────────
             st.markdown('<div class="bb-ph">🧭 SPX DAILY DIRECTION PREDICTOR — QUANT ENGINE</div>', unsafe_allow_html=True)
-            # Use CBOE data as fallback for direction predictor if no Alpaca chain
             _dir_chain_src = _0dte_chain
             _dir_spx_src   = _spx
             if not _dir_chain_src or not _dir_spx_src:
@@ -2736,7 +2608,6 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                     _fb_spot, _fb_opts = fetch_cboe_gex("SPX")
                     if _fb_spot and _fb_opts:
                         _dir_spx_src = {"spot": _fb_spot, "vwap": _fb_spot, "high": _fb_spot*1.005, "low": _fb_spot*0.995}
-                        # Build minimal chain from CBOE opts
                         _dir_chain_src = [{"strike": float(r.get("strike",0)), "option_type": r.get("option_type","call").lower(),
                                            "open_interest": int(r.get("open_interest",0) or 0),
                                            "gamma": float(r.get("gamma",0) or 0), "expiration_date": r.get("expiration_date","")}
@@ -2751,7 +2622,6 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                 _score_bar_pct = min(abs(_d['normalized']) * 100, 100)
                 _score_bar_color = _d['direction_color']
 
-                # Direction header card
                 st.markdown(f'''
                 <div style="background:#080808;border:1px solid {_d["direction_color"]};border-left:5px solid {_d["direction_color"]};
                     padding:16px 20px;margin-bottom:10px;font-family:'IBM Plex Mono',monospace">
@@ -2776,7 +2646,6 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                 </div>
                 </div>''', unsafe_allow_html=True)
 
-                # Signal breakdown table
                 _sig_header = ('<div style="display:grid;grid-template-columns:140px 130px 60px 1fr;gap:6px;'
                             'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
                             'font-size:9px;color:#FF6600;letter-spacing:1px;margin-bottom:2px">'
@@ -2845,6 +2714,7 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
             elif _0dte_chain and _spx:
                 _spy_spot_gex = _spx["spot"] / 10
                 _gex = compute_gex_profile(_0dte_chain, _spy_spot_gex)
+                _gex = {k: v * 10 for k, v in _gex.items()}
                 _total_gex_bn = None
                 _gex_source = "Alpaca 0DTE (CBOE unavailable)"
             else:
@@ -2874,9 +2744,9 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                                                 display_pct=_chart_pct)
                     if _fig:
                         st.plotly_chart(_fig, use_container_width=True, config={
-                            'scrollZoom': True,          # scroll wheel zooms (stretches) the y-axis
-                            'displayModeBar': True,      # show modebar so user has zoom/pan/reset
-                            'modeBarButtonsToRemove': [  # strip noisy buttons, keep essentials
+                            'scrollZoom': True,
+                            'displayModeBar': True,
+                            'modeBarButtonsToRemove': [
                                 'toImage', 'sendDataToCloud', 'autoScale2d',
                                 'hoverClosestCartesian', 'hoverCompareCartesian',
                                 'toggleSpikelines', 'select2d', 'lasso2d',
@@ -2886,7 +2756,6 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                     else:
                         st.markdown('<div style="color:#555;font-family:monospace;font-size:11px">GEX data unavailable.</div>', unsafe_allow_html=True)
                 with _ovw_col:
-                    # ── TODAY OVERVIEW panel ──
                     st.markdown('<div style="color:#FF6600;font-weight:700;font-size:12px;letter-spacing:1px;'
                                 'margin-bottom:8px;font-family:monospace">📋 TODAY OVERVIEW</div>', unsafe_allow_html=True)
                     _ovw_spot = _spot_for_chart or (_spx["spot"] if _spx else None)
@@ -2902,7 +2771,6 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                     _ovw_gf_spx = _gf_spy * 10 if _gf_spy else None
                     _ovw_mp_spx = _mp_spy * 10 if _mp_spy else None
 
-                    # Gamma regime
                     if _ovw_spot and _ovw_gf_spx:
                         _gamma_regime = "POSITIVE γ" if _ovw_spot > _ovw_gf_spx else "NEGATIVE γ"
                         _gamma_color = "#00CC44" if _ovw_spot > _ovw_gf_spx else "#FF4444"
@@ -2938,7 +2806,6 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                     _ovw_html += '</div>'
                     st.markdown(_ovw_html, unsafe_allow_html=True)
 
-                # ── GEX DECODER (full width below) ──
                 _wall_strike, _wall_gex = None, 0
                 for _wk, _wv in _gex.items():
                     if abs(_wv) > abs(_wall_gex):
@@ -2958,10 +2825,6 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
         render_0dte_fragment()
 
 
-
-# ════════════════════════════════════════════════════════════════════
-# TAB 3 — MACRO
-# ════════════════════════════════════════════════════════════════════
 with tabs[3]:
     st.markdown('<div class="bb-ph">📈 MACRO — FRED DATA DASHBOARD</div>', unsafe_allow_html=True)
 
@@ -2972,9 +2835,6 @@ padding:16px;font-family:monospace;font-size:12px;color:#FF8C00">
 <a href="https://fred.stlouisfed.org/docs/api/api_key.html" target="_blank" style="color:#FF6600">
 Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
     else:
-        # ════════════════════════════════════════
-        # MACRO OVERVIEW — AI-style environment scorecard
-        # ════════════════════════════════════════
         st.markdown('<div class="bb-ph">🧠 US MACRO ENVIRONMENT OVERVIEW</div>', unsafe_allow_html=True)
         with st.spinner("Computing macro environment…"):
             macro_ov = get_macro_overview(st.session_state.fred_key.get_secret_value())
@@ -2988,7 +2848,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
             _total     = macro_ov["total_score"]
             _max       = macro_ov["max_score"]
 
-            # Big environment banner with trade implications
             _trade_guidance = {
                 "EXPANSIONARY 🟢": "Favor: Equities (cyclicals, tech, small-caps) · Long risk-assets · Steepener trades · Commodities on reflation",
                 "MIXED / NEUTRAL 🟡": "Favor: Quality large-caps · Sector-selective · Hedge with Treasuries · Reduce leverage · Watch credit spreads",
@@ -3012,7 +2871,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
                 f'</div>'
                 f'</div></div>', unsafe_allow_html=True)
 
-            # Signal grid — always 4 columns, signals wrap into new rows naturally
             _sig_list = list(_signals.items())
             _n_rows = (len(_sig_list) + 3) // 4
             for _row in range(_n_rows):
@@ -3030,7 +2888,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
                             f'<div style="color:{_sc};font-size:12px;font-weight:700;line-height:1.3">{_arrow} {sig["label"]}</div>'
                             f'<div style="color:{_sc};font-size:9px;opacity:0.6">{_score_dots}</div>'
                             f'</div>', unsafe_allow_html=True)
-                # spacer between rows
                 if _row < _n_rows - 1:
                     st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
         else:
@@ -3038,9 +2895,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-        # ════════════════════════════════════════
-        # MACRO CALENDAR — Upcoming economic events
-        # ════════════════════════════════════════
         st.markdown('<div class="bb-ph">📅 MACRO ECONOMIC CALENDAR — UPCOMING RELEASES</div>', unsafe_allow_html=True)
         with st.spinner("Loading macro calendar…"):
             macro_cal = get_macro_calendar(st.session_state.fred_key.get_secret_value())
@@ -3149,9 +3003,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">DXY data unavailable</p>', unsafe_allow_html=True)
 
-        # ════════════════════════════════════════════════════════════════════
-        # US TREASURY RATES + GLOBAL SOVEREIGN 10Y YIELDS
-        # ════════════════════════════════════════════════════════════════════
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
         st.markdown('<div class="bb-ph">🇺🇸 US TREASURY RATES</div>', unsafe_allow_html=True)
 
@@ -3182,7 +3033,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
                         f'{_uy_sign}{_uq["pct"]:.2f}% ({_uy_sign}{_uq["change"]:.3f})</div></div>',
                         unsafe_allow_html=True)
 
-            # 10Y-2Y spread (recession indicator)
             if _us_10y_q and _us_2y_q:
                 _spread = _us_10y_q["price"] - _us_2y_q["price"]
                 _inv = _spread < 0
@@ -3199,12 +3049,10 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">US Treasury data loading…</p>', unsafe_allow_html=True)
 
-        # ── Global Sovereign 10Y Yields ──────────────────────────────
         st.markdown('<div class="bb-ph" style="margin-top:10px">🏛️ GLOBAL SOVEREIGN 10Y YIELDS — HIGHEST FIRST</div>', unsafe_allow_html=True)
         with st.spinner("Loading sovereign yields…"):
             _sov_yields = get_sovereign_10y_yields()
         if _sov_yields:
-            # Header
             st.markdown(
                 '<div style="display:grid;grid-template-columns:30px 1fr 80px 70px;gap:8px;'
                 'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
@@ -3215,7 +3063,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
                 _yld_c = "#FF4444" if sy["yield_pct"] > 5.0 else "#FF8C00" if sy["yield_pct"] > 3.5 else "#FFCC00" if sy["yield_pct"] > 2.0 else "#00CC44"
                 _chg_c = "#00CC44" if sy["change"] <= 0 else "#FF4444"
                 _chg_sign = "+" if sy["change"] > 0 else ""
-                # Highlight US row
                 _row_bg = "background:rgba(255,102,0,0.06);" if sy["country"] == "United States" else ""
                 st.markdown(
                     f'<div style="display:grid;grid-template-columns:30px 1fr 80px 70px;gap:8px;'
@@ -3229,9 +3076,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Sovereign yield data loading…</p>', unsafe_allow_html=True)
 
 
-        # ════════════════════════════════════════════════════════════════════
-        # CENTRAL BANK RATES + YIELD CURVE INVERSIONS
-        # ════════════════════════════════════════════════════════════════════
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
         _cb_left, _cb_right = st.columns([1, 1])
 
@@ -3240,7 +3084,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
             with st.spinner("Loading central bank rates…"):
                 _cb_rates = get_central_bank_rates(st.session_state.fred_key.get_secret_value())
             if _cb_rates:
-                # Header
                 st.markdown(
                     '<div style="display:grid;grid-template-columns:30px 1fr 70px 60px 80px;gap:8px;'
                     'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
@@ -3271,7 +3114,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
                 with st.spinner("Checking yield curve inversions…"):
                     _yc_inv = get_yield_curve_inversions(_fk)
                 if _yc_inv:
-                    # Count inversions
                     _n_inv = sum(1 for y in _yc_inv if y["inverted"])
                     _inv_banner_c = "#FF4444" if _n_inv >= 2 else "#FF8C00" if _n_inv >= 1 else "#00CC44"
                     _inv_label = f"⚠️ {_n_inv} INVERSION{'S' if _n_inv != 1 else ''} DETECTED" if _n_inv > 0 else "✅ NO INVERSIONS — CURVE NORMAL"
@@ -3279,7 +3121,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
                         f'<div style="background:#0A0A0A;border:1px solid {_inv_banner_c};border-left:4px solid {_inv_banner_c};'
                         f'padding:8px 14px;margin-bottom:8px;font-family:monospace;font-size:12px;color:{_inv_banner_c};font-weight:700">'
                         f'{_inv_label}</div>', unsafe_allow_html=True)
-                    # Header
                     st.markdown(
                         '<div style="display:grid;grid-template-columns:90px 70px 70px 70px 90px;gap:6px;'
                         'padding:4px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
@@ -3300,7 +3141,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
                             f'<span style="color:{_sp_c};font-weight:700">{_sp_sign}{yi["spread"]:.3f}</span>'
                             f'<span style="color:{yi["status_color"]};font-weight:700;font-size:9px">{yi["status"]}</span></div>',
                             unsafe_allow_html=True)
-                    # Descriptions
                     with st.expander("Spread Descriptions", expanded=False):
                         for yi in _yc_inv:
                             st.markdown(
@@ -3312,9 +3152,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
             else:
                 st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Add FRED API key to monitor yield curve inversions.</p>', unsafe_allow_html=True)
 
-        # ════════════════════════════════════════════════════════════════════
-        # NET LIQUIDITY INDICATOR (Feature 2)
-        # ════════════════════════════════════════════════════════════════════
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
         st.markdown('<div class="bb-ph">💧 NET LIQUIDITY INDICATOR — WALCL − TGA − RRP</div>', unsafe_allow_html=True)
 
@@ -3329,7 +3166,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
             _nl_c = "#00CC44" if _nl_chg >= 0 else "#FF4444"
             _nl_sign = "+" if _nl_chg >= 0 else ""
 
-            # Summary cards
             _nl_c1, _nl_c2, _nl_c3, _nl_c4 = st.columns(4)
             with _nl_c1:
                 st.markdown(f'<div style="background:#0A0A0A;border:1px solid #1A1A1A;border-top:3px solid {_nl_c};padding:12px;font-family:monospace;text-align:center">'
@@ -3349,7 +3185,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
                             f'<div style="color:#555;font-size:9px;letter-spacing:1px">RRP (DRAIN)</div>'
                             f'<div style="color:#FF4444;font-size:16px;font-weight:700">${_nl_latest["RRP"]/1e6:.2f}T</div></div>', unsafe_allow_html=True)
 
-            # Net Liquidity chart
             fig_nl = dark_fig(300)
             fig_nl.add_trace(go.Scatter(
                 x=_nl_data["Date"], y=_nl_data["Net_Liquidity_T"],
@@ -3367,9 +3202,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Net liquidity data requires FRED API key with WALCL, WTREGEN, RRPONTSYD.</p>', unsafe_allow_html=True)
 
-        # ════════════════════════════════════════════════════════════════════
-        # YIELD CURVE 3D EVOLUTION (Feature 3)
-        # ════════════════════════════════════════════════════════════════════
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
         st.markdown('<div class="bb-ph">🏔️ YIELD CURVE 3D EVOLUTION — 52 WEEK HISTORY</div>', unsafe_allow_html=True)
 
@@ -3377,7 +3209,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
             _yc3d_data = get_yield_curve_history(st.session_state.fred_key.get_secret_value(), lookback_weeks=52)
 
         if _yc3d_data is not None and not _yc3d_data.empty:
-            # Take latest 8 snapshots for readable 3D surface
             _yc3d_dates = sorted(_yc3d_data["Date"].unique())
             _selected_dates = _yc3d_dates[-8:] if len(_yc3d_dates) > 8 else _yc3d_dates
             _yc3d_filtered = _yc3d_data[_yc3d_data["Date"].isin(_selected_dates)]
@@ -3414,9 +3245,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Yield curve 3D data loading…</p>', unsafe_allow_html=True)
 
-        # ════════════════════════════════════════════════════════════════════
-        # CROSS-ASSET VOLATILITY (Feature 4) + CORRELATION MATRIX (Feature 5)
-        # ════════════════════════════════════════════════════════════════════
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
         _vol_left, _vol_right = st.columns([3, 2])
 
@@ -3449,7 +3277,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
                 )
                 st.plotly_chart(fig_vol_cross, use_container_width=True)
 
-                # Percentile bars
                 for v in _vol_data:
                     _p_c = "#FF4444" if v["percentile"] > 75 else "#FF8C00" if v["percentile"] > 50 else "#00CC44"
                     st.markdown(
@@ -3500,9 +3327,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-    # ════════════════════════════════════════════════════════════════════
-    # FEAT-05: ECONOMIC SURPRISE INDEX + FEAT-04: CFTC COT
-    # ════════════════════════════════════════════════════════════════════
     _esi_col, _cot_col = st.columns([1, 2])
 
     with _esi_col:
@@ -3542,7 +3366,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
         with st.spinner("Loading CFTC data…"):
             _cot = get_cot_positioning()
         if _cot:
-            # Header row
             st.markdown(
                 '<div style="display:grid;grid-template-columns:1fr 100px 90px 90px;gap:8px;'
                 'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
@@ -3569,9 +3392,6 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">CFTC COT data unavailable.</p>', unsafe_allow_html=True)
 
 
-# ════════════════════════════════════════════════════════════════════
-# TAB 4 — CRYPTO
-# ════════════════════════════════════════════════════════════════════
 with tabs[4]:
     st.markdown('<div class="bb-ph">💰 CRYPTO — COINGECKO + TRADINGVIEW</div>', unsafe_allow_html=True)
 
@@ -3632,7 +3452,6 @@ with tabs[4]:
     st.markdown('<div class="bb-ph">📈 ETH/USD — TRADINGVIEW</div>', unsafe_allow_html=True)
     components.html(tv_chart("COINBASE:ETHUSD", 320), height=325, scrolling=False)
 
-    # ── Institutional BTC ETF Flows ───────────────────────────────────
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
     st.markdown('<div class="bb-ph">📊 BTC ETF DIRECTIONAL FLOW PROXY — DAILY NET (NOT AUM FLOWS)</div>', unsafe_allow_html=True)
     with st.spinner("Loading ETF flow data…"):
@@ -3652,7 +3471,6 @@ with tabs[4]:
                 'volume × price action. Actual fund flow data from Farside Investors was unavailable.</div>',
                 unsafe_allow_html=True
             )
-        # Data source disclaimer
         st.markdown(
             '<div style="background:#050505;border-left:3px solid #555;padding:6px 12px;'
             'font-family:monospace;font-size:9px;color:#666;margin-top:4px">'
@@ -3662,7 +3480,6 @@ with tabs[4]:
             unsafe_allow_html=True
         )
 
-        # ── Mini summary dashboard for latest day ──────────────────────
         try:
             _latest = _etf_df.iloc[-1]
             _etf_only = {k: v for k, v in _latest.items() if k != "Total" and k in _ETF_TICKERS}
@@ -3680,25 +3497,21 @@ with tabs[4]:
                 f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;'
                 f'background:#060606;border:1px solid #1A1A1A;border-radius:4px;padding:10px 14px;'
                 f'margin:6px 0;font-family:\'IBM Plex Mono\',monospace">'
-                # Net Flow
                 f'<div style="text-align:center">'
                 f'<div style="color:#555;font-size:9px;letter-spacing:1px">NET FLOW</div>'
                 f'<div style="color:{_net_color};font-size:16px;font-weight:700">{_net_sign}${abs(_net):,.2f}B</div>'
                 f'<div style="color:#444;font-size:8px">{_date_str}</div>'
                 f'</div>'
-                # Inflows
                 f'<div style="text-align:center">'
                 f'<div style="color:#555;font-size:9px;letter-spacing:1px">INFLOWS</div>'
                 f'<div style="color:#00CC44;font-size:16px;font-weight:700">{len(_inflows)}</div>'
                 f'<div style="color:#444;font-size:8px">ETFs positive</div>'
                 f'</div>'
-                # Outflows
                 f'<div style="text-align:center">'
                 f'<div style="color:#555;font-size:9px;letter-spacing:1px">OUTFLOWS</div>'
                 f'<div style="color:#FF4444;font-size:16px;font-weight:700">{len(_outflows)}</div>'
                 f'<div style="color:#444;font-size:8px">ETFs negative</div>'
                 f'</div>'
-                # Top Mover
                 f'<div style="text-align:center">'
                 f'<div style="color:#555;font-size:9px;letter-spacing:1px">TOP MOVER</div>'
                 f'<div style="color:{_top_color};font-size:16px;font-weight:700">{_top_name}</div>'
@@ -3716,11 +3529,7 @@ with tabs[4]:
             'ETF flow data unavailable. Both Farside and yfinance sources failed.</p>',
             unsafe_allow_html=True
         )
-    # ── Institutional BTC ETF Flows ───────────────────────────────────
 
-# ════════════════════════════════════════════════════════════════════
-# TAB 5 — POLYMARKET
-# ════════════════════════════════════════════════════════════════════
 with tabs[5]:
     st.markdown('<div class="bb-ph">🎲 POLYMARKET — PREDICTION INTELLIGENCE & UNUSUAL FLOW</div>', unsafe_allow_html=True)
 
@@ -3774,9 +3583,6 @@ with tabs[5]:
                 if p > best: best = p
             return max(0.0, min(100.0, best * 100))
 
-        # ═══════════════════════════════════════════════════════
-        # SECTION 1: MISPRICING SCANNER (main alpha tool)
-        # ═══════════════════════════════════════════════════════
         st.markdown('<div class="bb-ph" style="margin-top:4px">🔬 MISPRICING SCANNER — ALGORITHMIC ALPHA DETECTOR</div>', unsafe_allow_html=True)
         st.markdown(
             '<div style="color:#555;font-family:monospace;font-size:10px;margin-bottom:8px">'
@@ -3789,7 +3595,6 @@ with tabs[5]:
         if all_mkts:
             mispriced = score_poly_mispricing(all_mkts)
             if mispriced:
-                # Table header
                 st.markdown(
                     '<div style="display:grid;grid-template-columns:1fr 70px 70px 70px 70px 80px 80px;gap:6px;'
                     'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;font-size:9px;'
@@ -3817,7 +3622,6 @@ with tabs[5]:
                         f'<span style="color:{mp["signal_color"]};font-weight:700;font-size:10px">{mp["signal"]}</span>'
                         f'</div>', unsafe_allow_html=True)
 
-                # ── Mispricing score bar chart — color = signal color, labeled clearly
                 top8_mis = mispriced[:8]
                 mis_labels = [m["title"][:45]+"…" if len(m["title"])>45 else m["title"] for m in top8_mis]
                 mis_scores = [m["mispricing_score"]*1000 for m in top8_mis]
@@ -3830,9 +3634,7 @@ with tabs[5]:
                     x=mis_scores, y=mis_labels, orientation="h",
                     marker=dict(color=mis_colors, line=dict(width=0), opacity=0.85),
                     hovertext=mis_hover, hoverinfo="text+x",
-                    # No textposition="outside" — use annotations instead to avoid overlap
                 ))
-                # Add signal labels as annotations at right edge of each bar
                 for i, (score, sig_label, color) in enumerate(zip(mis_scores, [m["signal"] for m in top8_mis], mis_colors)):
                     fig_mis.add_annotation(
                         x=score, y=i,
@@ -3851,9 +3653,6 @@ with tabs[5]:
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-        # ═══════════════════════════════════════════════════════
-        # SECTION 2: DASHBOARD PANEL — Probability + Volume stacked vertically for readability
-        # ═══════════════════════════════════════════════════════
         st.markdown('<div class="bb-ph">📊 TOP 10 ACTIVE EVENTS — PROBABILITY & VOLUME</div>', unsafe_allow_html=True)
 
         if top10:
@@ -3867,11 +3666,8 @@ with tabs[5]:
                     p = _safe_float(pp[0]) * 100
                     if p > best_p:
                         best_p = p
-                        # Multi-outcome: groupItemTitle = candidate/team name
-                        # Binary: fall back to question or generic "Yes"
                         candidate = mk.get("groupItemTitle") or mk.get("question", "")
                         best_name = str(candidate).strip()[:35] if candidate else None
-                # Fallback to event-level data if no sub-markets found
                 if best_name is None:
                     pp = _parse_poly_field(evt.get("outcomePrices", []))
                     outcomes = _parse_poly_field(evt.get("outcomes", []))
@@ -3886,10 +3682,8 @@ with tabs[5]:
             outcome_names = [o[0] for o in outcomes_data]
             y_probs       = [o[1] for o in outcomes_data]
             vols    = [_safe_float(e.get("volume",0))/1e6 for e in top10]
-            vols24  = [_safe_float(e.get("volume24hr",0))/1e6 for e in top10]  # in $M directly
+            vols24  = [_safe_float(e.get("volume24hr",0))/1e6 for e in top10]
 
-            # ── Chart 1: Probability — full width, showing event title + leading outcome
-            # Y-axis label = "Event title  →  Leading outcome"
             prob_labels = [f"{t}  →  {o}" for t, o in zip(event_titles, outcome_names)]
             prob_colors = ["#00CC44" if p >= 65 else "#FF8C00" if p >= 50 else "#FF4444" for p in y_probs]
             prob_hover  = [f"<b>{e.get('title','')}</b><br>Leading: {o} @ {p:.1f}%<br><a href='{u}'>Open on Polymarket ↗</a>"
@@ -3919,7 +3713,6 @@ with tabs[5]:
             )
             st.plotly_chart(fig_prob, use_container_width=True)
 
-            # ── Clickable event link list under chart
             st.markdown('<div style="font-family:monospace;font-size:9px;color:#444;margin-bottom:4px">CLICK TO OPEN ON POLYMARKET ↗</div>', unsafe_allow_html=True)
             link_html = "".join(
                 f'<a href="{u}" target="_blank" style="display:inline-block;margin:2px 4px 2px 0;'
@@ -3932,7 +3725,6 @@ with tabs[5]:
 
             st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
 
-            # ── Chart 2: Volume — both in $M, clean overlay
             def _fmt_m(v):
                 if v >= 1.0:   return f"${v:.2f}M"
                 if v >= 0.001: return f"${v*1000:.0f}K"
@@ -3952,7 +3744,6 @@ with tabs[5]:
                 marker=dict(color="#FF6600", opacity=0.9, line=dict(width=0)),
                 hovertext=vol_hover_h, hoverinfo="text",
             ))
-            # Annotations — only on bars wide enough to label
             max_vol = max(vols) if vols else 1
             for i, (tv, hv) in enumerate(zip(vols, vols24)):
                 if tv / max_vol > 0.08:
@@ -3981,9 +3772,6 @@ with tabs[5]:
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-        # ═══════════════════════════════════════════════════════
-        # SECTION 3: EVENT CARDS + HOW-TO GUIDE
-        # ═══════════════════════════════════════════════════════
         poly_col, guide_col = st.columns([3, 1])
         with poly_col:
             st.markdown(f'<div class="bb-ph">📋 TOP ACTIVE EVENTS ({len(active_events)} total active)</div>', unsafe_allow_html=True)
@@ -4015,9 +3803,6 @@ Mixed signals — wait<br>for volume confirmation<br><br>
 <span style="color:#444">⚠️ Crowd odds only.<br>Not financial advice.</span>
 </div>""", unsafe_allow_html=True)
 
-# ════════════════════════════════════════════════════════════════════
-# TAB 6 — GEO (lazy-loaded: only fetches data when user clicks in)
-# ════════════════════════════════════════════════════════════════════
 with tabs[6]:
     if "geo_tab_active" not in st.session_state:
         st.session_state.geo_tab_active = False
@@ -4032,7 +3817,6 @@ with tabs[6]:
     with _geo_col_b:
         if st.session_state.geo_tab_active:
             if st.button("🔄 REFRESH DATA", key="geo_refresh", use_container_width=True):
-                # Clear cached geo data to force fresh fetch
                 from data_fetchers import (
                     fetch_conflict_events_json, fetch_military_aircraft_json,
                     fetch_satellite_positions_json, fetch_ais_vessels,
@@ -4047,9 +3831,6 @@ with tabs[6]:
 
     if st.session_state.geo_tab_active:
         render_geo_tab()
-# ════════════════════════════════════════════════════════════════════
-# TAB 7 — EARNINGS TRACKER
-# ════════════════════════════════════════════════════════════════════
 with tabs[7]:
     st.markdown('<div class="bb-ph">📅 EARNINGS TRACKER — UPCOMING & RECENT</div>', unsafe_allow_html=True)
 
@@ -4057,7 +3838,7 @@ with tabs[7]:
     with ec1:
         st.markdown('<div class="bb-ph">UPCOMING EARNINGS CALENDAR</div>', unsafe_allow_html=True)
         with st.spinner("Fetching earnings calendar (this may take 20-30s)…"):
-            _today_key = datetime.now().strftime("%Y-%m-%d")  # cache busts at midnight
+            _today_key = datetime.now().strftime("%Y-%m-%d")
             earn_df = get_earnings_calendar(_today_key)
         if earn_df.empty:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No upcoming earnings found. Yahoo Finance may be rate-limiting. Try again shortly.</p>', unsafe_allow_html=True)
@@ -4065,7 +3846,7 @@ with tabs[7]:
             today = datetime.now().date()
             for _, row in earn_df.iterrows():
                 ed = row["EarningsDate"]
-                days = (ed - today).days  # can be negative (past), 0 (today), or positive (future)
+                days = (ed - today).days
                 if days == 0:
                     badge, bc, bc_bg = "TODAY", "#FF6600", "rgba(255,102,0,0.08)"
                 elif days > 0 and days <= 1:
@@ -4077,7 +3858,7 @@ with tabs[7]:
                 elif days >= -3:
                     badge, bc, bc_bg = "RECENT", "#888", "transparent"
                 else:
-                    continue  # skip anything older than 3 days
+                    continue
                 eps_str = f"${row['EPS Est']:.2f}" if row.get("EPS Est") is not None else "—"
                 ed_fmt = ed.strftime("%b %d") if hasattr(ed, "strftime") else str(ed)
                 company = str(row.get('Company',''))
@@ -4100,12 +3881,35 @@ with tabs[7]:
             'Smart money conviction buys · Dark pool activity · Insider transactions</div>',
             unsafe_allow_html=True)
 
-        # ── Smart Money Conviction Buys ──────────────────────────────
         st.markdown('<div class="bb-ph" style="margin-top:4px">💎 SMART MONEY CONVICTION BUYS</div>', unsafe_allow_html=True)
-        with st.spinner("Scanning institutional flow…"):
-            _sm_buys = smart_money_conviction_buys()
+        _sm_buys = []
+        if st.session_state.finnhub_key.get_secret_value():
+            with st.spinner("Scanning institutional flow…"):
+                _sm_tickers = st.session_state.watchlist[:8] if st.session_state.watchlist else ["AAPL", "NVDA", "TSLA", "MSFT", "AMZN"]
+                for _sm_tkr in _sm_tickers:
+                    try:
+                        _ins = finnhub_insider(_sm_tkr, st.session_state.finnhub_key.get_secret_value())
+                        if _ins:
+                            _officers = {}
+                            try:
+                                _off = finnhub_officers(_sm_tkr, st.session_state.finnhub_key.get_secret_value())
+                                if _off:
+                                    for o in _off:
+                                        _officers[str(o.get("name","")).upper().strip()] = o.get("position","")
+                            except Exception:
+                                pass
+                            _buys = smart_money_conviction_buys(_ins, _officers)
+                            for b in _buys:
+                                b["ticker"] = _sm_tkr
+                                _q = yahoo_quote(_sm_tkr)
+                                if _q:
+                                    b["price"] = _q.get("price", 0)
+                                    b["pct"] = _q.get("pct", 0)
+                            _sm_buys.extend(_buys)
+                    except Exception:
+                        continue
+                _sm_buys.sort(key=lambda x: x.get("conviction_score", 0), reverse=True)
         if _sm_buys:
-            # Header row
             st.markdown(
                 '<div style="display:grid;grid-template-columns:80px 1fr 80px 70px 70px;gap:8px;'
                 'padding:5px 10px;border-bottom:1px solid #FF6600;font-family:monospace;'
@@ -4129,11 +3933,13 @@ with tabs[7]:
                     f'<span style="color:{_sm_vr_c};font-weight:600">{_sm_vr:.1f}x</span></div>',
                     unsafe_allow_html=True)
         else:
-            st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No conviction buy signals detected. Scanning runs on high-volume movers.</p>', unsafe_allow_html=True)
+            if not st.session_state.finnhub_key.get_secret_value():
+                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">Smart money scanner requires Finnhub API key.</p>', unsafe_allow_html=True)
+            else:
+                st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No conviction buy signals detected in watchlist tickers.</p>', unsafe_allow_html=True)
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-        # ── Dark Pool / FINRA Short Volume ──────────────────────────
         st.markdown('<div class="bb-ph">🌑 DARK POOL SHORT VOLUME</div>', unsafe_allow_html=True)
         _dp_tickers = st.session_state.watchlist[:5] if st.session_state.watchlist else ["SPY", "QQQ", "NVDA", "AAPL", "TSLA"]
         st.markdown(
@@ -4145,17 +3951,17 @@ with tabs[7]:
         for _dp_tkr in _dp_tickers:
             try:
                 _dp = get_finra_short_volume(_dp_tkr)
-                if _dp and _dp.get("short_volume"):
-                    _dp_short_pct = (_dp["short_volume"] / _dp["total_volume"] * 100) if _dp.get("total_volume", 0) > 0 else 0
+                if _dp and _dp.get("short_pct_float"):
+                    _dp_short_pct = _dp["short_pct_float"]
                     _dp_c = "#FF4444" if _dp_short_pct > 50 else "#FF8C00" if _dp_short_pct > 40 else "#00CC44"
-                    _dp_sv = f"{_dp['short_volume']/1e6:.1f}M" if _dp['short_volume'] > 1e6 else f"{_dp['short_volume']/1e3:.0f}K"
-                    _dp_tv = f"{_dp['total_volume']/1e6:.1f}M" if _dp['total_volume'] > 1e6 else f"{_dp['total_volume']/1e3:.0f}K"
+                    _dp_sv = f"{_dp['short_shares']/1e6:.1f}M" if _dp.get('short_shares', 0) and _dp['short_shares'] > 1e6 else f"{_dp.get('short_shares', 0)/1e3:.0f}K" if _dp.get('short_shares', 0) else "—"
+                    _dp_dtc = f"{_dp.get('days_to_cover', 0):.1f}d" if _dp.get('days_to_cover') else "—"
                     st.markdown(
                         f'<div style="display:grid;grid-template-columns:80px 1fr 80px 100px;gap:8px;'
                         f'padding:5px 10px;border-bottom:1px solid #0D0D0D;font-family:monospace;font-size:11px">'
                         f'<span style="color:#FF6600;font-weight:700">{_esc(_dp_tkr)}</span>'
                         f'<span style="color:#CCC">{_dp_sv}</span>'
-                        f'<span style="color:#888">{_dp_tv}</span>'
+                        f'<span style="color:#888">{_dp_dtc}</span>'
                         f'<span style="color:{_dp_c};font-weight:700">{_dp_short_pct:.1f}%</span></div>',
                         unsafe_allow_html=True)
                 else:
@@ -4175,14 +3981,13 @@ with tabs[7]:
 
         st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
-        # ── Insider Transactions (Finnhub) ──────────────────────────
         if st.session_state.finnhub_key.get_secret_value():
             st.markdown('<div class="bb-ph">👤 INSIDER TRANSACTIONS — WATCHLIST</div>', unsafe_allow_html=True)
             _ins_tickers = st.session_state.watchlist[:5] if st.session_state.watchlist else ["AAPL", "NVDA", "TSLA"]
             _all_insiders = []
             for _ins_tkr in _ins_tickers:
                 try:
-                    _ins_data = finnhub_insider(st.session_state.finnhub_key.get_secret_value(), _ins_tkr)
+                    _ins_data = finnhub_insider(_ins_tkr, st.session_state.finnhub_key.get_secret_value())
                     if _ins_data:
                         for _ins in _ins_data[:3]:
                             _ins["_ticker"] = _ins_tkr
@@ -4217,9 +4022,53 @@ with tabs[7]:
                 '👤 Insider transactions require Finnhub API key.</div>',
                 unsafe_allow_html=True)
 
-# ════════════════════════════════════════════════════════════════════
-# TAB 8 — SENTINEL AI
-# ════════════════════════════════════════════════════════════════════
+
+def _build_cmd_context(cmd_text):
+    """Build enriched context for a specific command."""
+    _cmd_lower = cmd_text.strip().lower()
+    _needs_brief = _cmd_lower.startswith("/brief") or _cmd_lower.startswith("/geo") or _cmd_lower.startswith("/narrative")
+    _needs_divergence = _cmd_lower.startswith("/divergence")
+    _needs_alert = _cmd_lower.startswith("/alert")
+
+    if _needs_brief:
+        ctx = build_brief_context(geo_watch=st.session_state.get("geo_watch", ""))
+    else:
+        ctx = market_snapshot_str()
+
+    if _needs_divergence:
+        _divs = detect_sentiment_divergence(st.session_state.watchlist)
+        if _divs:
+            div_lines = ["SENTIMENT DIVERGENCE DATA (live detection):"]
+            for d in _divs:
+                div_lines.append(f"  [{d['severity']}] {d['type']}: {d['signal']} — {d['detail']}")
+            ctx += "\n\n" + "\n".join(div_lines)
+        else:
+            ctx += "\n\nSENTIMENT DIVERGENCE DATA: No divergences detected — signals aligned."
+
+    if _needs_alert:
+        _alert_lines = ["AUTO-ALERT WATCHLIST STATUS:"]
+        if st.session_state.watchlist:
+            _wl_qs = multi_quotes(st.session_state.watchlist[:10])
+            for _wq in _wl_qs:
+                _alert_lines.append(f"  {_wq['ticker']}: ${_wq['price']:.2f} ({_wq['pct']:+.2f}%)")
+        memory = load_memory()
+        if memory.get("alerts_history"):
+            _alert_lines.append("  Recent alerts: " + "; ".join(str(a) for a in memory["alerts_history"][-5:]))
+        ctx += "\n\n" + "\n".join(_alert_lines)
+
+    return ctx
+
+def _execute_single_command(cmd_text, chat_history, placeholder, prefix=""):
+    """Execute a single AI command and return the response text."""
+    ctx = _build_cmd_context(cmd_text)
+    resp_text = prefix
+    for chunk in gemini_response(cmd_text, chat_history, ctx):
+        resp_text += chunk
+        placeholder.markdown(
+            f'<div class="chat-ai">⚡ SENTINEL<br><br>{format_gemini_msg(resp_text)}</div>',
+            unsafe_allow_html=True)
+    return resp_text
+
 with tabs[8]:
     st.markdown('<div class="bb-ph">🤖 SENTINEL AI — POWERED BY GOOGLE GEMINI</div>', unsafe_allow_html=True)
 
@@ -4233,9 +4082,11 @@ padding:16px;font-family:monospace;font-size:12px;color:#FF8C00">
 • /flash NVDA — Rapid stock analysis<br>
 • /geo Red Sea — Geopolitical dashboard<br>
 • /scenario Gold — Bull/base/bear scenarios<br>
-• /poly Fed — Polymarket analysis<br>
-• /rotate — Sector rotation read<br>
-• /earnings — Earnings calendar analysis</span></div>""", unsafe_allow_html=True)
+• /screen P/E < 15 — Natural language screener<br>
+• /narrative — Real-time market digest<br>
+• /divergence — Sentiment divergence scan<br>
+• /alert — Auto-alert watchlist status<br>
+• Chain commands: /flash NVDA then /scenario NVDA</span></div>""", unsafe_allow_html=True)
     else:
         if st.button("🔍 LIST AVAILABLE GEMINI MODELS"):
             with st.spinner("Fetching model list…"):
@@ -4244,15 +4095,44 @@ padding:16px;font-family:monospace;font-size:12px;color:#FF8C00">
                 st.markdown(f'<div style="font-family:monospace;font-size:11px;padding:2px 0;color:#FF8C00">{m}</div>', unsafe_allow_html=True)
             st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
+        _auto_divs = detect_sentiment_divergence(st.session_state.watchlist)
+        if _auto_divs:
+            st.markdown(
+                '<div style="background:#0A0500;border:1px solid #FF6600;border-left:4px solid #FF6600;'
+                'padding:10px 14px;margin-bottom:8px;font-family:monospace">'
+                '<div style="color:#FF6600;font-size:10px;letter-spacing:1px;margin-bottom:6px">'
+                '⚡ SENTIMENT DIVERGENCE DETECTED</div>',
+                unsafe_allow_html=True)
+            for _dv in _auto_divs[:4]:
+                st.markdown(
+                    f'<div style="padding:4px 0;font-size:11px;border-bottom:1px solid #111">'
+                    f'<span style="color:{_dv["color"]};font-weight:700">[{_dv["severity"]}] {_dv["signal"]}</span>'
+                    f' <span style="color:#888">({_dv["type"]})</span><br>'
+                    f'<span style="color:#CCC;font-size:10px">{_dv["detail"]}</span></div>',
+                    unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        _mem = load_memory()
+        _mem_count = len(_mem.get("summaries", []))
+        if _mem_count > 0:
+            st.markdown(
+                f'<div style="background:#001A00;border:1px solid #1A1A1A;padding:6px 12px;'
+                f'font-family:monospace;font-size:10px;color:#00CC44;margin-bottom:8px">'
+                f'🧠 Memory: {_mem_count} session(s) stored · '
+                f'{len(_mem.get("theses", []))} theses · '
+                f'{len(_mem.get("positions", []))} positions tracked</div>',
+                unsafe_allow_html=True)
+
         if not st.session_state.chat_history:
             st.markdown("""<div style="background:#001A00;border:1px solid #1A1A1A;border-left:4px solid #00CC44;
 padding:14px;font-family:monospace;font-size:12px;color:#CCC;line-height:1.8">
-⚡ SENTINEL AI ONLINE — Live market data injected.<br><br>
+⚡ SENTINEL AI ONLINE — Live market data + memory injected.<br><br>
 Try: <span style="color:#FF6600">/brief</span> &nbsp;
 <span style="color:#FF6600">/flash NVDA</span> &nbsp;
-<span style="color:#FF6600">/scenario Gold</span> &nbsp;
-<span style="color:#FF6600">/geo Red Sea</span> &nbsp;
-<span style="color:#FF6600">/poly Fed</span>
+<span style="color:#FF6600">/screen P/E &lt; 20 and insider buying</span> &nbsp;
+<span style="color:#FF6600">/narrative</span> &nbsp;
+<span style="color:#FF6600">/divergence</span><br>
+Chain: <span style="color:#FF6600">/flash NVDA then /scenario NVDA</span>
 </div>""", unsafe_allow_html=True)
 
         for msg in st.session_state.chat_history:
@@ -4266,51 +4146,101 @@ Try: <span style="color:#FF6600">/brief</span> &nbsp;
         ic, bc = st.columns([5,1])
         with ic:
             user_input = st.text_input("QUERY…",
-                placeholder="/brief | /flash TSLA | /scenario Gold | /geo Red Sea | or plain English",
+                placeholder="/brief | /flash TSLA | /screen low P/E | /narrative | /divergence | chain with 'then'",
                 key="chat_inp", label_visibility="collapsed")
         with bc:
             send = st.button("⚡ SEND", use_container_width=True)
 
         st.markdown('<div style="color:#555;font-size:9px;font-family:monospace;margin-bottom:4px">QUICK COMMANDS</div>', unsafe_allow_html=True)
-        qb = st.columns(7)
+        qb = st.columns(9)
         QUICK = {"BRIEF":"/brief","ROTATE":"/rotate","SENTIMENT":"/sentiment",
-                "POLY FED":"/poly Fed rate","RED SEA":"/geo Red Sea",
-                "BTC SCEN":"/scenario Bitcoin","EARNINGS":"/earnings"}
+                "NARRATIVE":"/narrative","DIVERGE":"/divergence","ALERT":"/alert",
+                "SCREEN":"/screen","POLY FED":"/poly Fed rate","EARNINGS":"/earnings"}
         for col,(lbl,cmd) in zip(qb,QUICK.items()):
             with col:
                 if st.button(lbl,use_container_width=True,key=f"qb_{lbl}"):
                     st.session_state.chat_history.append({"role":"user","content":cmd})
-                    # Use enriched context (with geo headlines + macro rates) for /brief and /geo
-                    _is_brief_geo = cmd.startswith("/brief") or cmd.startswith("/geo")
-                    _ctx = build_brief_context(geo_watch=st.session_state.get("geo_watch", "")) if _is_brief_geo else market_snapshot_str()
                     placeholder = st.empty()
-                    resp_text = ""
-                    for chunk in gemini_response(cmd, st.session_state.chat_history[:-1], _ctx):
-                        resp_text += chunk
-                        placeholder.markdown(f'<div class="chat-ai">⚡ SENTINEL<br><br>{format_gemini_msg(resp_text)}</div>', unsafe_allow_html=True)
+                    resp_text = _execute_single_command(cmd, st.session_state.chat_history[:-1], placeholder)
                     st.session_state.chat_history.append({"role":"assistant","content":resp_text})
                     st.rerun()
 
-        if st.button("🗑 CLEAR CHAT"):
-            st.session_state.chat_history = []; st.rerun()
+        st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
+        _mem_cols = st.columns([1, 1, 1, 1])
+        with _mem_cols[0]:
+            if st.button("🗑 CLEAR CHAT", use_container_width=True):
+                if st.session_state.chat_history and len(st.session_state.chat_history) >= 2:
+                    with st.spinner("Saving session memory…"):
+                        summarize_and_persist(
+                            st.session_state.chat_history,
+                            st.session_state.gemini_key.get_secret_value()
+                        )
+                st.session_state.chat_history = []
+                st.rerun()
+        with _mem_cols[1]:
+            _thesis_input = st.text_input("Save thesis", placeholder="e.g., Long gold on rate cuts", key="mem_thesis_in", label_visibility="collapsed")
+            if _thesis_input:
+                mem = load_memory()
+                mem["theses"].append(f"[{datetime.now().strftime('%m/%d')}] {_thesis_input}")
+                save_memory(mem)
+                st.toast(f"✅ Thesis saved: {_thesis_input[:40]}")
+        with _mem_cols[2]:
+            _pos_input = st.text_input("Track position", placeholder="e.g., Long NVDA 950C 6/20", key="mem_pos_in", label_visibility="collapsed")
+            if _pos_input:
+                mem = load_memory()
+                mem["positions"].append(f"[{datetime.now().strftime('%m/%d')}] {_pos_input}")
+                save_memory(mem)
+                st.toast(f"✅ Position tracked: {_pos_input[:40]}")
+        with _mem_cols[3]:
+            if st.button("🧠 VIEW MEMORY", use_container_width=True):
+                mem = load_memory()
+                if any(mem.get(k) for k in ["summaries", "theses", "positions"]):
+                    _mem_display = []
+                    if mem.get("theses"):
+                        _mem_display.append("**THESES:**")
+                        for t in mem["theses"][-5:]:
+                            _mem_display.append(f"  • {t}")
+                    if mem.get("positions"):
+                        _mem_display.append("**POSITIONS:**")
+                        for p in mem["positions"][-5:]:
+                            _mem_display.append(f"  • {p}")
+                    if mem.get("summaries"):
+                        _mem_display.append("**RECENT SESSIONS:**")
+                        for s in mem["summaries"][-3:]:
+                            _mem_display.append(f"  [{s['date']}] {s['summary'][:150]}")
+                    st.markdown(
+                        '<div style="background:#0A0A0A;border:1px solid #222;border-left:3px solid #FF6600;'
+                        'padding:12px;font-family:monospace;font-size:11px;color:#CCC;line-height:1.8;'
+                        'white-space:pre-wrap">' + "\n".join(_mem_display) + '</div>',
+                        unsafe_allow_html=True)
+                else:
+                    st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">No memory stored yet. Chat sessions are auto-saved when you clear chat.</p>', unsafe_allow_html=True)
 
         if (send or user_input) and user_input:
-            st.session_state.chat_history.append({"role":"user","content":user_input})
-            # Use enriched context (geo headlines + macro rates) for /brief and /geo commands
-            _ui_lower = user_input.strip().lower()
-            _is_brief_geo = _ui_lower.startswith("/brief") or _ui_lower.startswith("/geo")
-            _ctx = build_brief_context(geo_watch=st.session_state.get("geo_watch", "")) if _is_brief_geo else market_snapshot_str()
-            placeholder = st.empty()
-            resp_text = ""
-            for chunk in gemini_response(user_input, st.session_state.chat_history[:-1], _ctx):
-                resp_text += chunk
-                placeholder.markdown(f'<div class="chat-ai">⚡ SENTINEL<br><br>{format_gemini_msg(resp_text)}</div>', unsafe_allow_html=True)
-            st.session_state.chat_history.append({"role":"assistant","content":resp_text})
+            commands = parse_chained_commands(user_input)
+            if len(commands) == 1:
+                st.session_state.chat_history.append({"role":"user","content":user_input})
+                placeholder = st.empty()
+                resp_text = _execute_single_command(user_input, st.session_state.chat_history[:-1], placeholder)
+                st.session_state.chat_history.append({"role":"assistant","content":resp_text})
+            else:
+                st.session_state.chat_history.append({"role":"user","content":user_input})
+                combined_resp = ""
+                for i, cmd in enumerate(commands):
+                    if i > 0:
+                        combined_resp += f"\n\n{'━' * 50}\n\n"
+                    placeholder = st.empty()
+                    resp_text = _execute_single_command(
+                        cmd,
+                        st.session_state.chat_history[:-1],
+                        placeholder,
+                        prefix=combined_resp
+                    )
+                    combined_resp = resp_text
+                st.session_state.chat_history.append({"role":"assistant","content":combined_resp})
             st.rerun()
 
-# ════════════════════════════════════════════════════════════════════
-# FOOTER
-# ════════════════════════════════════════════════════════════════════
+
 st.markdown('<hr style="border-top:1px solid #1A1A1A;margin:16px 0">', unsafe_allow_html=True)
 st.markdown(f"""<div style="font-family:monospace;font-size:9px;color:#333;text-align:center;letter-spacing:1px">
 SENTINEL TERMINAL &nbsp;|&nbsp; {now_pst()} &nbsp;|&nbsp;
