@@ -2,6 +2,7 @@
 """SENTINEL — UI Components Module
 All render_* functions, chart helpers, Polymarket URL/status helpers, and Gemini AI.
 """
+from __future__ import annotations
 
 import streamlit as st
 import re
@@ -14,8 +15,33 @@ try:
 except ImportError:
     go = None
 
+# Formatters from http_client (not data_fetchers) to keep import graph shallow
+try:
+    from http_client import (
+        _safe_float, _safe_int, _esc, fmt_p, fmt_pct, fmt_vol, pct_color,
+    )
+except ImportError:  # pragma: no cover — partial deploys / older http_client
+    from http_client import _safe_float, _safe_int, _esc, fmt_p, pct_color
+
+    def fmt_pct(p):
+        if p is None:
+            return "—"
+        return f"{p:+.2f}%"
+
+    def fmt_vol(v):
+        try:
+            v = float(v or 0)
+        except (TypeError, ValueError):
+            return "—"
+        if v >= 1e9:
+            return f"{v/1e9:.2f}B"
+        if v >= 1e6:
+            return f"{v/1e6:.1f}M"
+        if v >= 1e3:
+            return f"{v/1e3:.1f}K"
+        return f"{int(v)}"
+
 from data_fetchers import (
-    _safe_float, _safe_int, _esc, fmt_p, fmt_pct, fmt_vol, pct_color,
     fred_series, _parse_poly_field,
     multi_quotes,
     GEO_FINANCIAL_NETWORKS,
@@ -330,7 +356,7 @@ def metric_card(label: str, value: str, color: str = "#FF6600",
     )
 
 
-def terminal_quote_strip(quotes: list, labels: dict | None = None) -> str:
+def terminal_quote_strip(quotes, labels=None):
     """Single-line dense quote strip (SPX 5123.45 +0.42% | …)."""
     if not quotes:
         return ""

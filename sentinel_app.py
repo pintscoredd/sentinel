@@ -66,7 +66,10 @@ from ui_components import (
     load_memory, save_memory, summarize_and_persist,
     parse_chained_commands, detect_sentiment_divergence,
 )
-from http_client import fmt_vol
+try:
+    from http_client import fmt_vol
+except ImportError:
+    from ui_components import fmt_vol  # re-exported path if http_client is older
 
 st.set_page_config(page_title="SENTINEL", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
 import time

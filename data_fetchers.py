@@ -2,6 +2,8 @@
 """SENTINEL — Data Fetchers Module
 All @st.cache_data API functions, data utilities, and helpers.
 """
+from __future__ import annotations
+
 
 import streamlit as st
 import requests
@@ -14,8 +16,15 @@ import logging
 from datetime import datetime, timedelta, time as dtime
 import pytz
 
-import pandas_market_calendars as mcal
-from scipy.stats import norm
+try:
+    import pandas_market_calendars as mcal
+except ImportError:
+    mcal = None
+
+try:
+    from scipy.stats import norm
+except ImportError:
+    norm = None
 
 
 try:
@@ -54,13 +63,32 @@ from http_client import (
     _enforce_api_rate_limit, _sanitize_error, get_circuit_breaker_states,
     _do_fetch_robust_json, _fetch_robust_json, _get_persistent_loop, run_async,
     get_yf_ticker, get_ticker_cache_stats, _yf_semaphore,
-    _safe_float, _safe_int, _esc, fmt_p, fmt_pct, fmt_vol, fmt_num, pct_color, _is_english,
+    _safe_float, _safe_int, _esc, fmt_p, fmt_pct, pct_color, _is_english,
 )
+
+try:
+    from http_client import fmt_vol, fmt_num
+except ImportError:
+    def fmt_vol(v):
+        try:
+            v = float(v or 0)
+        except (TypeError, ValueError):
+            return "—"
+        if v >= 1e9: return f"{v/1e9:.2f}B"
+        if v >= 1e6: return f"{v/1e6:.1f}M"
+        if v >= 1e3: return f"{v/1e3:.1f}K"
+        return f"{int(v)}"
+    def fmt_num(p, decimals=2):
+        try: return f"{float(p):,.{decimals}f}"
+        except (TypeError, ValueError): return "—"
+
 
 
 @st.cache_resource
 def _nyse_calendar():
     """Load NYSE calendar once per process — mcal.get_calendar is expensive."""
+    if mcal is None:
+        return None
     return mcal.get_calendar("NYSE")
 
 
@@ -71,20 +99,26 @@ def is_market_open():
         ET = TZ_EASTERN
         now = datetime.now(ET)
         day = now.date()
+        t = now.time()
+        wd = now.weekday()
 
         nyse = _nyse_calendar()
-        schedule = nyse.schedule(start_date=day, end_date=day)
+        if nyse is not None:
+            schedule = nyse.schedule(start_date=day, end_date=day)
+            if schedule.empty:
+                if wd == 6 and t >= dtime(18, 0):
+                    return "FUTURES OPEN", "#FF8C00", "US Equities Closed, Futures Live"
+                return "CLOSED", "#FF4444", "Weekend / Holiday"
+            market_open = schedule.iloc[0]["market_open"].astimezone(ET).time()
+            market_close = schedule.iloc[0]["market_close"].astimezone(ET).time()
+        else:
+            # Fallback without pandas_market_calendars (weekends only; ignores holidays)
+            if wd >= 5:
+                if wd == 6 and t >= dtime(18, 0):
+                    return "FUTURES OPEN", "#FF8C00", "US Equities Closed, Futures Live"
+                return "CLOSED", "#FF4444", "Weekend / Holiday"
+            market_open, market_close = dtime(9, 30), dtime(16, 0)
 
-        if schedule.empty:
-            wd = now.weekday()
-            if wd == 6 and now.time() >= dtime(18, 0):
-                return "FUTURES OPEN", "#FF8C00", "US Equities Closed, Futures Live"
-            return "CLOSED", "#FF4444", "Weekend / Holiday"
-
-        market_open = schedule.iloc[0]["market_open"].astimezone(ET).time()
-        market_close = schedule.iloc[0]["market_close"].astimezone(ET).time()
-
-        t = now.time()
         if market_open <= t <= market_close:
             return "OPEN", "#00CC44", "Regular Hours"
         if dtime(4, 0) <= t < market_open:

@@ -424,7 +424,7 @@ _INDEX_LIKE = frozenset({
 })
 
 
-def _is_index_ticker(ticker: str | None) -> bool:
+def _is_index_ticker(ticker=None):
     if not ticker:
         return False
     t = str(ticker).upper().strip()
@@ -436,7 +436,7 @@ def _is_index_ticker(ticker: str | None) -> bool:
     return False
 
 
-def fmt_p(p, ticker: str | None = None) -> str:
+def fmt_p(p, ticker=None):
     """Format price. Indices/yields omit '$'; micro-prices get more decimals."""
     if p is None or (isinstance(p, float) and math.isnan(p)):
         return "—"
