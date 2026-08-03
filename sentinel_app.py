@@ -53,7 +53,7 @@ from data_fetchers import (
     logger,
 )
 from ui_components import (
-    CHART_LAYOUT, dark_fig, tv_chart,
+    CHART_LAYOUT, dark_fig, tv_chart, candlestick_chart, terminal_quote_strip,
     yield_curve_chart, yield_history_chart, cpi_vs_rates_chart,
     render_news_card, render_options_table,
     render_scored_options, render_unusual_trade,
@@ -66,6 +66,7 @@ from ui_components import (
     load_memory, save_memory, summarize_and_persist,
     parse_chained_commands, detect_sentiment_divergence,
 )
+from http_client import fmt_vol
 
 st.set_page_config(page_title="SENTINEL", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
 import time
@@ -88,7 +89,8 @@ def now_short():
     return st.session_state._cached_short
 
 st.markdown("""<style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&display=swap');
+/* display=swap avoids FOIT lag; mono stack already in --mono for offline */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap');
 :root {
 --blk:#000000; --bg1:#080808; --bg2:#0D0D0D; --bg3:#111111;
 --org:#FF6600; --org2:#FF8C00; --org3:#FF4500;
@@ -109,7 +111,24 @@ border-right: 1px solid var(--org) !important;
 [data-testid="stSidebar"] * { font-family: var(--mono) !important; font-size: 11px !important; }
 [data-testid="stSidebar"] label { color: var(--org2) !important; }
 
-/* TABS */
+/* PAGE NAV (segmented control — lazy, replaces st.tabs) */
+div[data-testid="stSegmentedControl"] {
+background: var(--blk) !important;
+border-bottom: 1px solid var(--org) !important;
+padding: 0 !important;
+margin-bottom: 6px !important;
+}
+div[data-testid="stSegmentedControl"] button,
+div[data-testid="stSegmentedControl"] label {
+color: var(--muted) !important; font-family: var(--mono) !important;
+font-size: 11px !important; font-weight: 700 !important; letter-spacing: 1px !important;
+text-transform: uppercase !important; border-radius: 0 !important;
+}
+div[data-testid="stSegmentedControl"] [aria-checked="true"],
+div[data-testid="stSegmentedControl"] button[kind="primary"] {
+color: var(--org) !important; background: var(--bg1) !important;
+}
+/* legacy tab styles (fragments / nested) */
 .stTabs [data-baseweb="tab-list"] {
 background: var(--blk); border-bottom: 1px solid var(--org) !important; gap: 0; padding: 0;
 }
@@ -224,13 +243,23 @@ top: 0.5rem !important;
 left: 0.5rem !important;
 }
 
-/* MOVE CONTENT UP */
+/* MOVE CONTENT UP — Bloomberg density: minimal chrome, max data */
 section.main > div.block-container {
-padding-top: 0.25rem !important;
-padding-bottom: 1rem !important;
+padding-top: 0.15rem !important;
+padding-bottom: 0.5rem !important;
+padding-left: 1rem !important;
+padding-right: 1rem !important;
+max-width: 100% !important;
 }
 [data-testid="stAppViewContainer"] > section.main {
 padding-top: 0 !important;
+}
+/* Compress vertical gaps between widgets */
+div[data-testid="stVerticalBlock"] > div { gap: 0.25rem !important; }
+.stMarkdown { margin-bottom: 0 !important; }
+/* Tabular numbers everywhere terminal-like */
+.stMetric, [data-testid="stMetricValue"], .opt-tbl, .wl-row {
+font-variant-numeric: tabular-nums !important;
 }
 
 /* ── AUTO-DISMISS ALERT ANIMATION (3 seconds) ── */
@@ -311,15 +340,16 @@ padding: 11px 13px; margin: 5px 0; font-family: var(--mono); font-size: 13px;
 .poly-unusual-yes { color: var(--grn); font-size: 10px; font-weight: 700; }
 .poly-unusual-no  { color: var(--red); font-size: 10px; font-weight: 700; }
 
-/* OPTIONS CHAIN */
-.opt-tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; }
+/* OPTIONS CHAIN — dense terminal table */
+.opt-tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11px; }
 .opt-tbl th {
-background: var(--bg3); color: var(--org); padding: 6px 9px;
-text-align: right; font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
-border-bottom: 1px solid var(--org);
+background: var(--bg3); color: var(--org); padding: 3px 6px;
+text-align: right; font-size: 9px; letter-spacing: 0.5px; text-transform: uppercase;
+border-bottom: 1px solid var(--org); white-space: nowrap;
 }
 .opt-tbl th:first-child { text-align: left; }
-.opt-tbl td { padding: 6px 9px; text-align: right; color: var(--txt); border-bottom: 1px solid var(--bg3); }
+.opt-tbl td { padding: 2px 6px; text-align: right; color: var(--txt); border-bottom: 1px solid var(--bg3);
+font-variant-numeric: tabular-nums; }
 .opt-tbl td:first-child { text-align: left; font-weight: 600; }
 .opt-tbl tr:hover td { background: var(--bg2); }
 .opt-call { color: var(--grn) !important; }
@@ -560,20 +590,28 @@ for k,v in DEFAULTS.items():
     if k not in st.session_state: st.session_state[k]=v
 
 def warm_caches_on_startup(watchlist):
-    """Fire-and-forget background cache warming using parallel threads."""
+    """Background cache warm — batch quotes first (fills multi_quotes + futures)."""
     import threading
     import concurrent.futures
+
     def _warm():
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            # One combined batch warms strip + watchlist in a single download
+            seed = list(dict.fromkeys(
+                list(watchlist or [])
+                + ["^GSPC", "SPY", "QQQ", "IWM", "DX-Y.NYB", "GLD", "TLT",
+                   "BTC-USD", "CL=F", "^VIX", "^TNX"]
+            ))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
                 futures = [
-                    pool.submit(get_vix_full),
-                    pool.submit(sector_etfs),
+                    pool.submit(multi_quotes, seed),
                     pool.submit(get_futures),
-                    pool.submit(polymarket_events, 30),
-                    pool.submit(multi_quotes, watchlist),
-                    pool.submit(stat_arb_screener),
+                    pool.submit(get_vix_full),
+                    pool.submit(is_market_open),
+                    pool.submit(sector_etfs),
                 ]
+                # Polymarket / stat_arb are heavier — don't block quote warm
+                pool.submit(polymarket_events, 30)
                 for f in concurrent.futures.as_completed(futures):
                     try:
                         f.result()
@@ -856,18 +894,79 @@ with st.sidebar:
         _run_alert_monitor()
 
 
+_mkt_st, _mkt_col, _mkt_det = is_market_open()
 st.markdown(f"""
-<div style="background:#FF6600;padding:5px 14px;display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-<div style="display:flex;align-items:center;gap:14px">
-    <span style="font-size:20px;font-weight:900;letter-spacing:5px;color:#000;font-family:monospace">⚡ SENTINEL</span>
-    <span style="font-size:10px;color:#000;background:rgba(0,0,0,0.15);padding:2px 8px">PROFESSIONAL INTELLIGENCE</span>
+<div style="background:#FF6600;padding:4px 12px;display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
+<div style="display:flex;align-items:center;gap:12px">
+    <span style="font-size:16px;font-weight:900;letter-spacing:4px;color:#000;font-family:monospace">⚡ SENTINEL</span>
+    <span style="font-size:9px;color:#000;background:rgba(0,0,0,0.18);padding:1px 6px;font-weight:700;letter-spacing:1px">TERMINAL</span>
+    <span style="font-size:10px;color:#000;font-weight:700;font-family:monospace">● {_mkt_st}</span>
+    <span style="font-size:9px;color:#000;opacity:0.7;font-family:monospace">{_mkt_det}</span>
 </div>
-<div style="font-size:10px;color:#000;opacity:0.75">{now_pst()} &nbsp;|&nbsp; LIVE</div>
+<div style="font-size:10px;color:#000;opacity:0.8;font-family:monospace;font-variant-numeric:tabular-nums">{now_pst()} · ET session</div>
 </div>""", unsafe_allow_html=True)
 
-tabs = st.tabs(["BRIEF","MARKETS","OPTIONS","MACRO","CRYPTO","POLYMARKET","GEO","EARNINGS","SENTINEL AI"])
+def _build_cmd_context(cmd_text):
+    """Build enriched context for a specific command."""
+    _cmd_lower = cmd_text.strip().lower()
+    _needs_brief = _cmd_lower.startswith("/brief") or _cmd_lower.startswith("/geo") or _cmd_lower.startswith("/narrative")
+    _needs_divergence = _cmd_lower.startswith("/divergence")
+    _needs_alert = _cmd_lower.startswith("/alert")
 
-with tabs[0]:
+    if _needs_brief:
+        ctx = build_brief_context(geo_watch=st.session_state.get("geo_watch", ""))
+    else:
+        ctx = market_snapshot_str()
+
+    if _needs_divergence:
+        _divs = detect_sentiment_divergence(st.session_state.watchlist)
+        if _divs:
+            div_lines = ["SENTIMENT DIVERGENCE DATA (live detection):"]
+            for d in _divs:
+                div_lines.append(f"  [{d['severity']}] {d['type']}: {d['signal']} — {d['detail']}")
+            ctx += "\n\n" + "\n".join(div_lines)
+        else:
+            ctx += "\n\nSENTIMENT DIVERGENCE DATA: No divergences detected — signals aligned."
+
+    if _needs_alert:
+        _alert_lines = ["AUTO-ALERT WATCHLIST STATUS:"]
+        if st.session_state.watchlist:
+            _wl_qs = multi_quotes(st.session_state.watchlist[:10])
+            for _wq in _wl_qs:
+                _alert_lines.append(f"  {_wq['ticker']}: ${_wq['price']:.2f} ({_wq['pct']:+.2f}%)")
+        memory = load_memory()
+        if memory.get("alerts_history"):
+            _alert_lines.append("  Recent alerts: " + "; ".join(str(a) for a in memory["alerts_history"][-5:]))
+        ctx += "\n\n" + "\n".join(_alert_lines)
+
+    return ctx
+
+def _execute_single_command(cmd_text, chat_history, placeholder, prefix=""):
+    """Execute a single AI command and return the response text."""
+    ctx = _build_cmd_context(cmd_text)
+    resp_text = prefix
+    for chunk in gemini_response(cmd_text, chat_history, ctx):
+        resp_text += chunk
+        placeholder.markdown(
+            f'<div class="chat-ai">⚡ SENTINEL<br><br>{format_gemini_msg(resp_text)}</div>',
+            unsafe_allow_html=True)
+    return resp_text
+
+# Lazy page nav — only the active page's Python runs (st.tabs re-executes every tab)
+_NAV_PAGES = ["BRIEF", "MARKETS", "OPTIONS", "MACRO", "CRYPTO", "POLYMARKET", "GEO", "EARNINGS", "SENTINEL AI"]
+_page = st.segmented_control(
+    "Navigation",
+    options=_NAV_PAGES,
+    default="BRIEF",
+    required=True,
+    key="main_nav",
+    label_visibility="collapsed",
+    width="stretch",
+)
+if _page is None:
+    _page = "BRIEF"
+
+if _page == "BRIEF":
     st.markdown('<div class="bb-ph">⚡ SENTINEL MORNING BRIEF</div>', unsafe_allow_html=True)
 
     @st.fragment(run_every="60s")
@@ -923,7 +1022,7 @@ with tabs[0]:
                     st.markdown(
                         metric_card_with_delta(
                             lbl_s,
-                            fmt_p(q["price"]),
+                            fmt_p(q["price"], tkr_s),
                             f'{_arr} {_sign}{_pct:.2f}% ({_sign}{_chg:.2f})',
                             _c,
                         ),
@@ -999,19 +1098,19 @@ with tabs[0]:
             c = "#00CC44" if q["pct"]>=0 else "#FF4444"
             arr = "▲" if q["pct"]>=0 else "▼"
             vol_color = "#00CC44" if q["pct"] >= 0 else "#FF4444"
-            vol = f"{q['volume']/1e6:.1f}M" if q["volume"]>1e6 else f"{q['volume']/1e3:.0f}K"
+            vol = fmt_vol(q.get("volume", 0))
             chg_str = f"+{q['change']:.2f}" if q["change"]>=0 else f"{q['change']:.2f}"
 
             crow = st.columns([1.5, 2.0, 1.7, 1.7, 1.5, 0.8])
             with crow[0]:
                 st.markdown(
                     f'<div style="color:#FF6600;font-weight:700;font-family:monospace;'
-                    f'font-size:13px;padding:5px 0">{_esc(q["ticker"])}</div>',
+                    f'font-size:12px;padding:3px 0">{_esc(q["ticker"])}</div>',
                     unsafe_allow_html=True)
             with crow[1]:
                 st.markdown(
-                    f'<div style="color:#FFF;font-family:monospace;font-size:13px;'
-                    f'font-weight:600;padding:5px 0">{fmt_p(q["price"])}</div>',
+                    f'<div style="color:#FFF;font-family:monospace;font-size:12px;'
+                    f'font-weight:600;padding:3px 0;font-variant-numeric:tabular-nums">{fmt_p(q["price"], q["ticker"])}</div>',
                     unsafe_allow_html=True)
             with crow[2]:
                 st.markdown(
@@ -1092,7 +1191,7 @@ with tabs[0]:
         else:
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">GDELT feed temporarily unavailable. Will auto-retry.</p>', unsafe_allow_html=True)
 
-with tabs[1]:
+elif _page == "MARKETS":
     st.markdown('<div class="bb-ph">📊 MARKETS — EQUITIES | OPTIONS | MOVERS | ROTATION</div>', unsafe_allow_html=True)
 
     fc, _ = st.columns([2,3])
@@ -2207,7 +2306,7 @@ with tabs[1]:
             d=datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else ""
             st.markdown(render_news_card(title,url,src,d,"bb-news bb-news-macro"), unsafe_allow_html=True)
 
-with tabs[2]:
+elif _page == "OPTIONS":
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 
@@ -2703,18 +2802,23 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
 
             _cboe_spot, _cboe_opts = fetch_cboe_gex("SPX")
             _use_cboe = _cboe_spot is not None and _cboe_opts is not None
+            # Live SPX/SPY ratio — hard-coded ×10 drifts as the relationship changes
+            _spx_spy_ratio = float((_spx or {}).get("spx_spy_ratio") or 10.0)
+            if _spx_spy_ratio <= 0:
+                _spx_spy_ratio = 10.0
 
             if _use_cboe:
                 _gex = compute_cboe_gex_profile(_cboe_spot, _cboe_opts,
                                                 expiry_limit_days=_exp_limit,
                                                 strike_pct=_chart_pct + 0.02)
                 _total_gex_bn = compute_cboe_total_gex(_cboe_spot, _cboe_opts)
-                _spy_spot_gex = _cboe_spot / 10
-                _gex_source = f"CBOE Delayed • {_exp_choice} • Spot: ${_cboe_spot:,.0f}"
+                _spy_spot_gex = _cboe_spot / _spx_spy_ratio
+                _gex_source = f"CBOE Delayed • {_exp_choice} • Spot: {_cboe_spot:,.0f}"
             elif _0dte_chain and _spx:
-                _spy_spot_gex = _spx["spot"] / 10
+                _spy_spot_gex = float(_spx.get("spy_spot") or (_spx["spot"] / _spx_spy_ratio))
                 _gex = compute_gex_profile(_0dte_chain, _spy_spot_gex)
-                _gex = {k: v * 10 for k, v in _gex.items()}
+                # Notional scale SPY-chain GEX toward SPX-comparable $ (keys stay SPY strikes)
+                _gex = {k: v * _spx_spy_ratio for k, v in _gex.items()}
                 _total_gex_bn = None
                 _gex_source = "Alpaca 0DTE (CBOE unavailable)"
             else:
@@ -2728,7 +2832,7 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
 
             if _gex:
                 _src_html = (f'<div style="color:#555;font-family:monospace;font-size:10px;margin-bottom:4px">'
-                            f'Source: {_gex_source}')
+                            f'Source: {_gex_source} · ratio {_spx_spy_ratio:.3f}')
                 if _total_gex_bn is not None:
                     _gex_clr = "#00CC44" if _total_gex_bn >= 0 else "#FF4444"
                     _src_html += (f' &nbsp;|&nbsp; Total Net GEX: '
@@ -2739,9 +2843,12 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
 
                 _gex_col, _ovw_col = st.columns([3, 2])
                 with _gex_col:
-                    _fig = render_0dte_gex_chart(_gex, _gf_spy, _mp_spy,
-                                                spot_spx=_spot_for_chart,
-                                                display_pct=_chart_pct)
+                    _fig = render_0dte_gex_chart(
+                        _gex, _gf_spy, _mp_spy,
+                        spot_spx=_spot_for_chart,
+                        display_pct=_chart_pct,
+                        spx_spy_ratio=_spx_spy_ratio,
+                    )
                     if _fig:
                         st.plotly_chart(_fig, use_container_width=True, config={
                             'scrollZoom': True,
@@ -2768,8 +2875,8 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                     if _ovw_pcr is None and _use_cboe:
                         _ovw_pcr = compute_cboe_pcr(_cboe_opts)
                     _ovw_total_gex = _total_gex_bn
-                    _ovw_gf_spx = _gf_spy * 10 if _gf_spy else None
-                    _ovw_mp_spx = _mp_spy * 10 if _mp_spy else None
+                    _ovw_gf_spx = _gf_spy * _spx_spy_ratio if _gf_spy else None
+                    _ovw_mp_spx = _mp_spy * _spx_spy_ratio if _mp_spy else None
 
                     if _ovw_spot and _ovw_gf_spx:
                         _gamma_regime = "POSITIVE γ" if _ovw_spot > _ovw_gf_spx else "NEGATIVE γ"
@@ -2781,27 +2888,28 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                     def _ovw_row(label, value, color="#CCC", sub=""):
                         sub_html = f'<span style="color:#555;font-size:9px;margin-left:6px">{sub}</span>' if sub else ""
                         return (f'<div style="display:flex;justify-content:space-between;align-items:center;'
-                                f'padding:5px 8px;border-bottom:1px solid #111;font-family:monospace;font-size:11px">'
+                                f'padding:4px 8px;border-bottom:1px solid #111;font-family:monospace;font-size:11px">'
                                 f'<span style="color:#888">{label}</span>'
-                                f'<span style="color:{color};font-weight:600">{value}{sub_html}</span></div>')
+                                f'<span style="color:{color};font-weight:600;font-variant-numeric:tabular-nums">{value}{sub_html}</span></div>')
 
                     _ovw_html = '<div style="background:#080808;border:1px solid #1A1A1A;border-top:2px solid #FF6600;padding:2px 0">'
-                    _ovw_html += _ovw_row("SPX SPOT", f"${_ovw_spot:,.2f}" if _ovw_spot else "—", "#FFF")
-                    _ovw_html += _ovw_row("VWAP", f"${_ovw_vwap:,.2f}" if _ovw_vwap else "—",
+                    # Index levels: no currency symbol
+                    _ovw_html += _ovw_row("SPX SPOT", f"{_ovw_spot:,.2f}" if _ovw_spot else "—", "#FFF")
+                    _ovw_html += _ovw_row("VWAP", f"{_ovw_vwap:,.2f}" if _ovw_vwap else "—",
                                           "#00CC44" if _ovw_spot and _ovw_vwap and _ovw_spot > _ovw_vwap else "#FF4444")
                     _ovw_html += _ovw_row("HIGH / LOW",
-                                          f"${_ovw_high:,.2f} / ${_ovw_low:,.2f}" if _ovw_high and _ovw_low else "—",
+                                          f"{_ovw_high:,.2f} / {_ovw_low:,.2f}" if _ovw_high and _ovw_low else "—",
                                           "#CCC")
-                    _ovw_html += _ovw_row("DAY RANGE", f"±{_ovw_em:.1f} pts" if _ovw_em else "—", "#FF8C00")
+                    _ovw_html += _ovw_row("DAY RANGE", f"{_ovw_em:.1f} pts" if _ovw_em else "—", "#FF8C00")
                     _ovw_html += _ovw_row("VIX", f"{_ovw_vix:.2f}" if _ovw_vix else "—",
                                           "#FF4444" if _ovw_vix and _ovw_vix > 25 else "#FF8C00" if _ovw_vix and _ovw_vix > 18 else "#00CC44")
-                    _ovw_html += _ovw_row("PCR", f"{_ovw_pcr:.2f}" if _ovw_pcr else "—",
+                    _ovw_html += _ovw_row("PCR (OI)", f"{_ovw_pcr:.2f}" if _ovw_pcr else "—",
                                           "#FF4444" if _ovw_pcr and _ovw_pcr > 1.0 else "#00CC44" if _ovw_pcr and _ovw_pcr < 0.7 else "#FF8C00")
                     _ovw_html += _ovw_row("NET GEX",
                                           f"${_ovw_total_gex:+.2f}Bn" if _ovw_total_gex is not None else "—",
                                           "#00CC44" if _ovw_total_gex and _ovw_total_gex >= 0 else "#FF4444")
-                    _ovw_html += _ovw_row("γ FLIP", f"${_ovw_gf_spx:,.0f}" if _ovw_gf_spx else "—", "#FFCC00")
-                    _ovw_html += _ovw_row("MAX PAIN", f"${_ovw_mp_spx:,.0f}" if _ovw_mp_spx else "—", "#AA44FF")
+                    _ovw_html += _ovw_row("γ FLIP", f"{_ovw_gf_spx:,.0f}" if _ovw_gf_spx else "—", "#FFCC00")
+                    _ovw_html += _ovw_row("MAX PAIN", f"{_ovw_mp_spx:,.0f}" if _ovw_mp_spx else "—", "#AA44FF")
                     _ovw_html += _ovw_row("γ REGIME", _gamma_regime, _gamma_color, _gamma_desc)
                     _ovw_html += '</div>'
                     st.markdown(_ovw_html, unsafe_allow_html=True)
@@ -2810,7 +2918,7 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
                 for _wk, _wv in _gex.items():
                     if abs(_wv) > abs(_wall_gex):
                         _wall_gex, _wall_strike = _wv, _wk
-                _wall_spx = f"${_wall_strike * 10:,.0f}" if _wall_strike else "—"
+                _wall_spx = f"{_wall_strike * _spx_spy_ratio:,.0f}" if _wall_strike else "—"
                 _wall_dir = "Call Wall" if _wall_gex >= 0 else "Put Wall"
                 st.markdown(render_0dte_gex_decoder(
                     _gf_spy, _mp_spy, _wall_spx, _wall_dir,
@@ -2825,7 +2933,7 @@ Get your free Alpaca API keys → alpaca.markets</a></div>""", unsafe_allow_html
         render_0dte_fragment()
 
 
-with tabs[3]:
+elif _page == "MACRO":
     st.markdown('<div class="bb-ph">📈 MACRO — FRED DATA DASHBOARD</div>', unsafe_allow_html=True)
 
     if not st.session_state.fred_key.get_secret_value():
@@ -3392,7 +3500,7 @@ Get your free FRED key in 30 seconds →</a></div>""", unsafe_allow_html=True)
             st.markdown('<p style="color:#555;font-family:monospace;font-size:11px">CFTC COT data unavailable.</p>', unsafe_allow_html=True)
 
 
-with tabs[4]:
+elif _page == "CRYPTO":
     st.markdown('<div class="bb-ph">💰 CRYPTO — COINGECKO + TRADINGVIEW</div>', unsafe_allow_html=True)
 
     with st.spinner("Loading crypto globals…"):
@@ -3530,7 +3638,7 @@ with tabs[4]:
             unsafe_allow_html=True
         )
 
-with tabs[5]:
+elif _page == "POLYMARKET":
     st.markdown('<div class="bb-ph">🎲 POLYMARKET — PREDICTION INTELLIGENCE & UNUSUAL FLOW</div>', unsafe_allow_html=True)
 
     with st.spinner("Loading Polymarket…"):
@@ -3803,35 +3911,24 @@ Mixed signals — wait<br>for volume confirmation<br><br>
 <span style="color:#444">⚠️ Crowd odds only.<br>Not financial advice.</span>
 </div>""", unsafe_allow_html=True)
 
-with tabs[6]:
-    if "geo_tab_active" not in st.session_state:
-        st.session_state.geo_tab_active = False
-
-    _geo_col_a, _geo_col_b = st.columns([4, 1])
-    with _geo_col_a:
-        if not st.session_state.geo_tab_active:
-            st.markdown(
-                '<div class="bb-ph">🌍 GEOPOLITICAL INTELLIGENCE</div>',
-                unsafe_allow_html=True,
+elif _page == "GEO":
+    _geo_hdr, _geo_ref = st.columns([4, 1])
+    with _geo_ref:
+        if st.button("🔄 REFRESH GEO", key="geo_refresh", use_container_width=True):
+            from data_fetchers import (
+                fetch_conflict_events_json as _fc,
+                fetch_military_aircraft_json as _fm,
+                fetch_satellite_positions_json as _fs,
+                fetch_ais_vessels as _fa,
             )
-    with _geo_col_b:
-        if st.session_state.geo_tab_active:
-            if st.button("🔄 REFRESH DATA", key="geo_refresh", use_container_width=True):
-                from data_fetchers import (
-                    fetch_conflict_events_json, fetch_military_aircraft_json,
-                    fetch_satellite_positions_json, fetch_ais_vessels,
-                )
-                for fn in [fetch_conflict_events_json, fetch_military_aircraft_json,
-                        fetch_satellite_positions_json, fetch_ais_vessels]:
+            for fn in (_fc, _fm, _fs, _fa):
+                try:
                     fn.clear()
-        else:
-            if st.button("▶ LOAD GEO INTEL", key="geo_load", use_container_width=True):
-                st.session_state.geo_tab_active = True
-                st.rerun()
-
-    if st.session_state.geo_tab_active:
-        render_geo_tab()
-with tabs[7]:
+                except Exception:
+                    pass
+            st.rerun()
+    render_geo_tab()
+elif _page == "EARNINGS":
     st.markdown('<div class="bb-ph">📅 EARNINGS TRACKER — UPCOMING & RECENT</div>', unsafe_allow_html=True)
 
     ec1, ec2 = st.columns([2,3])
@@ -4023,53 +4120,7 @@ with tabs[7]:
                 unsafe_allow_html=True)
 
 
-def _build_cmd_context(cmd_text):
-    """Build enriched context for a specific command."""
-    _cmd_lower = cmd_text.strip().lower()
-    _needs_brief = _cmd_lower.startswith("/brief") or _cmd_lower.startswith("/geo") or _cmd_lower.startswith("/narrative")
-    _needs_divergence = _cmd_lower.startswith("/divergence")
-    _needs_alert = _cmd_lower.startswith("/alert")
-
-    if _needs_brief:
-        ctx = build_brief_context(geo_watch=st.session_state.get("geo_watch", ""))
-    else:
-        ctx = market_snapshot_str()
-
-    if _needs_divergence:
-        _divs = detect_sentiment_divergence(st.session_state.watchlist)
-        if _divs:
-            div_lines = ["SENTIMENT DIVERGENCE DATA (live detection):"]
-            for d in _divs:
-                div_lines.append(f"  [{d['severity']}] {d['type']}: {d['signal']} — {d['detail']}")
-            ctx += "\n\n" + "\n".join(div_lines)
-        else:
-            ctx += "\n\nSENTIMENT DIVERGENCE DATA: No divergences detected — signals aligned."
-
-    if _needs_alert:
-        _alert_lines = ["AUTO-ALERT WATCHLIST STATUS:"]
-        if st.session_state.watchlist:
-            _wl_qs = multi_quotes(st.session_state.watchlist[:10])
-            for _wq in _wl_qs:
-                _alert_lines.append(f"  {_wq['ticker']}: ${_wq['price']:.2f} ({_wq['pct']:+.2f}%)")
-        memory = load_memory()
-        if memory.get("alerts_history"):
-            _alert_lines.append("  Recent alerts: " + "; ".join(str(a) for a in memory["alerts_history"][-5:]))
-        ctx += "\n\n" + "\n".join(_alert_lines)
-
-    return ctx
-
-def _execute_single_command(cmd_text, chat_history, placeholder, prefix=""):
-    """Execute a single AI command and return the response text."""
-    ctx = _build_cmd_context(cmd_text)
-    resp_text = prefix
-    for chunk in gemini_response(cmd_text, chat_history, ctx):
-        resp_text += chunk
-        placeholder.markdown(
-            f'<div class="chat-ai">⚡ SENTINEL<br><br>{format_gemini_msg(resp_text)}</div>',
-            unsafe_allow_html=True)
-    return resp_text
-
-with tabs[8]:
+elif _page == "SENTINEL AI":
     st.markdown('<div class="bb-ph">🤖 SENTINEL AI — POWERED BY GOOGLE GEMINI</div>', unsafe_allow_html=True)
 
     if not st.session_state.gemini_key.get_secret_value():

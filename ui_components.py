@@ -15,7 +15,7 @@ except ImportError:
     go = None
 
 from data_fetchers import (
-    _safe_float, _safe_int, _esc, fmt_p, pct_color,
+    _safe_float, _safe_int, _esc, fmt_p, fmt_pct, fmt_vol, pct_color,
     fred_series, _parse_poly_field,
     multi_quotes,
     GEO_FINANCIAL_NETWORKS,
@@ -33,37 +33,154 @@ except ImportError:
     _np = None
 
 
+# Bloomberg-dense chart chrome: tight margins, muted grid, mono labels
 CHART_LAYOUT = dict(
-    paper_bgcolor="#000000", plot_bgcolor="#050505",
-    font=dict(color="#FF8C00", family="IBM Plex Mono"),
-    xaxis=dict(gridcolor="#111111", color="#555555", showgrid=True),
-    yaxis=dict(gridcolor="#111111", color="#555555", showgrid=True),
-    showlegend=False
+    paper_bgcolor="#000000",
+    plot_bgcolor="#050505",
+    font=dict(color="#AAAAAA", family="IBM Plex Mono", size=10),
+    xaxis=dict(
+        gridcolor="#141414", color="#666666", showgrid=True,
+        zeroline=False, showline=True, linecolor="#222222",
+        tickfont=dict(size=9, color="#666666"),
+    ),
+    yaxis=dict(
+        gridcolor="#141414", color="#666666", showgrid=True,
+        zeroline=False, showline=True, linecolor="#222222",
+        tickfont=dict(size=9, color="#666666"), side="right",
+        ),
+    showlegend=False,
+    hovermode="x unified",
+    hoverlabel=dict(
+        bgcolor="#0A0A0A", bordercolor="#333333",
+        font=dict(size=11, color="#FF8C00", family="IBM Plex Mono"),
+    ),
 )
 
 def dark_fig(height=300):
     fig = go.Figure()
-    fig.update_layout(**CHART_LAYOUT, height=height, margin=dict(l=0, r=10, t=24, b=0))
+    fig.update_layout(
+        **CHART_LAYOUT,
+        height=height,
+        margin=dict(l=8, r=48, t=28, b=8),
+    )
     return fig
 
-def tv_chart(symbol, height=450):
+
+def candlestick_chart(df, title="", height=380, ma_windows=(20, 50), show_volume=True):
+    """Professional OHLC + volume + MAs (Plotly) — Bloomberg-style density.
+
+    Expects DataFrame with Open/High/Low/Close columns (and optional Volume).
+    Index should be DatetimeIndex.
+    """
+    if go is None or df is None or getattr(df, "empty", True):
+        return None
+    need = {"Open", "High", "Low", "Close"}
+    cols = {c: c for c in df.columns}
+    # Normalize multi-level / lowercase
+    lower_map = {str(c).lower(): c for c in df.columns}
+    ohlc = {}
+    for k in ("open", "high", "low", "close", "volume"):
+        if k in lower_map:
+            ohlc[k] = lower_map[k]
+        elif k.capitalize() in cols:
+            ohlc[k] = k.capitalize()
+    if not all(x in ohlc for x in ("open", "high", "low", "close")):
+        return None
+
+    x = df.index
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(
+        x=x,
+        open=df[ohlc["open"]], high=df[ohlc["high"]],
+        low=df[ohlc["low"]], close=df[ohlc["close"]],
+        name="OHLC",
+        increasing_line_color="#00CC44", increasing_fillcolor="#00CC44",
+        decreasing_line_color="#FF4444", decreasing_fillcolor="#FF4444",
+        whiskerwidth=0.4,
+    ))
+    close = df[ohlc["close"]]
+    ma_colors = {20: "#FF8C00", 50: "#00AAFF", 200: "#AA44FF"}
+    for w in ma_windows:
+        if len(close) >= w:
+            fig.add_trace(go.Scatter(
+                x=x, y=close.rolling(w).mean(),
+                mode="lines", name=f"MA{w}",
+                line=dict(width=1.2, color=ma_colors.get(w, "#888888")),
+            ))
+
+    rows = 2 if show_volume and "volume" in ohlc else 1
+    if rows == 2:
+        from plotly.subplots import make_subplots
+        base = make_subplots(
+            rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+            row_heights=[0.72, 0.28],
+        )
+        for tr in fig.data:
+            base.add_trace(tr, row=1, col=1)
+        vol = df[ohlc["volume"]]
+        colors = [
+            "#00CC4488" if float(c) >= float(o) else "#FF444488"
+            for o, c in zip(df[ohlc["open"]], df[ohlc["close"]])
+        ]
+        base.add_trace(go.Bar(
+            x=x, y=vol, name="Vol", marker_color=colors, showlegend=False,
+        ), row=2, col=1)
+        fig = base
+        fig.update_layout(**{k: v for k, v in CHART_LAYOUT.items() if k not in ("xaxis", "yaxis")})
+        fig.update_xaxes(gridcolor="#141414", color="#666", showgrid=True, rangeslider_visible=False)
+        fig.update_yaxes(gridcolor="#141414", color="#666", showgrid=True, side="right")
+    else:
+        fig.update_layout(**CHART_LAYOUT)
+        fig.update_xaxes(rangeslider_visible=False)
+
+    fig.update_layout(
+        height=height,
+        margin=dict(l=8, r=48, t=32, b=8),
+        title=dict(text=title, font=dict(size=11, color="#FF6600"), x=0, xanchor="left"),
+        showlegend=True,
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02, x=0,
+            font=dict(size=9, color="#888"), bgcolor="rgba(0,0,0,0)",
+        ),
+        xaxis_rangeslider_visible=False,
+    )
+    return fig
+
+
+def tv_chart(symbol, height=450, interval="60", range_="3M"):
+    """TradingView advanced chart embed — denser studies for terminal use."""
+    cid = symbol.replace(":", "_").replace("-", "_").replace(".", "_")
     return f"""<!DOCTYPE html><html>
 <head><style>body{{margin:0;padding:0;background:#000000;overflow:hidden}}
 .tradingview-widget-container{{width:100%;height:{height}px}}</style></head>
 <body><div class="tradingview-widget-container">
-<div id="tv_c_{symbol.replace(':','_').replace('-','_')}"></div>
+<div id="tv_c_{cid}"></div>
 <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 <script type="text/javascript">
 new TradingView.widget({{
-  "width":"100%","height":{height},"symbol":"{symbol}","interval":"60",
-  "range":"1M",
-  "timezone":"America/Los_Angeles","theme":"dark","style":"1","locale":"en",
-  "toolbar_bg":"#000000","enable_publishing":false,"hide_side_toolbar":false,
-  "allow_symbol_change":true,"save_image":false,
-  "container_id":"tv_c_{symbol.replace(':','_').replace('-','_')}",
+  "width":"100%","height":{height},"symbol":"{symbol}","interval":"{interval}",
+  "range":"{range_}",
+  "timezone":"America/New_York","theme":"dark","style":"1","locale":"en",
+  "toolbar_bg":"#000000","enable_publishing":false,"hide_side_sidebar":false,
+  "allow_symbol_change":true,"save_image":false,"withdateranges":true,
+  "container_id":"tv_c_{cid}",
   "backgroundColor":"rgba(0,0,0,1)","gridColor":"rgba(20,20,20,1)",
-  "studies":["STD;EMA","STD;RSI"],
-  "studies_overrides":{{"ema.length":20,"rsi.length":14}},
+  "studies":["STD;EMA","STD;SMA","STD;RSI","STD;MACD","Volume@tv-basicstudies"],
+  "studies_overrides":{{
+    "ema.length":20,"moving average.length":50,
+    "rsi.length":14,"macd.fastLength":12,"macd.slowLength":26,"macd.signalLength":9
+  }},
+  "overrides":{{
+    "paneProperties.background":"#000000",
+    "paneProperties.vertGridProperties.color":"#141414",
+    "paneProperties.horzGridProperties.color":"#141414",
+    "mainSeriesProperties.candleStyle.upColor":"#00CC44",
+    "mainSeriesProperties.candleStyle.downColor":"#FF4444",
+    "mainSeriesProperties.candleStyle.borderUpColor":"#00CC44",
+    "mainSeriesProperties.candleStyle.borderDownColor":"#FF4444",
+    "mainSeriesProperties.candleStyle.wickUpColor":"#00CC44",
+    "mainSeriesProperties.candleStyle.wickDownColor":"#FF4444"
+  }},
   "show_popup_button":true,"popup_width":"1000","popup_height":"650"
 }});
 </script></div></body></html>"""
@@ -141,23 +258,52 @@ def yield_history_chart(fred_key, height=220):
     return fig
 
 def cpi_vs_rates_chart(fred_key, height=250):
-    """CPI YoY vs Fed Funds Rate chart"""
-    if not fred_key: return None
-    LINES = [("CPI YoY %", "CPIAUCSL", "#FF4444"), ("Fed Funds Rate", "FEDFUNDS", "#00AAFF"),
-             ("Core PCE", "PCEPILFE", "#FFCC00")]
+    """CPI / Core PCE YoY % vs Fed Funds (levels were wrong before — FRED CPIAUCSL is an index).
+
+    Computes trailing 12-observation YoY for index series; FEDFUNDS stays level.
+    """
+    if not fred_key:
+        return None
+    # Fetch enough history for 12-month YoY on monthly series
+    series_cfg = [
+        ("CPI YoY %", "CPIAUCSL", "#FF4444", True),
+        ("Core PCE YoY %", "PCEPILFE", "#FFCC00", True),
+        ("Fed Funds", "FEDFUNDS", "#00AAFF", False),
+    ]
     fig = dark_fig(height)
     has_data = False
-    for lbl, code, color in LINES:
-        df = fred_series(code, fred_key, 36)
-        if df is not None and not df.empty:
-            has_data = True
-            fig.add_trace(go.Scatter(x=df["date"], y=df["value"], mode="lines",
-                name=lbl, line=dict(color=color, width=2)))
-    if not has_data: return None
-    fig.update_layout(showlegend=True,
+    for lbl, code, color, as_yoy in series_cfg:
+        df = fred_series(code, fred_key, 48)
+        if df is None or df.empty:
+            continue
+        df = df.sort_values("date").copy()
+        if as_yoy:
+            if len(df) < 13:
+                continue
+            # Monthly index → YoY percent: (P_t / P_{t-12} - 1) * 100
+            df["yoy"] = df["value"].pct_change(12) * 100.0
+            df = df.dropna(subset=["yoy"])
+            y = df["yoy"]
+        else:
+            y = df["value"]
+        if df.empty:
+            continue
+        has_data = True
+        fig.add_trace(go.Scatter(
+            x=df["date"], y=y, mode="lines", name=lbl,
+            line=dict(color=color, width=2),
+        ))
+    if not has_data:
+        return None
+    fig.update_layout(
+        showlegend=True,
         legend=dict(bgcolor="#050505", bordercolor="#333", font=dict(size=10, color="#FF8C00")),
-        yaxis_title="Rate / Index", title=dict(text="CPI vs FED FUNDS vs CORE PCE (3Y)",
-            font=dict(size=11, color="#FF6600"), x=0))
+        yaxis_title="%",
+        title=dict(
+            text="INFLATION YoY vs FED FUNDS",
+            font=dict(size=11, color="#FF6600"), x=0,
+        ),
+    )
     return fig
 
 
@@ -170,28 +316,44 @@ DEFAULT_RISK_FREE_RATE = 0.045
 
 
 def metric_card(label: str, value: str, color: str = "#FF6600",
-                size: str = "18px", border_color: str = "") -> str:
-    """Render a compact metric card with label and value.
-
-    Eliminates dozens of duplicated inline-styled metric blocks
-    throughout the app.
-
-    Args:
-        label: Uppercase metric label (e.g. "VOLUME").
-        value: Formatted display value (e.g. "$1,234.56").
-        color: CSS color for the value text.
-        size:  Font size for the value.
-        border_color: Top-border accent color (defaults to *color*).
-    """
+                size: str = "16px", border_color: str = "") -> str:
+    """Bloomberg-dense metric tile — tight padding, mono type."""
     bc = border_color or color
     return (
         f'<div style="background:#080808;border:1px solid #1A1A1A;'
-        f'border-top:2px solid {bc};padding:10px 12px;'
-        f'font-family:monospace;text-align:center">'
-        f'<div style="color:#555;font-size:9px;letter-spacing:1px;'
-        f'margin-bottom:4px">{label}</div>'
+        f'border-top:2px solid {bc};padding:6px 8px;'
+        f'font-family:\'IBM Plex Mono\',monospace;text-align:center">'
+        f'<div style="color:#666;font-size:8px;letter-spacing:1.5px;'
+        f'margin-bottom:2px;text-transform:uppercase">{label}</div>'
         f'<div style="color:{color};font-size:{size};'
-        f'font-weight:700">{value}</div></div>'
+        f'font-weight:700;line-height:1.15;font-variant-numeric:tabular-nums">{value}</div></div>'
+    )
+
+
+def terminal_quote_strip(quotes: list, labels: dict | None = None) -> str:
+    """Single-line dense quote strip (SPX 5123.45 +0.42% | …)."""
+    if not quotes:
+        return ""
+    labels = labels or {}
+    parts = []
+    for q in quotes:
+        t = q.get("ticker", "")
+        lbl = labels.get(t, t)
+        px = fmt_p(q.get("price"), t)
+        pct = q.get("pct", 0) or 0
+        c = pct_color(pct)
+        arr = "▲" if pct >= 0 else "▼"
+        parts.append(
+            f'<span style="margin-right:14px;white-space:nowrap">'
+            f'<span style="color:#FF6600;font-weight:700">{_esc(lbl)}</span> '
+            f'<span style="color:#EEE;font-weight:600">{px}</span> '
+            f'<span style="color:{c};font-weight:700">{arr}{abs(pct):.2f}%</span></span>'
+        )
+    return (
+        '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;'
+        'background:#050505;border:1px solid #1A1A1A;border-left:3px solid #FF6600;'
+        'padding:5px 10px;overflow-x:auto;white-space:nowrap">'
+        + "".join(parts) + "</div>"
     )
 
 
@@ -234,31 +396,38 @@ def render_news_card(title, url, source, date_str, card_class="bb-news"):
     return f'<div class="{card_class}">{t_html}<div class="bb-meta">{_esc(source)} &nbsp;|&nbsp; {date_str}</div></div>'
 
 def render_wl_row(q):
-    c = "#00CC44" if q["pct"] >= 0 else "#FF4444"
-    arr = "▲" if q["pct"] >= 0 else "▼"
-    vol = f"{q['volume']/1e6:.1f}M" if q["volume"] > 1e6 else f"{q['volume']/1e3:.0f}K"
-    return (f'<div class="wl-row"><span class="wl-ticker">{q["ticker"]}</span>'
-            f'<span class="wl-price">{fmt_p(q["price"])}</span>'
-            f'<span style="color:{c};font-weight:600">{arr} {abs(q["pct"]):.2f}%</span>'
-            f'<span style="color:{c}">{"+"+fmt_p(q["change"]) if q["change"]>=0 else fmt_p(q["change"])}</span>'
-            f'<span class="wl-vol">{vol}</span>'
-            f'</div>')
+    c = pct_color(q.get("pct"))
+    arr = "▲" if (q.get("pct") or 0) >= 0 else "▼"
+    vol = fmt_vol(q.get("volume", 0))
+    tkr = q.get("ticker", "")
+    chg = q.get("change", 0) or 0
+    chg_s = f"+{chg:.2f}" if chg >= 0 else f"{chg:.2f}"
+    return (
+        f'<div class="wl-row"><span class="wl-ticker">{_esc(tkr)}</span>'
+        f'<span class="wl-price">{fmt_p(q.get("price"), tkr)}</span>'
+        f'<span style="color:{c};font-weight:600">{arr} {abs(q.get("pct") or 0):.2f}%</span>'
+        f'<span style="color:{c}">{chg_s}</span>'
+        f'<span class="wl-vol">{vol}</span>'
+        f'</div>'
+    )
 
 def render_options_table(df, side="calls", current_price=None):
-    if df is None or df.empty: return '<p style="color:#555;font-family:monospace;font-size:11px">No data</p>'
+    if df is None or df.empty:
+        return '<p style="color:#555;font-family:monospace;font-size:11px">No data</p>'
     import pandas as pd
     df = df.copy()
     if "strike" in df.columns:
         df["strike"] = pd.to_numeric(df["strike"], errors="coerce").fillna(0)
 
-    if current_price and "strike" in df.columns and len(df) > 20:
+    if current_price and "strike" in df.columns and len(df) > 24:
         df["_dist"] = (df["strike"] - current_price).abs()
-        df = df.nsmallest(20, "_dist").drop(columns=["_dist"])
+        df = df.nsmallest(24, "_dist").drop(columns=["_dist"])
+        df = df.sort_values("strike")
 
     strike_color = "#00CC44" if side == "calls" else "#FF4444"
     atm_strike = None
-    if current_price and not df.empty:
-        strikes = df["strike"].tolist() if "strike" in df.columns else []
+    if current_price and not df.empty and "strike" in df.columns:
+        strikes = df["strike"].tolist()
         if strikes:
             atm_strike = min(strikes, key=lambda s: abs(float(s) - current_price))
     rows = ""
@@ -267,23 +436,38 @@ def render_options_table(df, side="calls", current_price=None):
         lp = _safe_float(row.get("lastPrice", 0))
         b = _safe_float(row.get("bid", 0))
         a = _safe_float(row.get("ask", 0))
+        mid = round((b + a) / 2.0, 2) if b > 0 and a > 0 else lp
+        spr = (a - b) if b > 0 and a > 0 else 0.0
         v = _safe_int(row.get("volume", 0))
         oi = _safe_int(row.get("openInterest", 0))
         iv = _safe_float(row.get("impliedVolatility", 0))
+        voi = (v / oi) if oi > 0 else 0.0
         itm = ""
         if current_price:
-            if side == "calls" and s < current_price: itm = " opt-itm"
-            if side == "puts" and s > current_price: itm = " opt-itm"
-        hv = " opt-hvol" if v > 0 and oi > 0 and v / max(oi, 1) > 0.5 else ""
+            if side == "calls" and s < current_price:
+                itm = " opt-itm"
+            if side == "puts" and s > current_price:
+                itm = " opt-itm"
+        hv = " opt-hvol" if oi > 0 and v / max(oi, 1) >= 1.0 else ""
         atm_style = ""
         if atm_strike is not None and abs(s - atm_strike) < 0.01:
             atm_style = ' style="background:rgba(255,102,0,0.18);border-left:3px solid #FF6600"'
-        rows += (f'<tr class="{itm}"{atm_style}><td style="color:{strike_color};font-weight:600;text-align:left">{s:.2f}</td>'
-                 f'<td>{lp:.2f}</td><td>{b:.2f}</td><td>{a:.2f}</td>'
-                 f'<td class="{hv}">{v:,}</td><td>{oi:,}</td><td>{iv:.1%}</td></tr>')
-    return (f'<table class="opt-tbl"><thead><tr>'
-            f'<th>Strike</th><th>Last</th><th>Bid</th><th>Ask</th>'
-            f'<th>Volume</th><th>OI</th><th>IV</th></tr></thead><tbody>{rows}</tbody></table>')
+        rows += (
+            f'<tr class="{itm}"{atm_style}>'
+            f'<td style="color:{strike_color};font-weight:600;text-align:left">{s:.2f}</td>'
+            f'<td>{lp:.2f}</td><td>{b:.2f}</td><td>{a:.2f}</td>'
+            f'<td style="color:#CCC">{mid:.2f}</td>'
+            f'<td style="color:#666">{spr:.2f}</td>'
+            f'<td class="{hv}">{v:,}</td><td>{oi:,}</td>'
+            f'<td style="color:#BB88FF">{voi:.2f}</td>'
+            f'<td>{iv:.1%}</td></tr>'
+        )
+    return (
+        f'<table class="opt-tbl"><thead><tr>'
+        f'<th>Strike</th><th>Last</th><th>Bid</th><th>Ask</th>'
+        f'<th>Mid</th><th>Spr</th><th>Vol</th><th>OI</th><th>V/OI</th><th>IV</th>'
+        f'</tr></thead><tbody>{rows}</tbody></table>'
+    )
 
 
 def render_scored_options(contracts, side="calls"):
@@ -1088,11 +1272,12 @@ SENTINEL BRIEFING — {EXACT DATE FROM INJECTION} {TIME PST}
 - MEMORY: If PERSISTENT MEMORY is injected, reference it naturally. Acknowledge returning themes or positions. Track evolution of previously discussed theses.
 - Plain-English questions get the same analytical rigor without the slash-command structure — but still follow the quantification, contradiction, and second-order rules."""
 
+# Prefer currently available Gemini models; fall through on 404/quota
 GEMINI_MODELS = [
-    "gemini-3.1-pro",
-    "gemini-3.0-flash",
-    "gemini-3-flash",
     "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-2.5-pro",
+    "gemini-1.5-flash",
 ]
 
 def format_gemini_msg(raw: str) -> str:
@@ -1186,15 +1371,19 @@ def gemini_response(user_msg, history, context=""):
         yield f"⚠️ Error: {e}"
 
 
-def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05):
-    """Renders the Gamma Exposure (GEX) Plotly SPX candlestick chart with GEX levels.
+def render_0dte_gex_chart(gex, gf_spy, mp_spy, spot_spx=None, display_pct=0.05, spx_spy_ratio=None):
+    """GEX walls overlaid on SPX intraday candles.
+
+    *gex* keys are SPY strikes; scaled to SPX via live ratio (default ~10).
     """
     import yfinance as yf
     import pandas as pd
-    if not gex or go is None: return None
+    if not gex or go is None:
+        return None
 
-    call_gex = [(k*10, v) for k, v in gex.items() if v > 0]
-    put_gex = [(k*10, v) for k, v in gex.items() if v < 0]
+    ratio = float(spx_spy_ratio) if spx_spy_ratio and spx_spy_ratio > 0 else 10.0
+    call_gex = [(k * ratio, v) for k, v in gex.items() if v > 0]
+    put_gex = [(k * ratio, v) for k, v in gex.items() if v < 0]
     
     call_gex.sort(key=lambda x: x[1], reverse=True)
     put_gex.sort(key=lambda x: abs(x[1]), reverse=True)
@@ -1628,11 +1817,30 @@ def render_crypto_etf_chart(df, height=420, is_estimated=False):
     return fig
 
 
+def _secret_str(val) -> str:
+    """Central secret extractor — SecretStr, plain str, or empty."""
+    if val is None:
+        return ""
+    if hasattr(val, "get_secret_value"):
+        try:
+            return (val.get_secret_value() or "").strip()
+        except Exception:
+            return ""
+    return str(val).strip() if val else ""
+
+
+@st.cache_resource
+def _load_globe_html_template() -> str:
+    """Read globe.html once per process — avoids disk I/O on every GEO visit."""
+    import pathlib as _pathlib
+    path = _pathlib.Path(__file__).parent / "globe.html"
+    return path.read_text(encoding="utf-8")
+
+
 def render_geo_tab():
     """
-    Full Geo Tab — renders on-demand when the user visits the GEO tab.
-    Data is fetched fresh each time the tab is opened (cache TTLs on
-    individual fetchers prevent hammering APIs on rapid tab switches).
+    Full Geo Tab — only runs when GEO page is selected (lazy nav).
+    Fetches are parallelized; individual @st.cache_data TTLs prevent API spam.
 
     Sections:
       1. 3D Globe (globe.html — military air / satellites / conflict events / infra)
@@ -1640,7 +1848,8 @@ def render_geo_tab():
       3. GDELT theater intel feed + commodity/currency impact radar
     """
     import streamlit.components.v1 as _components
-    import pathlib as _pathlib
+    import base64 as _b64
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     st.markdown(
         '<div class="bb-ph">🌍 GEOPOLITICAL INTELLIGENCE — LIVE GLOBE + SURVEILLANCE MATRIX</div>',
@@ -1648,36 +1857,61 @@ def render_geo_tab():
     )
     st.markdown(
         '<div style="color:#555;font-family:monospace;font-size:10px;margin-bottom:6px">'
-        'Refreshes on tab visit · Data cached 5 min · Toggle networks below'
+        'Cached 5 min · Toggle layers on globe · Quality presets bottom-right'
         '</div>',
         unsafe_allow_html=True,
     )
 
     st.markdown(
-        '<div class="bb-ph">🌐 3D INTELLIGENCE GLOBE — CESIUMJS · SATELLITE TILES · INFRASTRUCTURE</div>',
+        '<div class="bb-ph">🌐 3D INTELLIGENCE GLOBE — CESIUMJS</div>',
         unsafe_allow_html=True,
     )
     st.markdown(
         '<div style="color:#555;font-family:monospace;font-size:10px;margin-bottom:6px">'
-        'Click countries for intel · Toggle layers left panel · Scroll to zoom to building level · ⚙ Quality presets bottom-right'
+        'Click countries for intel · Toggle layers left · Scroll to zoom · ⚙ Quality presets'
         '</div>',
         unsafe_allow_html=True,
     )
 
     with st.spinner("Loading geo intelligence feeds…"):
-        _geo_events  = fetch_conflict_events_json()
-        _geo_planes  = fetch_military_aircraft_json()
-        _geo_sats    = fetch_satellite_positions_json()
-        _geo_vessels = fetch_ais_vessels()
-        _geo_infra   = GEO_SHIPPING_LANES
+        # Parallel fetch — sequential was the cold-start stall
+        _geo_events, _geo_planes, _geo_sats, _geo_vessels = [], [], [], []
+        _jobs = {
+            "events": fetch_conflict_events_json,
+            "planes": fetch_military_aircraft_json,
+            "sats": fetch_satellite_positions_json,
+            "vessels": fetch_ais_vessels,
+        }
+        _results = {}
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futs = {pool.submit(fn): key for key, fn in _jobs.items()}
+            for fut in as_completed(futs):
+                key = futs[fut]
+                try:
+                    _results[key] = fut.result() or []
+                except Exception:
+                    _results[key] = []
+        _geo_events = _results.get("events") or []
+        _geo_planes = _results.get("planes") or []
+        _geo_sats = _results.get("sats") or []
+        _geo_vessels = _results.get("vessels") or []
+        _geo_infra = GEO_SHIPPING_LANES
 
-    gemini_key = getattr(st.session_state, "gemini_key", None) or ""
+    gemini_key = _secret_str(st.session_state.get("gemini_key"))
     if gemini_key:
-        ai_events = fetch_ai_hotspots_json(gemini_key)
-        if ai_events:
-            _geo_events = list(_geo_events) + ai_events
+        try:
+            ai_events = fetch_ai_hotspots_json(gemini_key)
+            if ai_events:
+                _geo_events = list(_geo_events) + ai_events
+        except Exception:
+            pass
 
-    import base64 as _b64
+    # Cap payload size injected into iframe (keeps HTML embed snappy)
+    _geo_planes = _geo_planes[:400] if isinstance(_geo_planes, list) else []
+    _geo_sats = _geo_sats[:80] if isinstance(_geo_sats, list) else []
+    _geo_vessels = _geo_vessels[:500] if isinstance(_geo_vessels, list) else []
+    _geo_events = _geo_events[:300] if isinstance(_geo_events, list) else []
+
     _sentinel_data_json = json.dumps({
         "events":  _geo_events,
         "planes":  _geo_planes,
@@ -1687,11 +1921,7 @@ def render_geo_tab():
     }, default=str, ensure_ascii=True)
     _sentinel_b64 = _b64.b64encode(_sentinel_data_json.encode('utf-8')).decode('ascii')
 
-    _cesium_token = ""
-    try:
-        _cesium_token = st.session_state.cesium_ion_token.get_secret_value()
-    except Exception:
-        pass
+    _cesium_token = _secret_str(st.session_state.get("cesium_ion_token"))
     _cesium_inject = ""
     if _cesium_token:
         _cesium_b64 = _b64.b64encode(_cesium_token.encode('utf-8')).decode('ascii')
@@ -1701,9 +1931,8 @@ def render_geo_tab():
         f'<script>{_cesium_inject}window.__SENTINEL_DATA__ = JSON.parse(atob("{_sentinel_b64}"));</script>\n'
     )
 
-    globe_path = _pathlib.Path(__file__).parent / "globe.html"
     try:
-        globe_html = globe_path.read_text(encoding="utf-8")
+        globe_html = _load_globe_html_template()
         if '<head>' in globe_html:
             globe_html = globe_html.replace('<head>', '<head>\n' + _inject_script, 1)
         else:
@@ -1711,6 +1940,8 @@ def render_geo_tab():
         _components.html(globe_html, height=850, scrolling=False)
     except FileNotFoundError:
         st.error("⚠️ globe.html not found — place it in the same directory as ui_components.py.")
+    except Exception as exc:
+        st.error(f"⚠️ Globe failed to load: {exc}")
 
     st.markdown('<hr class="bb-divider">', unsafe_allow_html=True)
 

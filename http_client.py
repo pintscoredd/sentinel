@@ -415,13 +415,78 @@ def _esc(t) -> str:
     )
 
 
-def fmt_p(p) -> str:
-    """Format price — 2 decimal places always."""
+# Index / rate tickers: no currency prefix (Bloomberg-style bare quotes)
+_INDEX_LIKE = frozenset({
+    "^GSPC", "^DJI", "^IXIC", "^RUT", "^VIX", "^TNX", "^TYX", "^FVX", "^IRX",
+    "^GSPTSE", "^BVSP", "^FTSE", "^GDAXI", "^FCHI", "^STOXX50E", "^N225",
+    "^HSI", "^KS11", "^AXJO", "^BSESN", "^AEX", "^TA125.TA", "000001.SS",
+    "DX-Y.NYB", "DX=F",
+})
+
+
+def _is_index_ticker(ticker: str | None) -> bool:
+    if not ticker:
+        return False
+    t = str(ticker).upper().strip()
+    if t in _INDEX_LIKE or t.startswith("^"):
+        return True
+    # Yields quoted as percent levels
+    if t in {"^TNX", "^TYX", "^FVX", "^IRX"}:
+        return True
+    return False
+
+
+def fmt_p(p, ticker: str | None = None) -> str:
+    """Format price. Indices/yields omit '$'; micro-prices get more decimals."""
     if p is None or (isinstance(p, float) and math.isnan(p)):
         return "—"
-    if p < 0.01:
+    try:
+        p = float(p)
+    except (TypeError, ValueError):
+        return "—"
+    if math.isinf(p):
+        return "—"
+    if _is_index_ticker(ticker):
+        if abs(p) >= 1000:
+            return f"{p:,.2f}"
+        if abs(p) >= 10:
+            return f"{p:,.2f}"
+        return f"{p:.3f}"
+    if abs(p) < 0.01 and p != 0:
         return f"${p:.6f}"
+    if abs(p) < 1:
+        return f"${p:.4f}"
     return f"${p:,.2f}"
+
+
+def fmt_num(p, decimals: int = 2) -> str:
+    """Bare number with thousands separators (levels, counts, yields)."""
+    if p is None or (isinstance(p, float) and (math.isnan(p) or math.isinf(p))):
+        return "—"
+    try:
+        p = float(p)
+    except (TypeError, ValueError):
+        return "—"
+    return f"{p:,.{decimals}f}"
+
+
+def fmt_vol(v) -> str:
+    """Compact volume: 1.2B / 45.3M / 120.5K."""
+    if v is None:
+        return "—"
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return "—"
+    if math.isnan(v) or v < 0:
+        return "—"
+    if v >= 1e9:
+        return f"{v / 1e9:.2f}B"
+    if v >= 1e6:
+        return f"{v / 1e6:.1f}M"
+    if v >= 1e3:
+        return f"{v / 1e3:.1f}K"
+    return f"{int(v)}"
 
 
 def fmt_pct(p) -> str:
@@ -434,7 +499,11 @@ def fmt_pct(p) -> str:
 def pct_color(v) -> str:
     if v is None or (isinstance(v, float) and math.isnan(v)):
         return "#888888"
-    return "#00CC44" if v >= 0 else "#FF4444"
+    if v > 0:
+        return "#00CC44"
+    if v < 0:
+        return "#FF4444"
+    return "#888888"
 
 
 def _is_english(text: str) -> bool:

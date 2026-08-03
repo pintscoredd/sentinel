@@ -54,37 +54,44 @@ from http_client import (
     _enforce_api_rate_limit, _sanitize_error, get_circuit_breaker_states,
     _do_fetch_robust_json, _fetch_robust_json, _get_persistent_loop, run_async,
     get_yf_ticker, get_ticker_cache_stats, _yf_semaphore,
-    _safe_float, _safe_int, _esc, fmt_p, fmt_pct, pct_color, _is_english,
+    _safe_float, _safe_int, _esc, fmt_p, fmt_pct, fmt_vol, fmt_num, pct_color, _is_english,
 )
 
 
+@st.cache_resource
+def _nyse_calendar():
+    """Load NYSE calendar once per process — mcal.get_calendar is expensive."""
+    return mcal.get_calendar("NYSE")
+
+
+@st.cache_data(ttl=30)
 def is_market_open():
-    """Check US equity market status using accurate NYSE calendar schedules."""
+    """US equity session status (NYSE calendar). Cached 30s — was ~0.5–2.5s uncached."""
     try:
-        ET = pytz.timezone("US/Eastern")
+        ET = TZ_EASTERN
         now = datetime.now(ET)
-        
-        nyse = mcal.get_calendar('NYSE')
-        schedule = nyse.schedule(start_date=now.date(), end_date=now.date())
-        
+        day = now.date()
+
+        nyse = _nyse_calendar()
+        schedule = nyse.schedule(start_date=day, end_date=day)
+
         if schedule.empty:
             wd = now.weekday()
             if wd == 6 and now.time() >= dtime(18, 0):
                 return "FUTURES OPEN", "#FF8C00", "US Equities Closed, Futures Live"
             return "CLOSED", "#FF4444", "Weekend / Holiday"
-        
-        market_open = schedule.iloc[0]['market_open'].astimezone(ET).time()
-        market_close = schedule.iloc[0]['market_close'].astimezone(ET).time()
-        
+
+        market_open = schedule.iloc[0]["market_open"].astimezone(ET).time()
+        market_close = schedule.iloc[0]["market_close"].astimezone(ET).time()
+
         t = now.time()
         if market_open <= t <= market_close:
             return "OPEN", "#00CC44", "Regular Hours"
-        elif dtime(4, 0) <= t < market_open:
+        if dtime(4, 0) <= t < market_open:
             return "PRE-MARKET", "#FF8C00", "Pre-Market"
-        elif market_close < t <= dtime(20, 0):
+        if market_close < t <= dtime(20, 0):
             return "AFTER-HOURS", "#FF8C00", "After-Hours"
-        else:
-            return "CLOSED", "#FF4444", "Markets Closed"
+        return "CLOSED", "#FF4444", "Markets Closed"
     except Exception as e:
         logger.error("is_market_open fallback: %s", e)
         return "UNKNOWN", "#555555", "Status Unknown"
@@ -97,63 +104,281 @@ def is_0dte_market_open():
     return False, f"Market {status}"
 
 
+_TICKER_ALIASES = {"DXY": "DX-Y.NYB", "$DXY": "DX-Y.NYB"}
+_YIELD_TICKERS = frozenset({"^TNX", "^TYX", "^FVX", "^IRX", "^VIX"})
+
+
+def _resolve_ticker(ticker: str) -> tuple[str, str]:
+    """Return (display_key, yfinance_symbol)."""
+    raw = (ticker or "").strip()
+    if not raw:
+        return "", ""
+    up = raw.upper()
+    yf_sym = _TICKER_ALIASES.get(up, _TICKER_ALIASES.get(raw, raw))
+    return raw, yf_sym
+
+
+def _quote_decimals(yf_sym: str, price: float) -> int:
+    if yf_sym in _YIELD_TICKERS or (yf_sym.startswith("^") and yf_sym in _YIELD_TICKERS):
+        return 3
+    if abs(price) < 1 and not yf_sym.startswith("^"):
+        return 4
+    return 2
+
+
+def _build_quote(display: str, yf_sym: str, price, prev, vol=0,
+                 day_open=None, day_high=None, day_low=None):
+    """Assemble standard quote dict from raw levels."""
+    if price is None or not math.isfinite(float(price)):
+        return None
+    price = float(price)
+    if prev is None or not math.isfinite(float(prev)) or float(prev) == 0:
+        prev = price
+    else:
+        prev = float(prev)
+    chg = price - prev
+    pct = (chg / prev * 100.0) if prev else 0.0
+    d = _quote_decimals(yf_sym, price)
+    out = {
+        "ticker": display or yf_sym,
+        "price": round(price, d),
+        "change": round(chg, d),
+        "pct": round(pct, 2),
+        "volume": int(vol or 0),
+        "prev_close": round(prev, d),
+    }
+    if day_open is not None and math.isfinite(float(day_open)):
+        out["open"] = round(float(day_open), d)
+    if day_high is not None and math.isfinite(float(day_high)):
+        out["high"] = round(float(day_high), d)
+    if day_low is not None and math.isfinite(float(day_low)):
+        out["low"] = round(float(day_low), d)
+    return out
+
+
+def _extract_ohlcv_frames(data: "pd.DataFrame", symbols: list[str]):
+    """Normalize yf.download MultiIndex into {sym: {Close,Volume,Open,High,Low} Series}.
+
+    Handles both group_by='column' (field, ticker) and group_by='ticker' layouts.
+    """
+    out = {}
+    if data is None or getattr(data, "empty", True):
+        return out
+
+    if not isinstance(data.columns, pd.MultiIndex):
+        # Single-ticker flat frame
+        sym = symbols[0] if symbols else "TICKER"
+        out[sym] = data
+        return out
+
+    level0 = [str(x) for x in data.columns.get_level_values(0)]
+    level1 = [str(x) for x in data.columns.get_level_values(1)]
+    # Heuristic: if level0 has OHLCV names → group_by column
+    ohlcv = {"Open", "High", "Low", "Close", "Adj Close", "Volume"}
+    if any(x in ohlcv for x in level0):
+        for sym in symbols:
+            try:
+                if "Close" in data.columns.get_level_values(0):
+                    # (field, ticker)
+                    cols = {}
+                    for field in ("Open", "High", "Low", "Close", "Volume"):
+                        if (field, sym) in data.columns:
+                            cols[field] = data[(field, sym)]
+                        elif field == "Close" and ("Adj Close", sym) in data.columns:
+                            cols["Close"] = data[("Adj Close", sym)]
+                    if "Close" in cols:
+                        out[sym] = pd.DataFrame(cols)
+            except Exception:
+                continue
+        # Also try matching by level1 unique tickers when symbols differ slightly
+        if not out:
+            tickers = data.columns.get_level_values(1).unique()
+            for sym in tickers:
+                try:
+                    frame = data.xs(sym, axis=1, level=1, drop_level=True)
+                    if "Close" in frame.columns or "Adj Close" in frame.columns:
+                        out[str(sym)] = frame
+                except Exception:
+                    continue
+    else:
+        # group_by ticker: (ticker, field)
+        for sym in symbols:
+            try:
+                if sym in data.columns.get_level_values(0):
+                    frame = data[sym]
+                    if isinstance(frame, pd.Series):
+                        continue
+                    out[sym] = frame
+            except Exception:
+                continue
+    return out
+
+
+def _quotes_from_batch_download(tickers: list[str]) -> dict[str, dict]:
+    """One yf.download for many tickers → {display_ticker: quote_dict}.
+
+    This is the main latency win vs N × Ticker.history calls.
+    """
+    if not tickers or yf is None:
+        return {}
+
+    # Map display → yf symbol (unique yf symbols for download)
+    display_to_yf = {}
+    yf_to_displays = {}
+    for t in tickers:
+        disp, yf_sym = _resolve_ticker(t)
+        if not yf_sym:
+            continue
+        display_to_yf[disp] = yf_sym
+        yf_to_displays.setdefault(yf_sym, []).append(disp)
+
+    yf_syms = list(yf_to_displays.keys())
+    if not yf_syms:
+        return {}
+
+    try:
+        with _yf_semaphore:
+            data = yf.download(
+                yf_syms if len(yf_syms) > 1 else yf_syms[0],
+                period="5d",
+                progress=False,
+                threads=True,
+                auto_adjust=True,
+                group_by="column",
+                timeout=15,
+            )
+    except TypeError:
+        # older yfinance without timeout=
+        try:
+            with _yf_semaphore:
+                data = yf.download(
+                    yf_syms if len(yf_syms) > 1 else yf_syms[0],
+                    period="5d",
+                    progress=False,
+                    threads=True,
+                    auto_adjust=True,
+                    group_by="column",
+                )
+        except Exception as e:
+            logger.debug("batch download failed: %s", e)
+            return {}
+    except Exception as e:
+        logger.debug("batch download failed: %s", e)
+        return {}
+
+    frames = _extract_ohlcv_frames(data, yf_syms)
+    # Single-ticker download returns flat columns
+    if len(yf_syms) == 1 and not frames:
+        if data is not None and not getattr(data, "empty", True):
+            frames[yf_syms[0]] = data
+
+    results = {}
+    for yf_sym, displays in yf_to_displays.items():
+        frame = frames.get(yf_sym)
+        if frame is None:
+            # try case-insensitive key match
+            for k, v in frames.items():
+                if str(k).upper() == yf_sym.upper():
+                    frame = v
+                    break
+        if frame is None or getattr(frame, "empty", True):
+            continue
+        try:
+            close_col = "Close" if "Close" in frame.columns else (
+                "Adj Close" if "Adj Close" in frame.columns else None
+            )
+            if close_col is None:
+                continue
+            closes = frame[close_col].dropna()
+            if len(closes) < 1:
+                continue
+            price = float(closes.iloc[-1])
+            prev = float(closes.iloc[-2]) if len(closes) > 1 else price
+            vol = 0
+            if "Volume" in frame.columns:
+                try:
+                    vol = int(_safe_float(frame["Volume"].dropna().iloc[-1], 0))
+                except Exception:
+                    vol = 0
+            o = h = l = None
+            if "Open" in frame.columns:
+                try:
+                    o = float(frame["Open"].dropna().iloc[-1])
+                except Exception:
+                    pass
+            if "High" in frame.columns:
+                try:
+                    h = float(frame["High"].dropna().iloc[-1])
+                except Exception:
+                    pass
+            if "Low" in frame.columns:
+                try:
+                    l = float(frame["Low"].dropna().iloc[-1])
+                except Exception:
+                    pass
+            for disp in displays:
+                q = _build_quote(disp, yf_sym, price, prev, vol, o, h, l)
+                if q:
+                    results[disp] = q
+        except Exception as e:
+            logger.debug("batch parse %s: %s", yf_sym, e)
+            continue
+    return results
+
+
 @st.cache_data(ttl=60)
 def yahoo_quote(ticker: str):
-    TICKER_MAP = {"DXY": "DX-Y.NYB", "$DXY": "DX-Y.NYB"}
-    raw = (ticker or "").strip()
-    t = TICKER_MAP.get(raw.upper(), TICKER_MAP.get(raw, raw))
+    """Single-ticker quote. Prefer 5d history only (1 network call); fast_info fallback.
+
+    Day change uses prior bar close (session proxy). For bulk, use multi_quotes.
+    """
+    disp, yf_sym = _resolve_ticker(ticker)
+    if not yf_sym:
+        return None
     try:
-        tk = get_yf_ticker(t)
+        # Fast path: tiny history window — one HTTP round-trip
+        tk = get_yf_ticker(yf_sym)
         if tk is None:
             return None
-
-        price = None
-        prev = None
-        vol = 0
-
         try:
-            h = tk.history(period="5d")
-            if not h.empty:
+            h = tk.history(period="5d", auto_adjust=True)
+            if h is not None and not h.empty:
                 price = float(h["Close"].iloc[-1])
                 prev = float(h["Close"].iloc[-2]) if len(h) > 1 else price
-                vol = int(h["Volume"].iloc[-1])
+                vol = int(_safe_float(h["Volume"].iloc[-1], 0)) if "Volume" in h.columns else 0
+                o = float(h["Open"].iloc[-1]) if "Open" in h.columns else None
+                hi = float(h["High"].iloc[-1]) if "High" in h.columns else None
+                lo = float(h["Low"].iloc[-1]) if "Low" in h.columns else None
+                return _build_quote(disp, yf_sym, price, prev, vol, o, hi, lo)
         except Exception as e:
-            logger.debug(f"yahoo_quote history error for {ticker}: {e}")
+            logger.debug("yahoo_quote history %s: %s", ticker, e)
 
-        if price is None:
-            try:
-                fi = tk.fast_info
-                price = getattr(fi, "last_price", None)
-                prev = getattr(fi, "previous_close", None)
-                vol = int(getattr(fi, "three_month_average_volume", 0) or 0)
-            except Exception:
-                pass
-
-        if price is None:
+        # Fallback: fast_info only if history failed
+        try:
+            fi = tk.fast_info
+            price = _safe_float(getattr(fi, "last_price", None), None)
+            prev = _safe_float(getattr(fi, "previous_close", None), None)
+            vol = int(_safe_float(
+                getattr(fi, "last_volume", 0) or getattr(fi, "three_month_average_volume", 0), 0
+            ))
+            return _build_quote(
+                disp, yf_sym, price, prev, vol,
+                _safe_float(getattr(fi, "open", None), None),
+                _safe_float(getattr(fi, "day_high", None), None),
+                _safe_float(getattr(fi, "day_low", None), None),
+            )
+        except Exception:
             return None
-        if prev is None or prev == 0:
-            prev = price
-
-        price = float(price)
-        prev = float(prev)
-        chg = price - prev
-        pct = chg / prev * 100 if prev else 0.0
-
-        return {
-            "ticker": raw or t,
-            "price": round(price, 2),
-            "change": round(chg, 2),
-            "pct": round(pct, 2),
-            "volume": vol,
-        }
     except Exception as exc:
-        logger.debug(f"yahoo_quote failed for {ticker}: {exc}")
+        logger.debug("yahoo_quote failed for %s: %s", ticker, exc)
         return None
+
 
 from options_math import (
     bs_price, _get_iv_brentq_fallback, bs_greeks_vectorized,
     compute_max_pain, compute_pcr,
     get_iv_explicit, get_iv_brentq, get_iv_newton, bs_greeks_engine,
+    year_fraction_to_expiry, realized_volatility, rsi as wilder_rsi, macd as macd_line,
 )
 
 def fred_series(series_id, key, limit=36):
@@ -193,9 +418,11 @@ def get_risk_free_rate(fred_key=None):
     return DEFAULT_RISK_FREE_RATE
 
 async def _fetch_yahoo_quotes_async(tickers):
+    """Legacy async path — prefer multi_quotes batch download instead."""
     loop = asyncio.get_running_loop()
     tasks = [loop.run_in_executor(None, yahoo_quote, tkr) for tkr in tickers]
     return await asyncio.gather(*tasks, return_exceptions=True)
+
 
 @st.cache_data(ttl=120)
 def get_futures():
@@ -203,22 +430,34 @@ def get_futures():
         ("ES=F", "S&P 500 Futures"), ("NQ=F", "Nasdaq 100 Futures"), ("YM=F", "Dow Jones Futures"),
         ("RTY=F", "Russell 2000 Futures"), ("ZN=F", "10-Year Treasury Bond"), ("CL=F", "WTI Crude Oil"),
         ("GC=F", "Gold Futures"), ("SI=F", "Silver Futures"), ("NG=F", "Natural Gas"),
-        ("ZW=F", "Wheat Futures"), ("ZC=F", "Corn Futures"), ("DX=F", "US Dollar Index"),
+        ("ZW=F", "Wheat Futures"), ("ZC=F", "Corn Futures"), ("DX-Y.NYB", "US Dollar Index"),
     ]
     rows = []
     try:
         tickers = [t[0] for t in FUTURES]
-        results = run_async(_fetch_yahoo_quotes_async(tickers))
-        for (ticker, name), q in zip(FUTURES, results):
-            if isinstance(q, dict) and q:
-                rows.append({"ticker": ticker, "name": name, "price": q["price"],
-                             "change": q["change"], "pct": q["pct"]})
+        batch = _quotes_from_batch_download(tickers)
+        missing = [t for t in tickers if t not in batch]
+        if missing:
+            # sparse fallback for symbols batch missed
+            for t in missing:
+                q = yahoo_quote(t)
+                if q:
+                    batch[t] = q
+        for ticker, name in FUTURES:
+            q = batch.get(ticker)
+            if q:
+                rows.append({
+                    "ticker": ticker, "name": name,
+                    "price": q["price"], "change": q["change"], "pct": q["pct"],
+                })
     except Exception as e:
-        logger.debug(f"Error caught: {e}")
+        logger.debug("get_futures error: %s", e)
     return rows
+
 
 @st.cache_data(ttl=900)
 def get_heatmap_data():
+    """Sector heatmap via one bulk download. Size = dollar volume (no N× mcap calls)."""
     SECTOR_STOCKS = {
         "Technology": ["AAPL", "MSFT", "NVDA", "AVGO", "ORCL", "AMD", "INTC", "QCOM", "TXN", "ADBE", "CRM", "INTU", "IBM", "ACN"],
         "Healthcare": ["UNH", "JNJ", "LLY", "ABBV", "MRK", "TMO", "ABT", "PFE", "DHR", "BMY", "ISRG", "GILD", "MDT", "CVS", "CI"],
@@ -233,70 +472,86 @@ def get_heatmap_data():
         "Real Estate": ["PLD", "AMT", "CCI", "EQIX", "PSA", "SPG", "WELL", "O", "DLR", "AVB"],
     }
     flat_jobs = [(sector, tkr) for sector, tickers in SECTOR_STOCKS.items() for tkr in tickers]
-    tickers = [tkr for _, tkr in flat_jobs]
-    
+    tickers = list({tkr for _, tkr in flat_jobs})
+
     try:
-        data = yf.download(list(set(tickers)), period="5d", progress=False, threads=True, auto_adjust=True)
+        with _yf_semaphore:
+            data = yf.download(
+                tickers, period="5d", progress=False, threads=True, auto_adjust=True,
+                group_by="column",
+            )
+        if data is None or getattr(data, "empty", True):
+            return []
+
         if isinstance(data.columns, pd.MultiIndex):
-            closes = data["Close"] if "Close" in data.columns.get_level_values(0) else data.xs("Close", axis=1, level=0, drop_level=True)
+            if "Close" in data.columns.get_level_values(0):
+                closes = data["Close"]
+            else:
+                closes = data.xs("Close", axis=1, level=0, drop_level=True)
+            if "Volume" in data.columns.get_level_values(0):
+                volumes = data["Volume"]
+            else:
+                volumes = None
         else:
             closes = data["Close"] if "Close" in data.columns else data
-
-        mcaps = {}
-        import concurrent.futures
-        def _get_mcap(tk_sym):
-            try:
-                tk = get_yf_ticker(tk_sym)
-                if tk:
-                    cap = getattr(tk.fast_info, "market_cap", None)
-                    if cap and cap > 0:
-                        return tk_sym, cap
-            except Exception:
-                pass
-            return tk_sym, None
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            futures = [executor.submit(_get_mcap, t) for t in tickers]
-            for fut in concurrent.futures.as_completed(futures):
-                t_sym, cap = fut.result()
-                if cap is not None and cap > 0:
-                    mcaps[t_sym] = cap
+            volumes = data["Volume"] if "Volume" in data.columns else None
 
         rows = []
         for sector, tkr in flat_jobs:
-            if tkr in closes.columns:
-                hist = closes[tkr].dropna()
-                if len(hist) < 2: continue
-                price = float(hist.iloc[-1])
-                prev = float(hist.iloc[-2])
-                chg = price - prev
-                pct = (chg / prev) * 100 if prev else 0.0
-                mcap = mcaps.get(tkr)
-                if mcap is None:
-                    continue
-                rows.append({"ticker": tkr, "sector": sector, "pct": pct, "price": price, "change": chg, "market_cap": float(mcap)})
+            if tkr not in closes.columns:
+                continue
+            hist = closes[tkr].dropna()
+            if len(hist) < 2:
+                continue
+            price = float(hist.iloc[-1])
+            prev = float(hist.iloc[-2])
+            chg = price - prev
+            pct = (chg / prev) * 100 if prev else 0.0
+            # Dollar volume as bubble size — free from same download (no mcap storm)
+            vol = 0.0
+            if volumes is not None and tkr in volumes.columns:
+                try:
+                    vol = float(volumes[tkr].dropna().iloc[-1])
+                except Exception:
+                    vol = 0.0
+            mcap_proxy = max(price * vol, abs(price) * 1e6)  # floor so tiny names still show
+            rows.append({
+                "ticker": tkr, "sector": sector, "pct": pct, "price": price,
+                "change": chg, "market_cap": mcap_proxy,
+            })
         return rows
     except Exception as e:
         logger.error("Heatmap Fetch Error: %s", e)
         return []
 
+
 @st.cache_data(ttl=60)
 def multi_quotes(tickers):
-    """Fetch quotes for multiple tickers using async batching."""
+    """Batch-fetch quotes in one yf.download (N symbols → 1 HTTP), not N histories."""
+    if not tickers:
+        return []
     seen = set()
     unique = []
     for t in tickers:
-        if t not in seen:
+        if t and t not in seen:
             seen.add(t)
             unique.append(t)
-    tickers = tuple(unique)
+
     try:
-        results = run_async(_fetch_yahoo_quotes_async(tickers))
-        return [q for q in results if isinstance(q, dict) and q]
+        batch = _quotes_from_batch_download(unique)
+        # Fill any gaps with single-ticker path (rare)
+        if len(batch) < len(unique):
+            for t in unique:
+                if t not in batch:
+                    q = yahoo_quote(t)
+                    if q:
+                        batch[t] = q
+        # Preserve request order
+        return [batch[t] for t in unique if t in batch]
     except Exception as e:
-        logger.error(f"multi_quotes async failed, falling back to sequential: {e}")
+        logger.error("multi_quotes batch failed, sequential fallback: %s", e)
         ret = []
-        for t in tickers:
+        for t in unique:
             res = yahoo_quote(t)
             if res:
                 ret.append(res)
@@ -400,11 +655,13 @@ def options_chain(ticker, expiry=None):
 
 
 def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=None, fred_key=None):
-    import pandas as pd
+    """Score near-ATM options. Numpy path — avoids pandas setitem/to_dict churn."""
     result = {"top_calls": [], "top_puts": [], "unusual": None}
     if calls_df is None or puts_df is None:
         return result
-    if calls_df.empty and puts_df.empty:
+    empty_c = getattr(calls_df, "empty", True)
+    empty_p = getattr(puts_df, "empty", True)
+    if empty_c and empty_p:
         return result
 
     w1, w2, w3 = 0.40, 0.30, 0.30
@@ -413,104 +670,111 @@ def score_options_chain(calls_df, puts_df, current_price, vix=None, expiry_date=
         w3 += 0.15; w1 -= 0.075; w2 -= 0.075
     elif vix_val < 15:
         w1 += 0.15; w2 -= 0.075; w3 -= 0.075
-
-    w1 = max(w1, 0)
-    w2 = max(w2, 0)
-    w3 = max(w3, 0)
+    w1, w2, w3 = max(w1, 0), max(w2, 0), max(w3, 0)
     if abs(w1 + w2 + w3 - 1.0) > 1e-6:
         w1, w2, w3 = 0.40, 0.30, 0.30
 
     if expiry_date is not None:
         try:
-            exp_dt = datetime.strptime(str(expiry_date), "%Y-%m-%d")
-            dte = max((exp_dt.date() - datetime.today().date()).days, 0)
-            T_approx = max(dte / 365.0, 1 / 365.0)
+            T_approx = year_fraction_to_expiry(str(expiry_date)[:10])
         except Exception:
             T_approx = 14 / 365.0
     else:
         T_approx = 14 / 365.0
     r_risk_free = get_risk_free_rate(fred_key)
+    spot = float(current_price) if current_price else 0.0
+
+    def _col(df, name, default=0.0):
+        if df is None or name not in df.columns:
+            return None
+        return pd.to_numeric(df[name], errors="coerce").fillna(default).to_numpy(dtype=np.float64)
 
     def _score_side(df, side):
-        if df is None or df.empty:
+        if df is None or getattr(df, "empty", True):
             return []
-        df = df.copy()
-        for col in ["strike", "volume", "openInterest", "impliedVolatility"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-
-        if current_price and "strike" in df.columns and len(df) > 30:
-            df["_dist"] = (df["strike"] - current_price).abs()
-            df = df.nsmallest(30, "_dist").drop(columns=["_dist"])
-
-        if df.empty:
+        strike = _col(df, "strike")
+        if strike is None or strike.size == 0:
             return []
+        volume = _col(df, "volume")
+        oi = _col(df, "openInterest")
+        iv = _col(df, "impliedVolatility")
+        last = _col(df, "lastPrice")
+        bid = _col(df, "bid")
+        ask = _col(df, "ask")
+        n = strike.size
+        if volume is None:
+            volume = np.zeros(n)
+        if oi is None:
+            oi = np.zeros(n)
+        if iv is None:
+            iv = np.full(n, 0.2)
+        if last is None:
+            last = np.zeros(n)
+        if bid is None:
+            bid = np.zeros(n)
+        if ask is None:
+            ask = np.zeros(n)
 
-        oi = df["openInterest"].clip(lower=1)
-        df["_voi"] = df["volume"] / oi
-        max_voi = df["_voi"].max()
-        df["_norm_voi"] = df["_voi"] / max_voi if max_voi > 0 else 0.0
+        # Near-ATM window (max 30)
+        if spot > 0 and n > 30:
+            idx = np.argpartition(np.abs(strike - spot), 30)[:30]
+            idx = np.sort(idx)
+            strike, volume, oi, iv = strike[idx], volume[idx], oi[idx], iv[idx]
+            last, bid, ask = last[idx], bid[idx], ask[idx]
+            n = strike.size
 
-        iv_col = "impliedVolatility"
-        if iv_col in df.columns:
-            iv_min, iv_max = df[iv_col].min(), df[iv_col].max()
-            iv_range = iv_max - iv_min
-            df["_iv_pct"] = (df[iv_col] - iv_min) / iv_range if iv_range > 0 else 0.5
-        else:
-            df["_iv_pct"] = 0.5
+        oi_safe = np.maximum(oi, 1.0)
+        voi = volume / oi_safe
+        max_voi = float(voi.max()) if n else 0.0
+        norm_voi = voi / max_voi if max_voi > 0 else np.zeros(n)
 
-        if current_price and current_price > 0 and "strike" in df.columns:
-            greeks_result = bs_greeks_vectorized(
-                S=current_price,
-                K=df["strike"].values,
-                T=T_approx,
-                r=r_risk_free,
-                sigma=np.maximum(df["impliedVolatility"].fillna(0.2).values, 0.01),
-                side=side,
+        iv_min, iv_max = float(iv.min()), float(iv.max())
+        iv_range = iv_max - iv_min
+        iv_pct = (iv - iv_min) / iv_range if iv_range > 0 else np.full(n, 0.5)
+
+        if spot > 0:
+            greeks = bs_greeks_vectorized(
+                S=spot, K=strike, T=T_approx, r=r_risk_free,
+                sigma=np.maximum(iv, 0.01), side=side,
             )
-            df["_delta_raw"] = greeks_result["delta"]
-            df["_delta_proxy"] = np.abs(greeks_result["delta"])
-            df["_vega"] = greeks_result["vega"]
-            df["_rho"] = greeks_result["rho"]
+            delta_raw = np.asarray(greeks["delta"], dtype=np.float64)
+            vega = np.asarray(greeks["vega"], dtype=np.float64)
+            rho = np.asarray(greeks["rho"], dtype=np.float64)
         else:
-            df["_delta_proxy"] = 0.5
-            df["_vega"] = 0.0
-            df["_rho"] = 0.0
-            df["_delta_raw"] = 0.5 if side == "call" else -0.5
-
-        df["_score"] = (df["_norm_voi"] * w1 + df["_iv_pct"] * w2 - (df["_delta_proxy"] - 0.5).abs() * w3)
+            delta_raw = np.full(n, 0.5 if side == "call" else -0.5)
+            vega = np.zeros(n)
+            rho = np.zeros(n)
+        delta_proxy = np.abs(delta_raw)
+        score = norm_voi * w1 + iv_pct * w2 - np.abs(delta_proxy - 0.5) * w3
 
         rows = []
-        for r in df.to_dict("records"):
+        for i in range(n):
             rows.append({
-                "strike": float(r.get("strike", 0)),
-                "lastPrice": float(r.get("lastPrice", 0)),
-                "bid": float(r.get("bid", 0)),
-                "ask": float(r.get("ask", 0)),
-                "volume": int(r.get("volume", 0)),
-                "openInterest": int(r.get("openInterest", 0)),
-                "iv": float(r.get("impliedVolatility", 0)),
-                "voi": round(float(r.get("_voi", 0)), 2),
-                "score": round(float(r.get("_score", 0)), 4),
+                "strike": float(strike[i]),
+                "lastPrice": float(last[i]),
+                "bid": float(bid[i]),
+                "ask": float(ask[i]),
+                "volume": int(volume[i]),
+                "openInterest": int(oi[i]),
+                "iv": float(iv[i]),
+                "voi": round(float(voi[i]), 2),
+                "score": round(float(score[i]), 4),
                 "side": side,
-                "delta": round(float(r.get("_delta_raw", 0)), 4),
-                "vega": round(float(r.get("_vega", 0)), 4),
-                "rho": round(float(r.get("_rho", 0)), 4),
+                "delta": round(float(delta_raw[i]), 4),
+                "vega": round(float(vega[i]), 4),
+                "rho": round(float(rho[i]), 4),
             })
         return rows
 
     call_rows = _score_side(calls_df, "call")
     put_rows = _score_side(puts_df, "put")
-
     call_rows.sort(key=lambda r: r["score"], reverse=True)
     put_rows.sort(key=lambda r: r["score"], reverse=True)
     result["top_calls"] = call_rows[:2]
     result["top_puts"] = put_rows[:2]
-
     all_rows = call_rows + put_rows
     if all_rows:
         result["unusual"] = max(all_rows, key=lambda r: r["voi"])
-
     return result
 
 
@@ -562,7 +826,18 @@ def stat_arb_screener(pairs=None):
     all_tickers = list(set([t for pair in pairs for t in pair]))
     try:
         with _yf_semaphore:
-            bulk_data = yf.download(all_tickers, start=start, end=end, progress=False, threads=True)["Close"]
+            bulk_raw = yf.download(
+                all_tickers, start=start, end=end, progress=False,
+                threads=True, auto_adjust=True, group_by="column",
+            )
+        # yfinance MultiIndex vs flat Close handling
+        if isinstance(bulk_raw.columns, pd.MultiIndex):
+            if "Close" in bulk_raw.columns.get_level_values(0):
+                bulk_data = bulk_raw["Close"]
+            else:
+                bulk_data = bulk_raw.xs("Close", axis=1, level=0, drop_level=True)
+        else:
+            bulk_data = bulk_raw["Close"] if "Close" in bulk_raw.columns else bulk_raw
     except Exception as e:
         logger.error(f"stat_arb_screener bulk download failed: {e}")
         return None
@@ -596,27 +871,35 @@ def stat_arb_screener(pairs=None):
             Y = df[dep]
             X = sm.add_constant(df[indep])
             model = sm.OLS(Y, X).fit()
-            beta = model.params.iloc[1]
+            beta = float(model.params.iloc[1])
             
+            # Log-spread residual more stable across price scales than raw $
             spread = df[dep] - beta * df[indep]
-            std_spread = spread.std()
+            # Use robust MAD-based scale for z when available
+            med = float(spread.median())
+            mad = float((spread - med).abs().median())
+            robust_std = 1.4826 * mad if mad > 1e-12 else float(spread.std())
+            std_spread = robust_std if robust_std > 0 else float(spread.std())
             
             spread_lag = spread.shift(1).dropna()
             spread_diff = spread.diff().dropna()
-            lag_with_const = sm.add_constant(spread_lag)
-            ou_model = sm.OLS(spread_diff, lag_with_const).fit()
-            ou_intercept = ou_model.params.iloc[0]
-            ou_lambda = -ou_model.params.iloc[1]
-            half_life = np.log(2) / ou_lambda if ou_lambda > 0 else float('inf')
+            aligned = pd.concat([spread_diff, spread_lag], axis=1, join="inner").dropna()
+            if len(aligned) < 30:
+                continue
+            lag_with_const = sm.add_constant(aligned.iloc[:, 1])
+            ou_model = sm.OLS(aligned.iloc[:, 0], lag_with_const).fit()
+            ou_intercept = float(ou_model.params.iloc[0])
+            ou_lambda = -float(ou_model.params.iloc[1])
+            half_life = (np.log(2) / ou_lambda) if ou_lambda > 1e-8 else float("inf")
             
-            if ou_lambda > 0:
+            if ou_lambda > 1e-8:
                 eq_mean = ou_intercept / ou_lambda
             else:
-                eq_mean = spread.mean()
+                eq_mean = med
             
-            z_score = (spread.iloc[-1] - eq_mean) / std_spread if std_spread > 0 else 0.0
+            z_score = (float(spread.iloc[-1]) - eq_mean) / std_spread if std_spread > 0 else 0.0
             
-            clamped_hl = max(3.0, min(float(half_life), 60.0))
+            clamped_hl = max(3.0, min(float(half_life) if math.isfinite(half_life) else 60.0, 60.0))
             entry_thresh = 1.0 + (clamped_hl / 60.0) * 1.5
             lean_thresh = entry_thresh * 0.6
             
@@ -631,7 +914,7 @@ def stat_arb_screener(pairs=None):
                 "direction": direction_label,
                 "pvalue": round(float(pvalue), 4),
                 "zscore": round(float(z_score), 2),
-                "half_life": round(float(half_life), 1),
+                "half_life": round(float(half_life), 1) if math.isfinite(half_life) else 999.0,
                 "beta": round(float(beta), 3),
                 "coint": pvalue < 0.05,
                 "signal": signal,
@@ -785,23 +1068,43 @@ def calc_stock_fear_greed():
 
 @st.cache_data(ttl=60)
 def market_snapshot_str():
+    """Structured live tape for AI context — ET session + prior-close day changes."""
     try:
-        pst = pytz.timezone("US/Pacific")
-        now_str = datetime.now(pytz.utc).astimezone(pst).strftime("%A, %B %d, %Y %H:%M PST")
-        spx_q  = yahoo_quote("^GSPC")
-        spy_q  = yahoo_quote("SPY")
-        qs     = multi_quotes(["QQQ", "IWM", "DX-Y.NYB", "GLD", "TLT", "BTC-USD", "CL=F"])
-        vix_info = get_vix_full()
-        v      = vix_info[0] if vix_info else None
-
+        et = TZ_EASTERN
+        now_et = datetime.now(pytz.utc).astimezone(et)
+        now_str = now_et.strftime("%A, %B %d, %Y %H:%M ET")
+        mkt_st, _, mkt_det = is_market_open()
+        tickers = ["^GSPC", "SPY", "QQQ", "IWM", "DX-Y.NYB", "GLD", "TLT",
+                   "BTC-USD", "CL=F", "^VIX", "^TNX"]
+        qs = multi_quotes(tickers)
+        qmap = {q["ticker"]: q for q in qs} if qs else {}
+        labels = {
+            "^GSPC": "SPX", "DX-Y.NYB": "DXY", "BTC-USD": "BTC",
+            "CL=F": "WTI", "^VIX": "VIX", "^TNX": "US10Y",
+        }
         parts = []
-        if spx_q: parts.append(f"SPX: {spx_q['price']:,.2f} ({spx_q['pct']:+.2f}%)")
-        if spy_q: parts.append(f"SPY: ${spy_q['price']:,.2f} ({spy_q['pct']:+.2f}%)")
-        parts += [f"{q['ticker']}: ${q['price']:,.2f} ({q['pct']:+.2f}%)" for q in qs]
-        if v: parts.append(f"VIX: {v}")
+        for t in tickers:
+            q = qmap.get(t)
+            if not q:
+                continue
+            lbl = labels.get(t, t)
+            # Indices/yields: bare level; equities: $
+            if t.startswith("^") or t in ("DX-Y.NYB",):
+                px = f"{q['price']:,.2f}"
+            else:
+                px = f"${q['price']:,.2f}"
+            parts.append(f"{lbl}: {px} ({q['pct']:+.2f}%)")
 
-        prices = " | ".join(parts)
-        return "CURRENT DATE/TIME: " + now_str + "\nLIVE MARKET DATA: " + prices
+        vix_info = get_vix_full()
+        posture = vix_info[2] if vix_info and len(vix_info) > 2 else None
+        header = (
+            f"CURRENT DATE/TIME: {now_str}\n"
+            f"SESSION: {mkt_st} ({mkt_det})\n"
+            f"LIVE MARKET DATA (vs prior regular close): " + " | ".join(parts)
+        )
+        if posture:
+            header += f"\nVOL POSTURE: {posture}"
+        return header
     except Exception:
         return ""
 
@@ -1262,6 +1565,11 @@ def get_stock_snapshot(symbol="SPY"):
         return None
 
 def get_spx_metrics():
+    """SPX levels. Prefer live ^GSPC; scale SPY bars by live ratio (not fixed ×10).
+
+    SPY ≈ SPX/10 only approximately. Using a live SPX/SPY ratio keeps
+    VWAP/OHLC in index points without the ~0.5–2% fixed-multiple error.
+    """
     spy_snap = get_stock_snapshot("SPY")
     try:
         spx_q = yahoo_quote("^GSPC")
@@ -1269,31 +1577,63 @@ def get_spx_metrics():
     except Exception:
         spx_price = None
 
-    if spy_snap:
-        spot = spx_price if spx_price else round(spy_snap["price"] * 10, 2)
+    if spy_snap and spy_snap.get("price", 0) > 0:
+        spy_px = float(spy_snap["price"])
+        # Live ratio when both available; else classic ~10x proxy
+        if spx_price and spy_px > 0:
+            ratio = spx_price / spy_px
+        else:
+            ratio = 10.0
+        spot = spx_price if spx_price else round(spy_px * ratio, 2)
         return {
             "spot": spot,
-            "vwap": round(spy_snap["vwap"] * 10, 2),
-            "open": round(spy_snap["open"] * 10, 2),
-            "high": round(spy_snap["high"] * 10, 2),
-            "low": round(spy_snap["low"] * 10, 2),
-            "volume": spy_snap["volume"],
+            "vwap": round(float(spy_snap.get("vwap") or 0) * ratio, 2),
+            "open": round(float(spy_snap.get("open") or 0) * ratio, 2),
+            "high": round(float(spy_snap.get("high") or 0) * ratio, 2),
+            "low": round(float(spy_snap.get("low") or 0) * ratio, 2),
+            "volume": spy_snap.get("volume", 0),
+            "spy_spot": spy_px,
+            "spx_spy_ratio": round(ratio, 4),
         }
-    elif spx_price:
-        return {"spot": spx_price, "vwap": spx_price, "open": 0, "high": 0, "low": 0, "volume": 0}
+    if spx_price:
+        return {
+            "spot": spx_price, "vwap": spx_price, "open": 0, "high": 0, "low": 0,
+            "volume": 0, "spy_spot": None, "spx_spy_ratio": 10.0,
+        }
     return None
 
-def _parse_strike_from_symbol(sym):
-    try: return int(sym[-8:]) / 1000.0
-    except Exception: return 0.0
+_OCC_RE = re.compile(r"^(?P<root>[A-Z]+)(?P<ymd>\d{6})(?P<cp>[CP])(?P<strike>\d{8})$")
 
-def _parse_type_from_symbol(sym):
+
+def _parse_strike_from_symbol(sym: str) -> float:
+    """OCC strike: last 8 digits = strike × 1000."""
     try:
-        for i, ch in enumerate(sym):
-            if ch in ("C", "P") and i > 3:
-                return "call" if ch == "C" else "put"
+        m = _OCC_RE.match(str(sym).replace(" ", "").upper())
+        if m:
+            return int(m.group("strike")) / 1000.0
+        # Fallback: trailing 8 digits
+        digits = re.sub(r"\D", "", str(sym)[-12:])
+        if len(digits) >= 8:
+            return int(digits[-8:]) / 1000.0
+        return 0.0
+    except Exception:
+        return 0.0
+
+
+def _parse_type_from_symbol(sym: str) -> str:
+    """OCC right: C/P immediately before 8-digit strike (not first C/P in root)."""
+    try:
+        m = _OCC_RE.match(str(sym).replace(" ", "").upper())
+        if m:
+            return "call" if m.group("cp") == "C" else "put"
+        # Fallback scan near the end only (avoids roots like PCAR, CAT)
+        s = str(sym).upper()
+        m2 = re.search(r"(\d{6})([CP])(\d{8})$", s)
+        if m2:
+            return "call" if m2.group(2) == "C" else "put"
         return "unknown"
-    except Exception: return "unknown"
+    except Exception:
+        return "unknown"
 
 @st.cache_data(ttl=30)
 def fetch_0dte_chain(underlying="SPY"):
@@ -1345,24 +1685,33 @@ def fetch_0dte_chain(underlying="SPY"):
             pages += 1
 
         chain = []
-        lower_bound, upper_bound = spot * 0.98, spot * 1.02
+        # Wider wing for GEX walls (±5%); 0DTE activity concentrates near spot
+        lower_bound, upper_bound = spot * 0.95, spot * 1.05
 
         r_rate = get_risk_free_rate()
-        T_val = 0.5 / 365.0
+        # True residual time to equity close on expiry — not a fixed 0.5 day
+        T_val = year_fraction_to_expiry(target_expiry)
 
         for sym, snap_data in snapshots.items():
-            greeks = snap_data.get("greeks", {})
-            quote = snap_data.get("latestQuote", {})
-            trade = snap_data.get("latestTrade", {})
+            greeks = snap_data.get("greeks", {}) or {}
+            quote = snap_data.get("latestQuote", {}) or {}
+            trade = snap_data.get("latestTrade", {}) or {}
             strike = _parse_strike_from_symbol(sym)
             opt_type = _parse_type_from_symbol(sym)
 
-            if strike <= 0 or strike < lower_bound or strike > upper_bound: continue
+            if opt_type == "unknown" or strike <= 0:
+                continue
+            if strike < lower_bound or strike > upper_bound:
+                continue
             bid = _safe_float(quote.get("bp"))
             ask = _safe_float(quote.get("ap"))
             last = _safe_float(trade.get("p"))
-            if bid > 0 and ask > 0:
-                mid = round((bid + ask) / 2, 2)
+            # Mid: prefer NBBO; never invent a mid from one-sided quotes alone
+            # when spread is absurd (>50% of mid) — use last trade instead
+            if bid > 0 and ask > 0 and ask >= bid:
+                mid = round((bid + ask) / 2.0, 4)
+                if mid > 0 and (ask - bid) / mid > 0.5 and last > 0:
+                    mid = last
             elif last > 0:
                 mid = last
             elif bid > 0:
@@ -1372,78 +1721,83 @@ def fetch_0dte_chain(underlying="SPY"):
             else:
                 mid = 0.0
 
-            calculated_iv = get_iv_newton(spot, strike, T_val, r_rate, mid, opt_type)
+            calculated_iv = None
+            if mid > 0:
+                calculated_iv = get_iv_newton(spot, strike, T_val, r_rate, mid, opt_type)
             if calculated_iv is not None and calculated_iv > 0:
                 bs_override = bs_greeks_engine(spot, strike, T_val, r_rate, calculated_iv, opt_type)
                 final_iv = calculated_iv
                 final_delta = bs_override["delta"]
                 final_gamma = bs_override["gamma"]
                 final_theta = bs_override["theta"]
+                final_vega = bs_override["vega"]
             else:
-                final_iv = _safe_float(snap_data.get("impliedVolatility"))
+                final_iv = _safe_float(snap_data.get("impliedVolatility") or greeks.get("iv"))
                 final_delta = _safe_float(greeks.get("delta"))
                 final_gamma = _safe_float(greeks.get("gamma"))
                 final_theta = _safe_float(greeks.get("theta"))
+                final_vega = _safe_float(greeks.get("vega"))
 
             chain.append({
                 "symbol": sym, "strike": strike, "type": opt_type,
                 "bid": bid, "ask": ask, "mid": mid, "last": last,
                 "iv": final_iv,
                 "delta": final_delta, "gamma": final_gamma,
-                "theta": final_theta, "vega": _safe_float(greeks.get("vega")),
-                "oi": int(_safe_float(snap_data.get("openInterest", 0), 0)), "volume": int(_safe_float(trade.get("s", 0), 0)),
+                "theta": final_theta, "vega": final_vega,
+                "oi": int(_safe_float(snap_data.get("openInterest", 0), 0)),
+                "volume": int(_safe_float(trade.get("s", 0), 0)),
+                "T": T_val,
             })
-        chain.sort(key=lambda x: x["strike"])
+        chain.sort(key=lambda x: (x["strike"], 0 if x["type"] == "call" else 1))
         return chain, "OK"
     except Exception as e:
         return [], f"Error: {str(e)}"
 
 def compute_gex_profile(chain, spot):
-    """Compute Gamma Exposure (GEX) profile using vectorized pandas/numpy.
-    
-    Formula per strike:
-        GEX_strike = sign × OI × 100 × |γ| × S² × 0.01 / 1,000,000
-    
-    Where:
-        sign   = +1 for calls, -1 for puts (SpotGamma convention)
-        OI     = open interest contracts
-        100    = shares per contract
-        γ      = option gamma (∂²V/∂S²)
-        S²×0.01 = dollar-gamma scaling ($ move per 1% spot change)
-        1e6    = express result in millions of USD
-    
-    Returns:
-        dict[float, float]: {strike: GEX_in_$M, ...}
-        Positive GEX → dealer-long gamma → resistance/mean-reversion
-        Negative GEX → dealer-short gamma → acceleration/trend-following
-    
-    H2 doc: The raw number is millions of USD of gamma exposure per 1% 
-    move in the underlying. It is NOT directly comparable to SpotGamma's 
-    proprietary GEX index which uses additional normalizations.
+    """Gamma exposure by strike (SpotGamma-style dealer convention), pure numpy.
+
+    GEX_$M = sign × OI × 100 × |γ| × S² × 0.01 / 1e6
+      sign = +1 call / -1 put
     """
     if spot <= 0 or not chain:
         return {}
-    
     try:
-        df = pd.DataFrame(chain)
-        required = {"gamma", "oi", "strike", "type"}
-        if not required.issubset(df.columns):
+        strikes, ois, gammas, signs = [], [], [], []
+        for opt in chain:
+            try:
+                k = float(opt["strike"])
+                oi = float(opt.get("oi", 0) or 0)
+                g = abs(float(opt.get("gamma", 0) or 0))
+                t = opt.get("type", "")
+            except (TypeError, ValueError, KeyError):
+                continue
+            if oi <= 0 or g <= 0:
+                continue
+            strikes.append(k)
+            ois.append(oi)
+            gammas.append(g)
+            signs.append(1.0 if t == "call" else -1.0)
+        if not strikes:
             return {}
-        
-        sign = np.where(df["type"] == "call", 1.0, -1.0)
-        
-        
-        df["gex"] = (
-            sign * df["oi"].fillna(0) * 100
-            * df["gamma"].abs()
-            * (spot ** 2) * 0.01
-            / 1_000_000
+        k = np.asarray(strikes, dtype=np.float64)
+        gex = (
+            np.asarray(signs, dtype=np.float64)
+            * np.asarray(ois, dtype=np.float64)
+            * 100.0
+            * np.asarray(gammas, dtype=np.float64)
+            * (float(spot) ** 2)
+            * 0.01
+            / 1_000_000.0
         )
-        
-        result = df.groupby("strike")["gex"].sum()
-        return result.sort_index().to_dict()
+        # Aggregate by strike
+        order = np.argsort(k)
+        k, gex = k[order], gex[order]
+        uniq, inv = np.unique(k, return_inverse=True)
+        sums = np.zeros(uniq.size, dtype=np.float64)
+        np.add.at(sums, inv, gex)
+        return {float(uniq[i]): float(sums[i]) for i in range(uniq.size)}
     except Exception as e:
-        logger.error(f"compute_gex_profile error: {e}")
+        logger.error("compute_gex_profile error: %s", e)
         return {}
 
 def find_gamma_flip(gex_profile):
@@ -1485,15 +1839,19 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
     vix = (vix_data or {}).get("vix") or 20.0
     contango = (vix_data or {}).get("contango")
 
-    if gex_profile is None:
-        gex_profile = compute_gex_profile(chain, spot / 10)
-        gex_profile = {k: v * 10 for k, v in gex_profile.items()}
+    # Chain is typically SPY 0DTE — GEX must use SPY spot, not SPX.
+    # Scale strikes → SPX via live ratio (not hard-coded ×10).
+    spy_spot = (spx_metrics or {}).get("spy_spot") or (spot / 10.0 if spot else 0)
+    ratio = (spx_metrics or {}).get("spx_spy_ratio") or (spot / spy_spot if spy_spot else 10.0)
+    if gex_profile is None and spy_spot > 0:
+        gex_profile = compute_gex_profile(chain, spy_spot)
 
-    gamma_flip_spy = find_gamma_flip(gex_profile)
-    gamma_flip = gamma_flip_spy * 10 if gamma_flip_spy else None
+    gamma_flip_spy = find_gamma_flip(gex_profile) if gex_profile else None
+    gamma_flip = (gamma_flip_spy * ratio) if gamma_flip_spy else None
     max_pain_spy = compute_max_pain(chain)
-    max_pain = max_pain_spy * 10 if max_pain_spy else None
+    max_pain = (max_pain_spy * ratio) if max_pain_spy else None
     pcr = compute_pcr(chain)
+    pcr_vol = compute_pcr(chain, field="volume")
 
     daily_em = spot * (vix / 100) / (TRADING_DAYS_PER_YEAR ** 0.5)
 
@@ -1516,12 +1874,12 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
                            "NEUTRAL — Near gamma-neutral zone", "#FF8C00"))
         score += contrib
 
-    if gex_profile and gamma_flip:
-        above_gex = sum(v for k, v in gex_profile.items() if k * 10 > spot)
-        below_gex = sum(v for k, v in gex_profile.items() if k * 10 < spot)
+    if gex_profile and gamma_flip and spy_spot > 0:
+        # Compare SPY-space strikes to SPY spot for tilt
+        above_gex = sum(v for k, v in gex_profile.items() if k > spy_spot)
+        below_gex = sum(v for k, v in gex_profile.items() if k < spy_spot)
         total_abs = abs(above_gex) + abs(below_gex)
         if total_abs > 0:
-
             if spot > gamma_flip:
                 contrib = 1.5
                 signals.append(("GEX Tilt", f"Above Gamma Flip (Δ{spot-gamma_flip:+.0f})", contrib,
@@ -1632,18 +1990,28 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
 
     try:
         import numpy as np
-        spy_hist = get_spy_history().tail(60)
+        spy_hist = get_spy_history().tail(90)
         if spy_hist is not None and len(spy_hist) >= 20:
             _closes = spy_hist["Close"]
-            _delta_r = _closes.diff()
-            _gain = _delta_r.where(_delta_r > 0, 0.0).ewm(alpha=1 / 14, adjust=False).mean()
-            _loss = (-_delta_r.where(_delta_r < 0, 0.0)).ewm(alpha=1 / 14, adjust=False).mean()
-            _loss_safe = _loss.replace(0, np.nan)
-            _rs = _gain / _loss_safe
-            _rsi = 100.0 - (100.0 / (1.0 + _rs))
-            _rsi = _rsi.where(_loss > 0, 100.0)
-            _rsi = _rsi.where(~((_gain == 0) & (_loss == 0)), 50.0)
-            rsi_val = float(_rsi.iloc[-1]) if not _rsi.empty and np.isfinite(_rsi.iloc[-1]) else 50.0
+            # Wilder RSI (shared implementation) — matches TradingView/Bloomberg
+            rsi_val = wilder_rsi(_closes.values, 14)
+            if rsi_val is None:
+                rsi_val = 50.0
+
+            # Realized vol vs VIX (IV premium/discount)
+            rv20 = realized_volatility(_closes.values, window=20)
+            if rv20 is not None and vix is not None:
+                iv_rv_gap = (vix / 100.0) - rv20  # positive = IV rich vs realized
+                if iv_rv_gap > 0.05:
+                    contrib = -0.5
+                    signals.append(("IV–RV", f"VIX {vix:.1f} vs RV20 {rv20*100:.1f}%", contrib,
+                                   "IV RICH — Options premium elevated vs realized; mean-revert vol", "#FF8C00"))
+                    score += contrib
+                elif iv_rv_gap < -0.02:
+                    contrib = 0.5
+                    signals.append(("IV–RV", f"VIX {vix:.1f} vs RV20 {rv20*100:.1f}%", contrib,
+                                   "IV CHEAP — Realized outrunning implied; event risk underpriced", "#00CC44"))
+                    score += contrib
 
             if rsi_val >= 70:
                 contrib = -1.0
@@ -1667,14 +2035,17 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
                                "NEUTRAL — No directional edge from momentum", "#888888"))
             score += contrib
 
+            _m_line, _m_sig, _m_hist = macd_line(_closes.values)
+            hist_now = float(_m_hist) if _m_hist is not None else 0.0
+            # Prior histogram via full series for crossover detection
             _ema12 = _closes.ewm(span=12, adjust=False).mean()
             _ema26 = _closes.ewm(span=26, adjust=False).mean()
-            _macd_line = _ema12 - _ema26
-            _signal_line = _macd_line.ewm(span=9, adjust=False).mean()
-            _histogram = _macd_line - _signal_line
-
-            hist_now = float(_histogram.iloc[-1])
+            _macd_s = _ema12 - _ema26
+            _sig_s = _macd_s.ewm(span=9, adjust=False).mean()
+            _histogram = _macd_s - _sig_s
             hist_prev = float(_histogram.iloc[-2]) if len(_histogram) >= 2 else 0.0
+            if _m_hist is not None:
+                hist_now = float(_m_hist)
 
             if hist_now > 0 and hist_prev <= 0:
                 contrib = 1.5
@@ -3205,10 +3576,10 @@ GEO_IMPACT_TICKERS = {
 def fetch_military_aircraft() -> "pd.DataFrame":
     import pandas as _pd
     try:
-        data = _fetch_robust_json("https://api.airplanes.live/v2/mil", timeout=15)
+        data = _fetch_robust_json("https://api.airplanes.live/v2/mil", timeout=12)
         ac_list = data.get("ac", [])
         rows = []
-        for ac in ac_list:
+        for ac in ac_list[:350]:  # hard cap for globe payload / memory
             lat, lon = ac.get("lat"), ac.get("lon")
             if lat is None or lon is None: continue
             rows.append({
@@ -3218,8 +3589,7 @@ def fetch_military_aircraft() -> "pd.DataFrame":
                 "track": float(ac.get("track") or 0), "size": 48,
             })
         df = _pd.DataFrame(rows)
-        if not df.empty:
-            df["photo_url"] = df["hex"].apply(lambda h: f"https://api.planespotters.net/pub/photos/hex/{h}")
+        # Skip per-row photo_url — was pure string churn, unused by Cesium globe
         return df
     except Exception as e:
         logger.error("Military Flight Fetch Error: %s", str(e))
@@ -3259,7 +3629,8 @@ def fetch_satellite_positions():
             i += 3
         else: i += 1
 
-    sats = sats[:50]
+    # Cap sats + coarser path samples — skyfield loops were a cold-cache stall
+    sats = sats[:30]
     rows, path_features = [], []
 
     for sat in sats:
@@ -3272,7 +3643,7 @@ def fetch_satellite_positions():
 
             rows.append({"name": sat.name, "lat": lat, "lon": lon, "alt_km": round(alt_km, 1), "vel_kms": vel_kms, "size": 32})
             path_coords = []
-            for offset in range(0, 91, 5):
+            for offset in range(0, 91, 15):  # coarser orbit samples
                 t_f = ts.from_datetime(now_utc + _td(minutes=offset))
                 g = _wgs84.geographic_position_of(sat.at(t_f))
                 path_coords.append([float(g.longitude.degrees), float(g.latitude.degrees)])
@@ -3390,19 +3761,49 @@ def fetch_ais_vessels():
         except Exception as e:
             logger.debug(f"Error caught: {e}")
     mar_key = st.secrets.get("MARINESIA_API_KEY", "") or ""
+    # Marinesia: parallel chokepoints, no 1s serial sleep (was a major GEO lag source)
     if mar_key:
-        import time as _time
-        _CHOKEPOINT_BOXES = [("suez", 29.0, 30.5, 32.0, 33.5), ("hormuz", 25.5, 27.5, 55.0, 57.0), ("mandeb", 12.0, 13.5, 42.5, 44.0), ("malacca", 0.5, 2.5, 103.0, 104.5), ("taiwan", 23.5, 25.5, 118.5, 120.5), ("gibraltar", 35.5, 36.5, -6.0, -5.0)]
-        for name, lat_min, lat_max, lon_min, lon_max in _CHOKEPOINT_BOXES:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        _CHOKEPOINT_BOXES = [
+            ("suez", 29.0, 30.5, 32.0, 33.5), ("hormuz", 25.5, 27.5, 55.0, 57.0),
+            ("mandeb", 12.0, 13.5, 42.5, 44.0), ("malacca", 0.5, 2.5, 103.0, 104.5),
+            ("taiwan", 23.5, 25.5, 118.5, 120.5), ("gibraltar", 35.5, 36.5, -6.0, -5.0),
+        ]
+        def _fetch_box(box):
+            name, lat_min, lat_max, lon_min, lon_max = box
             try:
-                data = _fetch_robust_json("https://api.marinesia.com/api/v2/vessel/area", params={"lat_min": lat_min, "lat_max": lat_max, "long_min": lon_min, "long_max": lon_max, "key": mar_key}, timeout=10, headers={"User-Agent": "SENTINEL/3.0"})
+                data = _fetch_robust_json(
+                    "https://api.marinesia.com/api/v2/vessel/area",
+                    params={
+                        "lat_min": lat_min, "lat_max": lat_max,
+                        "long_min": lon_min, "long_max": lon_max, "key": mar_key,
+                    },
+                    timeout=8,
+                    headers={"User-Agent": "SENTINEL/3.0"},
+                )
+                out = []
                 if not data.get("error") and data.get("data"):
-                    for s in data["data"][:30]:
+                    for s in data["data"][:25]:
                         lat, lng = s.get("lat"), s.get("lng")
-                        if lat is None or lng is None: continue
-                        vessels.append({"mmsi": str(s.get("mmsi", "")), "lat": float(lat), "lon": float(lng), "speed": float(s.get("sog", 0) or 0), "heading": float(s.get("cog", s.get("hdt", 0)) or 0), "name": str(s.get("name", f"MMSI-{s.get('mmsi','')}"))[:30], "type": str(s.get("type", "cargo")).lower()})
-                _time.sleep(1.0)
-            except Exception: continue
+                        if lat is None or lng is None:
+                            continue
+                        out.append({
+                            "mmsi": str(s.get("mmsi", "")),
+                            "lat": float(lat), "lon": float(lng),
+                            "speed": float(s.get("sog", 0) or 0),
+                            "heading": float(s.get("cog", s.get("hdt", 0)) or 0),
+                            "name": str(s.get("name", f"MMSI-{s.get('mmsi','')}"))[:30],
+                            "type": str(s.get("type", "cargo")).lower(),
+                        })
+                return out
+            except Exception:
+                return []
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for fut in as_completed([pool.submit(_fetch_box, b) for b in _CHOKEPOINT_BOXES]):
+                try:
+                    vessels.extend(fut.result() or [])
+                except Exception:
+                    pass
 
     try:
         data = _fetch_robust_json("https://meri.digitraffic.fi/api/ais/v1/locations", timeout=12, headers={"User-Agent": "SENTINEL/3.0", "Accept": "application/json"})

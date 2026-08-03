@@ -181,11 +181,11 @@ def bs_greeks_engine(S, K, T, r, sigma, side="call", q=0.0):
         vega = S_adj * n_d1 * sqrt_T / 100.0
 
         return {
-            "delta": round(delta, 4),
-            "gamma": round(gamma, 6),
-            "theta": round(theta, 4),
-            "vega": round(vega, 4),
-            "rho": round(rho, 4),
+            "delta": float(round(delta, 4)),
+            "gamma": float(round(gamma, 6)),
+            "theta": float(round(theta, 4)),
+            "vega": float(round(vega, 4)),
+            "rho": float(round(rho, 4)),
         }
     except Exception:
         return {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0, "rho": 0.0}
@@ -380,17 +380,129 @@ def compute_max_pain(chain):
     return mp_strike
 
 
-def compute_pcr(chain):
+def compute_pcr(chain, field="oi"):
+    """Put/Call ratio from open interest (default) or volume.
+
+    Parameters
+    ----------
+    chain : list[dict]
+        Options with keys ``type`` and ``oi`` / ``volume``.
+    field : str
+        ``"oi"`` (sentiment via positioning) or ``"volume"`` (flow).
+    """
     if not chain:
         return None
-    call_oi = 0
-    put_oi = 0
+    call_tot = 0.0
+    put_tot = 0.0
+    key = "volume" if field == "volume" else "oi"
     for o in chain:
-        oi = o.get("oi", 0) or 0
-        if o["type"] == "call":
-            call_oi += oi
-        elif o["type"] == "put":
-            put_oi += oi
-    if call_oi <= 0:
+        qty = o.get(key, 0) or 0
+        if o.get("type") == "call":
+            call_tot += qty
+        elif o.get("type") == "put":
+            put_tot += qty
+    if call_tot <= 0:
         return None
-    return round(put_oi / call_oi, 2)
+    return round(put_tot / call_tot, 2)
+
+
+def year_fraction_to_expiry(expiry_date, now=None, close_hour_et: int = 16):
+    """ACT/365 year fraction from *now* to equity option expiry (4pm ET).
+
+    Equity options expire at the close on the expiry date. Using calendar
+    days alone (and a fixed 0.5/365 for 0DTE) systematically misprices IV
+    and Greeks near expiry.
+    """
+    from datetime import datetime, time, timezone, timedelta
+    try:
+        import pytz
+        et = pytz.timezone("US/Eastern")
+    except Exception:
+        et = timezone(timedelta(hours=-5))
+
+    if now is None:
+        now = datetime.now(tz=et)
+    elif getattr(now, "tzinfo", None) is None:
+        now = et.localize(now) if hasattr(et, "localize") else now.replace(tzinfo=et)
+    else:
+        now = now.astimezone(et)
+
+    if isinstance(expiry_date, str):
+        exp_d = datetime.strptime(expiry_date[:10], "%Y-%m-%d").date()
+    elif hasattr(expiry_date, "date") and not isinstance(expiry_date, datetime):
+        exp_d = expiry_date
+    elif isinstance(expiry_date, datetime):
+        exp_d = expiry_date.date()
+    else:
+        exp_d = expiry_date
+
+    exp_dt = datetime.combine(exp_d, time(close_hour_et, 0, 0))
+    if hasattr(et, "localize"):
+        exp_dt = et.localize(exp_dt)
+    else:
+        exp_dt = exp_dt.replace(tzinfo=et)
+
+    secs = (exp_dt - now).total_seconds()
+    if secs <= 0:
+        return _MIN_T
+    return max(secs / (365.0 * 24.0 * 3600.0), _MIN_T)
+
+
+def realized_volatility(closes, window: int = 20, annualize: int = 252):
+    """Annualized realized vol from close series (log returns, sample std).
+
+    Returns float vol (e.g. 0.18 = 18%) or None if insufficient data.
+    """
+    if closes is None:
+        return None
+    arr = np.asarray(closes, dtype=np.float64)
+    arr = arr[np.isfinite(arr)]
+    if arr.size < window + 1:
+        return None
+    log_ret = np.diff(np.log(arr[-(window + 1):]))
+    if log_ret.size < 2:
+        return None
+    # ddof=1 sample stdev is standard for historical vol estimates
+    return float(np.std(log_ret, ddof=1) * math.sqrt(annualize))
+
+
+def rsi(closes, period: int = 14):
+    """Wilder RSI (industry-standard smoothing, not plain SMA)."""
+    arr = np.asarray(closes, dtype=np.float64)
+    arr = arr[np.isfinite(arr)]
+    if arr.size < period + 1:
+        return None
+    deltas = np.diff(arr)
+    gains = np.where(deltas > 0, deltas, 0.0)
+    losses = np.where(deltas < 0, -deltas, 0.0)
+    avg_gain = gains[:period].mean()
+    avg_loss = losses[:period].mean()
+    for i in range(period, len(deltas)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    if avg_loss <= 1e-15:
+        return 100.0 if avg_gain > 0 else 50.0
+    rs = avg_gain / avg_loss
+    return float(100.0 - (100.0 / (1.0 + rs)))
+
+
+def macd(closes, fast: int = 12, slow: int = 26, signal: int = 9):
+    """MACD line, signal line, histogram from close prices."""
+    s = np.asarray(closes, dtype=np.float64)
+    s = s[np.isfinite(s)]
+    if s.size < slow + signal:
+        return None, None, None
+    # Use pandas-free EMA
+    def _ema(x, span):
+        alpha = 2.0 / (span + 1.0)
+        out = np.empty_like(x)
+        out[0] = x[0]
+        for i in range(1, len(x)):
+            out[i] = alpha * x[i] + (1 - alpha) * out[i - 1]
+        return out
+    ema_fast = _ema(s, fast)
+    ema_slow = _ema(s, slow)
+    line = ema_fast - ema_slow
+    sig = _ema(line, signal)
+    hist = line - sig
+    return float(line[-1]), float(sig[-1]), float(hist[-1])

@@ -29,10 +29,12 @@ DEFAULT_RISK_FREE_RATE: float = 0.045
 BPS_FACTOR: float = 0.0001
 
 
-YF_MAX_CONCURRENT: int = 3
-YF_MIN_GAP: float = 0.35
-YF_CACHE_TTL: int = 120
-YF_CACHE_MAX_SIZE: int = 200
+# Higher concurrency + shorter gap: batch download does the heavy lifting;
+# single-ticker path only fills gaps.
+YF_MAX_CONCURRENT: int = 6
+YF_MIN_GAP: float = 0.12
+YF_CACHE_TTL: int = 180
+YF_CACHE_MAX_SIZE: int = 300
 
 YAHOO_USER_AGENTS: list[str] = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",

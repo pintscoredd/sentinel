@@ -3,13 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <title>SENTINEL GEO — CesiumJS</title>
-  <script src="https://cesium.com/downloads/cesiumjs/releases/1.120/Build/Cesium/Cesium.js" crossorigin="anonymous"></script>
-  <link href="https://cesium.com/downloads/cesiumjs/releases/1.120/Build/Cesium/Widgets/widgets.css" rel="stylesheet" crossorigin="anonymous">
+  <!-- CESIUM_BASE_URL MUST be set before Cesium.js so workers/assets resolve -->
+  <script>
+    window.CESIUM_BASE_URL = 'https://cdn.jsdelivr.net/npm/cesium@1.120.0/Build/Cesium/';
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/cesium@1.120.0/Build/Cesium/Cesium.js" crossorigin="anonymous"></script>
+  <link href="https://cdn.jsdelivr.net/npm/cesium@1.120.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet" crossorigin="anonymous">
   <style>
 /* SENTINEL GEO — CesiumJS Globe Styles */
 *{margin:0;padding:0;box-sizing:border-box;font-family:'Courier New',monospace}
-html,body{background:#000;color:#d0d3d8;width:100%;height:100%;overflow:hidden}
-#cesiumContainer{width:100%;height:100%;position:absolute;top:0;left:0}
+html,body{background:#000;color:#d0d3d8;width:100%;height:100%;overflow:hidden;position:relative}
+#cesiumContainer{width:100%;height:100%;position:absolute;top:0;left:0;min-height:480px}
 .cesium-viewer-bottom,.cesium-viewer-animationContainer,.cesium-viewer-timelineContainer,
 .cesium-viewer-fullscreenContainer,.cesium-viewer-infoBoxContainer,
 .cesium-viewer-selectionIndicatorContainer,.cesium-viewer-toolbar,
@@ -206,15 +210,15 @@ html,body{background:#000;color:#d0d3d8;width:100%;height:100%;overflow:hidden}
 </div>
 
 <!-- Quality Toggle -->
-<button id="qualToggle" onclick="toggleQualPanel()">⚙ HIGH</button>
+<button id="qualToggle" onclick="toggleQualPanel()">⚙ MEDIUM</button>
 
 <!-- Quality Preset Panel -->
 <div id="qualPanel">
   <div style="color:#FF6600;font-size:10px;letter-spacing:2px;margin-bottom:8px;font-weight:700">⚙ QUALITY PRESETS</div>
   <button class="qbtn" onclick="setPreset('LOW')">LOW<span class="qdesc">Flat dark globe. Lowest GPU use. TILES×4 SSE 8</span></button>
-  <button class="qbtn" onclick="setPreset('MEDIUM')">MEDIUM<span class="qdesc">Terrain + satellite basemap. TILES×20 SSE 4</span></button>
-  <button class="qbtn active" onclick="setPreset('HIGH')">HIGH<span class="qdesc">Full terrain + satellite. TILES×30 SSE 3.5</span></button>
-  <button class="qbtn" onclick="setPreset('EXTREME')">EXTREME<span class="qdesc">Max detail, 4K-ready. TILES×60 SSE 2</span></button>
+  <button class="qbtn active" onclick="setPreset('MEDIUM')">MEDIUM<span class="qdesc">Terrain + basemap. TILES×16 SSE 4</span></button>
+  <button class="qbtn" onclick="setPreset('HIGH')">HIGH<span class="qdesc">Full terrain + satellite. TILES×24 SSE 3.5</span></button>
+  <button class="qbtn" onclick="setPreset('EXTREME')">EXTREME<span class="qdesc">Max detail, 4K-ready. TILES×40 SSE 2</span></button>
   <button class="qbtn" onclick="setPreset('CUSTOM')">CUSTOM<span class="qdesc">Tune each knob by hand.</span></button>
   <div id="customKnobs" style="display:none;margin-top:8px;border-top:1px solid #222;padding-top:8px">
     <label style="font-size:9px;color:#555">SSE: <input type="range" id="knobSSE" min="1" max="16" value="4" style="width:100px" oninput="applyCustom()"><span id="knobSSEVal">3.5</span></label><br>
@@ -455,109 +459,131 @@ const WORLD_LEADERS = {
 "YEM":["Rashad al-Alimi","Council President","","Ahmad Awad bin Mubarak","Prime Minister",""],
 };
 
-// ── QUALITY PRESETS
+// ── QUALITY PRESETS (defaults lean — HIGH/EXTREME are opt-in)
 const PRESETS = {
-  LOW:     { sse:8,   tiles:4,  satLim:200,   aisLim:100,   terrain:false, buildings:false, label:"LOW" },
-  MEDIUM:  { sse:4,   tiles:20, satLim:800,   aisLim:1500,  terrain:true,  buildings:false, label:"MEDIUM" },
-  HIGH:    { sse:3.5, tiles:30, satLim:2000,  aisLim:4000,  terrain:true,  buildings:true,  label:"HIGH" },
-  EXTREME: { sse:2,   tiles:60, satLim:10000, aisLim:10000, terrain:true,  buildings:true,  label:"EXTREME" },
+  LOW:     { sse:8,   tiles:4,  satLim:150,  aisLim:80,   terrain:false, buildings:false, label:"LOW" },
+  MEDIUM:  { sse:4,   tiles:16, satLim:500,  aisLim:800,  terrain:false, buildings:false, label:"MEDIUM" },
+  HIGH:    { sse:3.5, tiles:24, satLim:1200, aisLim:2000, terrain:true,  buildings:false, label:"HIGH" },
+  EXTREME: { sse:2,   tiles:40, satLim:5000, aisLim:5000, terrain:true,  buildings:true,  label:"EXTREME" },
 };
 // SENTINEL GEO — Core CesiumJS Init + Quality + Country System
 // Cesium Ion token — injected by Python via window.__CESIUM_ION_TOKEN__
 // or paste your token here. Get a free token at https://ion.cesium.com/tokens
-const CESIUM_TOKEN = window.__CESIUM_ION_TOKEN__ || null;
+const CESIUM_TOKEN = (window.__CESIUM_ION_TOKEN__ && String(window.__CESIUM_ION_TOKEN__).trim()) || null;
 
-let viewer, currentPreset = 'HIGH', layerState = {};
+let viewer, currentPreset = 'MEDIUM', layerState = {};
 let countryDataSource = null, bordersVisible = true;
 let radarLayers = [], radarIdx = 0, radarPlaying = false, radarInterval = null;
+let _resizeObs = null;
 
 // ── CLOCK
 setInterval(() => { const d = new Date(); const el = document.getElementById('clk'); if (el) el.textContent = d.toUTCString().slice(17,25)+' UTC'; }, 1000);
 
-// ── ADD IMAGERY — multi-strategy: Ion Bing → ArcGIS (validated) → OSM
-async function addArcGISImagery() {
-  // Strategy 1: If we have an Ion token, use Ion's Bing Maps (asset 2)
-  if (CESIUM_TOKEN) {
-    try {
-      const ionProvider = await Cesium.IonImageryProvider.fromAssetId(2);
-      const layer = new Cesium.ImageryLayer(ionProvider);
-      viewer.imageryLayers.add(layer);
-      console.log('[Sentinel] ✅ Ion Bing Maps imagery loaded');
-      return layer;
-    } catch(e) {
-      console.warn('[Sentinel] Ion imagery failed:', e.message);
-    }
-  }
-  // Strategy 2: ArcGIS — but VALIDATE that tiles actually load
-  // The fromUrl() call succeeds even when tiles are auth-blocked,
-  // so we probe a known tile first.
+// ── ADD IMAGERY — free providers first (no Ion required), Ion optional upgrade
+async function addBasemapImagery() {
+  // Visible ocean color immediately so globe never stays black while tiles load
+  viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0a1a2e');
+
+  // Strategy 1: CARTO Dark Matter (free, CORS-friendly, dark theme match)
   try {
-    const testUrl = 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/0/0/0';
-    const probe = await fetch(testUrl, { method: 'HEAD', mode: 'no-cors' });
-    // no-cors means we can't read status, but if it throws, network is blocked
+    const carto = new Cesium.UrlTemplateImageryProvider({
+      url: 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+      credit: '© CARTO © OpenStreetMap',
+      maximumLevel: 18,
+    });
+    const layer = viewer.imageryLayers.addImageryProvider(carto);
+    console.log('[Sentinel] ✅ CARTO dark basemap loaded');
+    return layer;
+  } catch(e) {
+    console.warn('[Sentinel] CARTO failed:', e && e.message);
+  }
+
+  // Strategy 2: Esri World Imagery (satellite look, often works without token)
+  try {
     const provider = await Cesium.ArcGisMapServerImageryProvider.fromUrl(
       'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer'
     );
-    const layer = new Cesium.ImageryLayer(provider);
-    viewer.imageryLayers.add(layer);
-    console.log('[Sentinel] ✅ ArcGIS World Imagery added');
-    // Give tiles 6 seconds to actually appear — if nothing loads, add OSM backup
-    setTimeout(() => {
-      if (viewer.scene.globe._surface && viewer.scene.globe._surface._tilesToRender &&
-          viewer.scene.globe._surface._tilesToRender.length === 0) {
-        console.warn('[Sentinel] ArcGIS tiles not rendering after 6s — adding OSM backup');
-        addOSMBackup();
-      }
-    }, 6000);
+    const layer = viewer.imageryLayers.addImageryProvider(provider);
+    console.log('[Sentinel] ✅ ArcGIS World Imagery loaded');
     return layer;
   } catch(e) {
-    console.warn('[Sentinel] ArcGIS failed:', e.message);
+    console.warn('[Sentinel] ArcGIS failed:', e && e.message);
   }
-  // Strategy 3: OpenStreetMap (always works, no auth needed, CORS-safe)
-  return addOSMBackup();
-}
 
-function addOSMBackup() {
+  // Strategy 3: Ion world imagery (needs token; Bing asset 2 is deprecated)
+  if (CESIUM_TOKEN) {
+    try {
+      // Asset 3845 = Bing Maps Aerial with Labels (legacy); prefer createWorldImageryAsync
+      if (Cesium.createWorldImageryAsync) {
+        const provider = await Cesium.createWorldImageryAsync();
+        const layer = viewer.imageryLayers.addImageryProvider(provider);
+        console.log('[Sentinel] ✅ Ion world imagery loaded');
+        return layer;
+      }
+    } catch(e) {
+      console.warn('[Sentinel] Ion imagery failed:', e && e.message);
+    }
+  }
+
+  // Strategy 4: OpenStreetMap via tile.openstreetmap.org (may rate-limit)
   try {
     const osm = new Cesium.UrlTemplateImageryProvider({
       url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-      credit: 'OpenStreetMap'
+      credit: '© OpenStreetMap',
+      maximumLevel: 19,
     });
-    const layer = new Cesium.ImageryLayer(osm);
-    viewer.imageryLayers.add(layer);
+    const layer = viewer.imageryLayers.addImageryProvider(osm);
     console.log('[Sentinel] ✅ OSM imagery loaded');
     return layer;
   } catch(e2) {
-    console.warn('[Sentinel] OSM failed:', e2.message);
+    console.warn('[Sentinel] OSM failed:', e2 && e2.message);
   }
-  // Strategy 5: CesiumJS built-in Natural Earth II imagery (bundled with CDN)
-  // This is the absolute last resort — low-res but guaranteed to work everywhere
+
+  // Strategy 5: Bundled Natural Earth II (needs CESIUM_BASE_URL)
   try {
-    const ne = Cesium.TileMapServiceImageryProvider.fromUrl(
+    const ne = await Cesium.TileMapServiceImageryProvider.fromUrl(
       Cesium.buildModuleUrl('Assets/Textures/NaturalEarthII')
     );
-    if (ne && ne.then) {
-      ne.then(provider => {
-        const layer = new Cesium.ImageryLayer(provider);
-        viewer.imageryLayers.add(layer);
-        console.log('[Sentinel] ✅ Natural Earth II fallback loaded');
-      }).catch(() => {
-        // Final fallback: just set a visible base color so globe isn't invisible
-        viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#1a3a5c');
-        console.warn('[Sentinel] Using solid color globe — no imagery available');
-      });
-    }
+    const layer = viewer.imageryLayers.addImageryProvider(ne);
+    console.log('[Sentinel] ✅ Natural Earth II fallback loaded');
+    return layer;
   } catch(e3) {
-    // At minimum, make the globe visible with a blue base color
     viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#1a3a5c');
-    console.warn('[Sentinel] Using solid color globe — all providers failed');
+    console.warn('[Sentinel] Solid color globe — all imagery providers failed');
   }
+  return null;
 }
-const addFallbackImagery = addArcGISImagery;
+const addArcGISImagery = addBasemapImagery;
+const addFallbackImagery = addBasemapImagery;
+
+function _bindResize() {
+  const el = document.getElementById('cesiumContainer');
+  if (!el || !viewer) return;
+  const doResize = () => {
+    try {
+      viewer.resize();
+      viewer.scene.requestRender();
+    } catch(e) {}
+  };
+  doResize();
+  // Streamlit iframe often has 0×0 at first paint — reflow on size settle
+  if (typeof ResizeObserver !== 'undefined') {
+    if (_resizeObs) _resizeObs.disconnect();
+    _resizeObs = new ResizeObserver(() => doResize());
+    _resizeObs.observe(el);
+  }
+  window.addEventListener('resize', doResize);
+  // Extra kicks for Streamlit layout lag
+  setTimeout(doResize, 250);
+  setTimeout(doResize, 1000);
+}
 
 // ── INIT CESIUM
 async function initCesium() {
   try {
+  if (typeof Cesium === 'undefined') {
+    throw new Error('Cesium.js failed to load (CDN blocked?). Check network.');
+  }
   // Only set Ion token if we have a real one
   if (CESIUM_TOKEN) Cesium.Ion.defaultAccessToken = CESIUM_TOKEN;
   const preset = PRESETS[currentPreset];
@@ -567,34 +593,36 @@ async function initCesium() {
     homeButton: false, sceneModePicker: false, baseLayerPicker: false,
     navigationHelpButton: false, infoBox: false, selectionIndicator: false,
     geocoder: false, creditContainer: document.createElement('div'),
-    requestRenderMode: false,
+    // Render only when camera/data changes — huge GPU win in embedded iframes
+    requestRenderMode: true,
+    maximumRenderTimeChange: Infinity,
     // Always start with no base layer — we add imagery explicitly after viewer init.
-    // This avoids the black-globe issue when Ion's default layer fails silently.
     baseLayer: false,
+    terrain: undefined,
+    terrainProvider: new Cesium.EllipsoidTerrainProvider(),
   };
 
-  // Terrain — only attempt if we have a valid Ion token
+  // Terrain — only attempt if we have a valid Ion token AND high preset
   if (preset.terrain && CESIUM_TOKEN) {
     try {
       if (Cesium.CesiumTerrainProvider && Cesium.CesiumTerrainProvider.fromIonAssetId) {
         viewerOpts.terrainProvider = await Cesium.CesiumTerrainProvider.fromIonAssetId(1);
       } else if (Cesium.createWorldTerrainAsync) {
         viewerOpts.terrainProvider = await Cesium.createWorldTerrainAsync();
-      } else if (Cesium.createWorldTerrain) {
-        viewerOpts.terrainProvider = Cesium.createWorldTerrain();
       }
     } catch(e) { console.warn('[Sentinel] Terrain init failed, using ellipsoid:', e); }
   }
 
   viewer = new Cesium.Viewer('cesiumContainer', viewerOpts);
 
-  // Always add imagery explicitly after viewer creation.
-  // The multi-strategy loader tries Ion Bing → ArcGIS → OSM.
+  // Imagery — free basemap first so globe is never blank
   if (preset.label !== 'LOW') {
-    await addArcGISImagery();
+    await addBasemapImagery();
+  } else {
+    viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#050a14');
   }
 
-  // Dark sky — disable default skybox instead of empty sources
+  // Dark sky
   try { viewer.scene.skyBox.show = false; } catch(e) {}
   viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#000005');
   try { viewer.scene.sun.show = false; } catch(e) {}
@@ -602,56 +630,56 @@ async function initCesium() {
   viewer.scene.skyAtmosphere.show = currentPreset !== 'LOW';
   viewer.scene.fog.enabled = false;
   viewer.scene.globe.enableLighting = false;
-  viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#030810');
+  if (currentPreset !== 'LOW') {
+    viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#030810');
+  }
   viewer.scene.globe.showGroundAtmosphere = currentPreset !== 'LOW';
   viewer.scene.globe.maximumScreenSpaceError = preset.sse;
-  try { viewer.scene.globe.tileCacheSize = preset.tiles * 3; } catch(e) {}
+  try { viewer.scene.globe.tileCacheSize = preset.tiles * 2; } catch(e) {}
+  // Skip underwater terrain work
+  try { viewer.scene.globe.showWaterEffect = false; } catch(e) {}
+  try { viewer.scene.globe.depthTestAgainstTerrain = false; } catch(e) {}
 
-  // For LOW preset, use dark basemap
-  if (currentPreset === 'LOW') {
-    viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#050a14');
-    viewer.imageryLayers.removeAll();
-  }
+  try { Cesium.RequestScheduler.maximumRequestsPerServer = Math.min(preset.tiles, 12); } catch(e) {}
 
-  // Concurrent tile loads
-  try { Cesium.RequestScheduler.maximumRequestsPerServer = preset.tiles; } catch(e) {}
-
-  // Buildings at high zoom (HIGH/EXTREME only) — requires valid Ion token
+  // Buildings only at EXTREME + Ion token
   if (preset.buildings && CESIUM_TOKEN) {
     try {
       if (Cesium.Cesium3DTileset.fromIonAssetId) {
         Cesium.Cesium3DTileset.fromIonAssetId(96188)
-          .then(ts => { if (ts) viewer.scene.primitives.add(ts); })
-          .catch(() => {}); // Ignore if Ion rejects (bad token)
+          .then(ts => { if (ts) { viewer.scene.primitives.add(ts); viewer.scene.requestRender(); } })
+          .catch(() => {});
       }
     } catch(e) {}
   }
 
-  // Camera start position
   viewer.camera.setView({
     destination: Cesium.Cartesian3.fromDegrees(30, 20, 20000000),
   });
 
-  // Load country borders
+  // Re-render on camera move (requestRenderMode)
+  viewer.camera.changed.addEventListener(() => viewer.scene.requestRender());
+  viewer.scene.requestRender();
+
+  _bindResize();
+
+  // Borders async — do not block loader
   loadCountryBorders();
 
-  // Click handler
   const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
   handler.setInputAction(click => onLeftClick(click), Cesium.ScreenSpaceEventType.LEFT_CLICK);
   handler.setInputAction(move => onMouseMove(move), Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
-  // Ingest Sentinel data from Python
   ingestSentinelData();
-
-  // Start GDELT news feed
   fetchGDELTNews();
   setInterval(fetchGDELTNews, 300000);
 
   document.getElementById('ls').classList.add('gone');
+  viewer.scene.requestRender();
   } catch(err) {
     console.error('CesiumJS init error:', err);
-    document.getElementById('ls').innerHTML = '<div style="color:#FF4444;font-size:12px">⚠ Globe engine error: ' + escHtml(err.message) + '</div>';
-    setTimeout(() => document.getElementById('ls').classList.add('gone'), 5000);
+    document.getElementById('ls').innerHTML = '<div style="color:#FF4444;font-size:12px;padding:20px;text-align:center">⚠ Globe engine error: ' + escHtml(err.message) + '<br><span style="color:#666;font-size:10px">Check CDN access / console</span></div>';
+    setTimeout(() => document.getElementById('ls').classList.add('gone'), 8000);
   }
 }
 
@@ -680,23 +708,22 @@ function setPreset(name) {
   if (name === 'LOW') {
     viewer.imageryLayers.removeAll();
     viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#050a14');
-    if (viewer.terrainProvider instanceof Cesium.CesiumTerrainProvider) {
-      viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
-    }
+    try { viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider(); } catch(e) {}
   } else {
     if (viewer.imageryLayers.length === 0) {
-      addArcGISImagery(); // restore ArcGIS — always free, no Ion needed
+      addBasemapImagery();
     }
-    if (p.terrain && CESIUM_TOKEN && !(viewer.terrainProvider instanceof Cesium.CesiumTerrainProvider)) {
+    if (p.terrain && CESIUM_TOKEN) {
       try {
         if (Cesium.CesiumTerrainProvider && Cesium.CesiumTerrainProvider.fromIonAssetId) {
           Cesium.CesiumTerrainProvider.fromIonAssetId(1)
-            .then(tp => { viewer.terrainProvider = tp; })
+            .then(tp => { viewer.terrainProvider = tp; viewer.scene.requestRender(); })
             .catch(() => {});
         }
       } catch(e) {}
     }
   }
+  viewer.scene.requestRender();
 }
 
 function applyCustom() {
@@ -716,27 +743,30 @@ function toggleQualPanel() {
   document.getElementById('qualPanel').classList.toggle('show');
 }
 
-// ── COUNTRY BORDERS
+// ── COUNTRY BORDERS (Natural Earth 110m — small, fast; full datasets stall the UI)
 async function loadCountryBorders() {
   try {
-    const url = 'https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson';
+    // ~200–400KB simplified borders; ADMIN/ISO_A3 props for click intel
+    const url = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@v5.1.2/geojson/ne_110m_admin_0_countries.geojson';
     countryDataSource = await Cesium.GeoJsonDataSource.load(url, {
-      stroke: Cesium.Color.fromCssColorString('#00CCAA').withAlpha(0.5),
-      fill: Cesium.Color.fromCssColorString('#00CCAA').withAlpha(0.03),
-      strokeWidth: 1.5,
-      clampToGround: true
+      stroke: Cesium.Color.fromCssColorString('#00CCAA').withAlpha(0.45),
+      fill: Cesium.Color.fromCssColorString('#00CCAA').withAlpha(0.02),
+      strokeWidth: 1,
+      clampToGround: false, // clampToGround is expensive; ellipsoid is fine for borders
     });
     viewer.dataSources.add(countryDataSource);
     countryDataSource.show = bordersVisible;
-
-    // Style entities
-    countryDataSource.entities.values.forEach(entity => {
+    const vals = countryDataSource.entities.values;
+    // Batch style without per-entity excess work
+    for (let i = 0; i < vals.length; i++) {
+      const entity = vals[i];
       if (entity.polygon) {
-        entity.polygon.outlineColor = Cesium.Color.fromCssColorString('#00CCAA').withAlpha(0.4);
-        entity.polygon.material = Cesium.Color.fromCssColorString('#00CCAA').withAlpha(0.02);
+        entity.polygon.outlineColor = Cesium.Color.fromCssColorString('#00CCAA').withAlpha(0.35);
+        entity.polygon.material = Cesium.Color.fromCssColorString('#00CCAA').withAlpha(0.015);
         entity.polygon.outlineWidth = 1;
       }
-    });
+    }
+    viewer.scene.requestRender();
   } catch(e) {
     console.warn('Country borders failed:', e);
   }
@@ -753,13 +783,17 @@ function onLeftClick(click) {
         showInfraCard(entity, click.position);
         return;
       }
-      // Country entity from GeoJSON
+      // Country entity from GeoJSON (Natural Earth uses ADMIN/NAME + ADM0_A3/ISO_A3)
       const props = entity.properties;
-      if (props && props.ADMIN) {
-        const name = props.ADMIN.getValue();
-        const iso3 = props.ISO_A3 ? props.ISO_A3.getValue() : '';
-        showCountryPanel(name, iso3, props);
-        return;
+      if (props) {
+        const nameProp = props.ADMIN || props.NAME || props.name;
+        if (nameProp) {
+          const name = nameProp.getValue ? nameProp.getValue() : String(nameProp);
+          const isoProp = props.ISO_A3 || props.ADM0_A3 || props.iso_a3;
+          const iso3 = isoProp ? (isoProp.getValue ? isoProp.getValue() : String(isoProp)) : '';
+          showCountryPanel(name, iso3, props);
+          return;
+        }
       }
     }
   }
@@ -970,9 +1004,10 @@ function showLayer(name) {
 
 function hideLayer(name) {
   layerState[name] = false;
-  if (name === 'borders' && countryDataSource) { countryDataSource.show = false; bordersVisible = false; return; }
-  if (name === 'radar') { hideRainRadar(); return; }
+  if (name === 'borders' && countryDataSource) { countryDataSource.show = false; bordersVisible = false; try{viewer.scene.requestRender();}catch(e){} return; }
+  if (name === 'radar') { hideRainRadar(); try{viewer.scene.requestRender();}catch(e){} return; }
   if (LAYER_DS[name]) { LAYER_DS[name].show = false; }
+  try { viewer.scene.requestRender(); } catch(e) {}
 }
 
 function getOrCreateDS(name) {
@@ -982,6 +1017,7 @@ function getOrCreateDS(name) {
   }
   LAYER_DS[name].entities.removeAll();
   LAYER_DS[name].show = true;
+  try { viewer.scene.requestRender(); } catch(e) {}
   return LAYER_DS[name];
 }
 
@@ -1437,12 +1473,26 @@ window.closeCountryPanel = closeCountryPanel;
 window.closeInfoCard = closeInfoCard;
 window.cpTab = cpTab;
 
-// ── BOOT
-window.addEventListener('load', () => {
-  setTimeout(async () => { await initCesium(); }, 100);
-  // Safety: force dismiss loader after 15s regardless
-  setTimeout(() => document.getElementById('ls').classList.add('gone'), 15000);
-});
+// ── BOOT — wait for layout so Streamlit iframe has real dimensions
+function _bootGlobe() {
+  const el = document.getElementById('cesiumContainer');
+  if (!el || (el.clientWidth < 20 && el.clientHeight < 20)) {
+    // Iframe not laid out yet
+    setTimeout(_bootGlobe, 80);
+    return;
+  }
+  initCesium();
+}
+if (document.readyState === 'complete') {
+  setTimeout(_bootGlobe, 50);
+} else {
+  window.addEventListener('load', () => setTimeout(_bootGlobe, 50));
+}
+// Safety: force dismiss loader after 12s regardless
+setTimeout(() => {
+  const ls = document.getElementById('ls');
+  if (ls) ls.classList.add('gone');
+}, 12000);
   </script>
 </body>
 </html>
