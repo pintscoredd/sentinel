@@ -1,0 +1,273 @@
+"""Global CSS and Plotly chrome for the black & white theme."""
+from __future__ import annotations
+
+import copy
+
+import streamlit as st
+
+from sentinel.ui.palette import (
+    ACCENT, BG, BORDER, BORDER_STRONG, DOWN, FLAT, FONT, MONO, PANEL, PANEL_2,
+    TEXT, TEXT_DIM, TEXT_FAINT, TEXT_MUTED, UP,
+)
+
+try:
+    import plotly.graph_objects as go
+except ImportError:  # pragma: no cover
+    go = None
+
+
+CSS = f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+:root {{
+  --bg:{BG}; --panel:{PANEL}; --panel2:{PANEL_2}; --border:{BORDER}; --border2:{BORDER_STRONG};
+  --text:{TEXT}; --muted:{TEXT_MUTED}; --dim:{TEXT_DIM}; --faint:{TEXT_FAINT}; --accent:{ACCENT};
+  --up:{UP}; --down:{DOWN}; --flat:{FLAT};
+  --font:{FONT}; --mono:{MONO};
+}}
+*, *::before, *::after {{ box-sizing: border-box; }}
+html, body, .stApp, [data-testid="stAppViewContainer"] {{
+  background: var(--bg) !important; color: var(--text) !important; font-family: var(--font) !important;
+}}
+.stApp, .stMarkdown, .stMarkdown p, label, input, textarea, button, select {{ font-family: var(--font) !important; }}
+[data-testid="stHeader"] {{ background: transparent !important; height: 0 !important; }}
+div[data-testid="stDecoration"], footer, #MainMenu, [data-testid="stToolbar"], [data-testid="stStatusWidget"] {{ display: none !important; }}
+
+/* Layout */
+.block-container, [data-testid="stMainBlockContainer"] {{
+  padding: 1rem 1.5rem 2rem !important; max-width: 1680px !important;
+}}
+[data-testid="stVerticalBlock"] {{ gap: 0.6rem; }}
+[data-testid="stHorizontalBlock"] {{ gap: 0.75rem; }}
+[data-testid="column"], [data-testid="stColumn"] {{ min-width: 0; }}
+.stMarkdown, .stMarkdown > div {{ max-width: 100%; overflow-wrap: anywhere; }}
+.stMarkdown p {{ margin-bottom: 0; }}
+img, iframe, svg {{ max-width: 100%; }}
+
+/* Sidebar */
+[data-testid="stSidebar"] {{ background: var(--panel) !important; border-right: 1px solid var(--border) !important; }}
+[data-testid="stSidebar"] * {{ font-size: 12px; }}
+[data-testid="stSidebar"] label {{ color: var(--muted) !important; }}
+
+/* Headings */
+h1, h2, h3, h4 {{ color: var(--text) !important; font-family: var(--font) !important; letter-spacing: 0 !important; text-transform: none; }}
+
+/* Page navigation */
+div[data-testid="stSegmentedControl"], div[data-testid="stButtonGroup"] {{ width: 100%; }}
+div[data-testid="stButtonGroup"] button, div[data-testid="stSegmentedControl"] button {{
+  background: transparent !important; color: var(--dim) !important; border: 1px solid var(--border) !important;
+  border-radius: 6px !important; font-size: 12px !important; font-weight: 600 !important; letter-spacing: .04em;
+  transition: color .12s, background .12s, border-color .12s;
+}}
+div[data-testid="stButtonGroup"] button:hover {{ color: var(--text) !important; border-color: var(--border2) !important; }}
+div[data-testid="stButtonGroup"] button[aria-checked="true"], div[data-testid="stButtonGroup"] button[kind*="Active"],
+div[data-testid="stSegmentedControl"] [aria-checked="true"] {{
+  background: var(--accent) !important; color: #000 !important; border-color: var(--accent) !important;
+}}
+div[data-testid="stButtonGroup"] button[aria-checked="true"] p,
+div[data-testid="stButtonGroup"] button[kind*="Active"] p {{ color: #000 !important; }}
+
+/* Tabs */
+.stTabs [data-baseweb="tab-list"] {{ gap: 4px; border-bottom: 1px solid var(--border) !important; }}
+.stTabs [data-baseweb="tab"] {{ color: var(--dim) !important; font-weight: 600 !important; font-size: 12px !important; background: transparent !important; }}
+.stTabs [aria-selected="true"] {{ color: var(--text) !important; }}
+.stTabs [data-baseweb="tab-highlight"] {{ background: var(--accent) !important; }}
+
+/* Metrics */
+[data-testid="stMetric"] {{
+  background: var(--panel) !important; border: 1px solid var(--border) !important;
+  border-radius: 8px !important; padding: 10px 12px !important;
+}}
+[data-testid="stMetricLabel"], [data-testid="stMetric"] label {{ color: var(--dim) !important; font-size: 11px !important; letter-spacing: .06em; text-transform: uppercase; }}
+[data-testid="stMetricValue"] {{ color: var(--text) !important; font-size: 20px !important; font-weight: 600 !important; font-variant-numeric: tabular-nums; }}
+[data-testid="stMetricDelta"] {{ font-size: 12px !important; }}
+
+/* Buttons */
+.stButton > button, .stFormSubmitButton > button, .stDownloadButton > button {{
+  background: var(--panel) !important; color: var(--text) !important; border: 1px solid var(--border2) !important;
+  border-radius: 6px !important; font-size: 12px !important; font-weight: 600 !important; padding: 6px 14px !important;
+  transition: background .12s, color .12s;
+}}
+.stButton > button:hover, .stFormSubmitButton > button:hover {{ background: var(--accent) !important; color: #000 !important; border-color: var(--accent) !important; }}
+.stButton > button p, .stFormSubmitButton > button p {{ font-size: 12px !important; }}
+
+/* Inputs */
+.stTextInput input, .stTextArea textarea, .stNumberInput input,
+[data-baseweb="select"] > div, [data-baseweb="input"] {{
+  background: var(--panel) !important; color: var(--text) !important; border-color: var(--border2) !important;
+  border-radius: 6px !important; font-size: 13px !important;
+}}
+[data-baseweb="popover"] li {{ font-size: 13px !important; }}
+.stSlider [data-baseweb="slider"] div[role="slider"] {{ background: var(--accent) !important; border-color: var(--accent) !important; }}
+[data-testid="stExpander"] {{ border: 1px solid var(--border) !important; border-radius: 8px !important; background: var(--panel) !important; }}
+[data-testid="stExpander"] summary {{ color: var(--text) !important; }}
+[data-testid="stAlert"] {{ border-radius: 8px !important; }}
+
+/* Scrollbar */
+::-webkit-scrollbar {{ width: 6px; height: 6px; }}
+::-webkit-scrollbar-track {{ background: var(--bg); }}
+::-webkit-scrollbar-thumb {{ background: var(--border2); border-radius: 3px; }}
+
+/* ── Sentinel components ── */
+.up {{ color: var(--up) !important; }} .dn {{ color: var(--down) !important; }} .flat {{ color: var(--flat) !important; }}
+.num {{ font-variant-numeric: tabular-nums; font-family: var(--mono); }}
+.muted {{ color: var(--muted); }} .dim {{ color: var(--dim); }}
+
+.s-topbar {{ display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;
+  padding: 10px 14px; border:1px solid var(--border); border-radius:10px; background:var(--panel); }}
+.s-brand {{ font-weight:700; letter-spacing:.18em; font-size:14px; color:var(--accent); }}
+.s-pill {{ display:inline-flex; align-items:center; gap:6px; font-size:11px; font-weight:600; letter-spacing:.06em;
+  padding:3px 9px; border:1px solid var(--border2); border-radius:999px; color:var(--muted); white-space:nowrap; }}
+.s-dot {{ width:6px; height:6px; border-radius:50%; display:inline-block; }}
+
+.bb-ph {{ display:flex; align-items:center; gap:8px; color:var(--text); font-size:11px; font-weight:700;
+  letter-spacing:.12em; text-transform:uppercase; padding:4px 0 8px; margin:6px 0 6px; border-bottom:1px solid var(--border); }}
+.bb-sub {{ color:var(--dim); font-size:12px; margin:-2px 0 8px; line-height:1.5; }}
+.bb-divider {{ border:0; border-top:1px solid var(--border); margin:18px 0 10px; }}
+.s-panel {{ background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:14px 16px; }}
+.s-note {{ background:var(--panel); border:1px solid var(--border); border-left:3px solid var(--border2);
+  border-radius:8px; padding:10px 14px; color:var(--muted); font-size:12px; line-height:1.6; }}
+.s-note.warn {{ border-left-color: var(--accent); color: var(--text); }}
+.s-note.up {{ border-left-color: var(--up); }} .s-note.dn {{ border-left-color: var(--down); }}
+.s-empty {{ color:var(--dim); font-size:12px; padding:8px 0; }}
+
+.s-card {{ background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:12px 14px;
+  min-height: 86px; display:flex; flex-direction:column; justify-content:space-between; }}
+.s-card-lbl {{ color:var(--dim); font-size:10.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+.s-card-val {{ color:var(--text); font-size:20px; font-weight:600; line-height:1.25; margin-top:4px;
+  font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+.s-card-sub {{ font-size:12px; font-weight:500; margin-top:2px; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+.s-cards {{ display:grid; gap:10px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }}
+
+/* Data tables: one HTML table per section (aligned + horizontally scrollable) */
+.s-tbl-wrap {{ width:100%; overflow-x:auto; border:1px solid var(--border); border-radius:10px; background:var(--panel); }}
+.s-tbl {{ width:100%; border-collapse:collapse; font-size:12.5px; font-variant-numeric:tabular-nums; }}
+.s-tbl th {{ position:sticky; top:0; background:var(--panel2); color:var(--dim); font-size:10.5px; font-weight:600;
+  letter-spacing:.08em; text-transform:uppercase; padding:8px 10px; text-align:right; white-space:nowrap; border-bottom:1px solid var(--border); }}
+.s-tbl td {{ padding:7px 10px; text-align:right; color:var(--text); border-bottom:1px solid var(--border); white-space:nowrap; }}
+.s-tbl th.l, .s-tbl td.l {{ text-align:left; }}
+.s-tbl th, .s-tbl td, .opt-tbl th, .opt-tbl td, .em-table th, .em-table td {{ border-left:0 !important; border-right:0 !important; }}
+.s-tbl, .opt-tbl, .em-table {{ margin:0 !important; border:0 !important; }}
+.s-tbl td.wrap {{ white-space:normal; min-width:220px; }}
+.s-tbl tr:last-child td {{ border-bottom:0; }}
+.s-tbl tbody tr:hover td {{ background: rgba(255,255,255,.03); }}
+.s-tbl tr.hl td {{ background: rgba(255,255,255,.05); }}
+.s-tbl tr.sec td {{ background:var(--panel2); color:var(--muted); font-size:10.5px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; }}
+.s-tbl a {{ color:var(--text); text-decoration:none; }} .s-tbl a:hover {{ text-decoration:underline; }}
+.s-tkr {{ font-weight:700; color:var(--accent); }}
+.s-bar {{ height:6px; background:var(--panel2); border-radius:3px; overflow:hidden; min-width:60px; }}
+.s-bar > div {{ height:100%; background:var(--muted); border-radius:3px; }}
+
+/* Options chain tables */
+.opt-tbl {{ width:100%; border-collapse:collapse; font-size:12px; font-variant-numeric:tabular-nums; }}
+.opt-tbl th {{ background:var(--panel2); color:var(--dim); padding:6px 8px; text-align:right; font-size:10.5px;
+  letter-spacing:.06em; text-transform:uppercase; border-bottom:1px solid var(--border); white-space:nowrap; }}
+.opt-tbl th:first-child, .opt-tbl td:first-child {{ text-align:left; }}
+.opt-tbl td {{ padding:5px 8px; text-align:right; color:var(--text); border-bottom:1px solid var(--border); white-space:nowrap; }}
+.opt-tbl tr:hover td {{ background: rgba(255,255,255,.03); }}
+.opt-itm td {{ background: rgba(255,255,255,.035); }}
+.opt-atm td {{ background: rgba(255,255,255,.09) !important; }}
+.opt-hvol {{ font-weight:700; color:var(--accent) !important; }}
+
+/* News */
+.bb-news {{ background:var(--panel); border:1px solid var(--border); border-left:3px solid var(--border2);
+  border-radius:8px; padding:10px 14px; margin:6px 0; }}
+.bb-news:hover {{ border-left-color: var(--accent); }}
+.bb-news a, .bb-news span.t {{ color:var(--text); text-decoration:none; font-size:14px; font-weight:600; line-height:1.45; }}
+.bb-news a:hover {{ text-decoration:underline; }}
+.bb-meta {{ color:var(--dim); font-size:11px; margin-top:4px; }}
+
+/* Polymarket */
+.poly-card {{ background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:12px 14px; margin:8px 0; }}
+.poly-card a {{ color:var(--text); text-decoration:none; font-weight:600; font-size:13.5px; }}
+.poly-card a:hover {{ text-decoration:underline; }}
+.poly-status {{ font-size:10px; font-weight:700; letter-spacing:.08em; padding:2px 7px; border-radius:999px; border:1px solid var(--border2); color:var(--muted); white-space:nowrap; }}
+.poly-status.active {{ color:var(--accent); border-color:var(--accent); }}
+
+/* Insider cards */
+.ins-card {{ background:var(--panel); border:1px solid var(--border); border-left:3px solid var(--border2); border-radius:8px; padding:10px 14px; margin:6px 0; }}
+.ins-card.buy {{ border-left-color: var(--up); }} .ins-card.sell {{ border-left-color: var(--down); }}
+.ins-name {{ color:var(--text); font-weight:700; font-size:13.5px; }}
+.ins-role {{ color:var(--muted); font-size:12px; }}
+.ins-buy {{ color:var(--up); font-weight:700; font-size:12px; }} .ins-sell {{ color:var(--down); font-weight:700; font-size:12px; }}
+.ins-meta {{ color:var(--dim); font-size:11.5px; }}
+
+/* Chat */
+.chat-user {{ background:var(--panel2); border:1px solid var(--border2); border-radius:10px; padding:10px 14px; margin:8px 0; font-size:13px; }}
+.chat-ai {{ background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:12px 16px; margin:8px 0;
+  font-size:13px; line-height:1.65; color:var(--text); font-family:var(--mono); white-space:normal; overflow-x:auto; }}
+
+/* Earnings matrix */
+.em-container {{ background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:14px; margin:10px 0; overflow-x:auto; }}
+.em-header {{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px; }}
+.em-badge {{ background:var(--accent); color:#000; padding:2px 8px; border-radius:4px; font-size:10px; font-weight:700; letter-spacing:.06em; }}
+.em-grid {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap:16px; }}
+.em-cap {{ color:var(--dim); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; margin:8px 0 6px; font-weight:600; }}
+.em-table {{ width:100%; border-collapse:collapse; font-size:12px; font-variant-numeric:tabular-nums; }}
+.em-table th {{ color:var(--dim); font-size:10.5px; padding:5px 8px; text-align:right; border-bottom:1px solid var(--border2); font-weight:600; }}
+.em-table th:first-child, .em-table td:first-child {{ text-align:left; }}
+.em-table td {{ padding:5px 8px; text-align:right; border-bottom:1px solid var(--border); color:var(--text); }}
+.em-table td:first-child {{ color:var(--muted); }}
+.em-table .em-annual td {{ border-top:1px solid var(--border2); font-weight:700; }}
+.em-sub {{ display:block; font-size:10px; color:var(--dim); }}
+
+/* Alert fade */
+@keyframes sFade {{ 0%,70% {{ opacity:1; max-height:120px; }} 100% {{ opacity:0; max-height:0; padding:0; margin:0; border:0; }} }}
+.s-fade {{ animation: sFade 4s ease-out forwards; overflow:hidden; }}
+
+@media (max-width: 900px) {{
+  .block-container, [data-testid="stMainBlockContainer"] {{ padding: .75rem .75rem 2rem !important; }}
+  .s-card-val {{ font-size:17px; }}
+}}
+</style>
+"""
+
+
+def inject_theme() -> None:
+    st.markdown(CSS, unsafe_allow_html=True)
+
+
+_AXIS = dict(
+    gridcolor="#161616", color=TEXT_DIM, showgrid=True, zeroline=False,
+    showline=True, linecolor=BORDER, tickfont=dict(size=10, color=TEXT_DIM),
+)
+
+CHART_LAYOUT = dict(
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(0,0,0,0)",
+    font=dict(color=TEXT_MUTED, family="Inter, sans-serif", size=11),
+    xaxis=dict(_AXIS),
+    yaxis=dict(_AXIS, side="right"),
+    showlegend=False,
+    hovermode="x unified",
+    hoverlabel=dict(bgcolor="#111111", bordercolor=BORDER_STRONG, font=dict(size=12, color=TEXT, family="Inter, sans-serif")),
+    margin=dict(l=8, r=48, t=56, b=8),
+    title=dict(font=dict(size=12, color=TEXT), x=0, xanchor="left", y=0.98, yanchor="top", pad=dict(t=6)),
+    legend=dict(font=dict(size=10, color=TEXT_MUTED), bgcolor="rgba(0,0,0,0)", orientation="h",
+                x=1, xanchor="right", y=1.0, yanchor="bottom"),
+)
+
+PLOTLY_CONFIG = {"displayModeBar": False, "displaylogo": False}
+
+
+def chart_layout(**overrides) -> dict:
+    """A fresh copy of the base layout merged with *overrides* (nested dicts merge)."""
+    base = copy.deepcopy(CHART_LAYOUT)
+    for k, v in overrides.items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            base[k].update(v)
+        else:
+            base[k] = v
+    return base
+
+
+def dark_fig(height=300, **overrides):
+    fig = go.Figure()
+    fig.update_layout(**chart_layout(height=height, **overrides))
+    return fig
+
+
+def plot(fig, key=None, config=None):
+    """st.plotly_chart with the theme's config and full-width layout."""
+    st.plotly_chart(fig, width="stretch", config=config or PLOTLY_CONFIG, key=key)
