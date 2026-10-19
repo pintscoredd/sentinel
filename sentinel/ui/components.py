@@ -15,7 +15,7 @@ import pytz
 import streamlit as st
 
 from sentinel.core.formatting import _esc, _safe_float, _safe_int, fmt_vol
-from sentinel.data.polymarket import _parse_poly_field
+from sentinel.data.polymarket import _parse_poly_field, live_markets
 from sentinel.ui.palette import DOWN, FLAT, TEXT, TEXT_DIM, UP, signed_color
 
 
@@ -101,18 +101,19 @@ def table_html(headers: list[str], rows: list[list], align: str | None = None,
     """
     n = len(headers)
     align = (align or ("l" + "r" * (n - 1)))[:n].ljust(n, "r")
-    th = "".join(f'<th class="{"l" if a == "l" else ""}">{_esc(h)}</th>' for h, a in zip(headers, align))
+    cls = {"l": "l", "c": "c", "w": "l"}
+    th = "".join(f'<th class="{cls.get(a, "")}">{_esc(h)}</th>' for h, a in zip(headers, align))
     body = []
     for i, row in enumerate(rows):
-        cls = row_classes[i] if row_classes and i < len(row_classes) else ""
-        if cls == "sec":
+        rcls = row_classes[i] if row_classes and i < len(row_classes) else ""
+        if rcls == "sec":
             body.append(f'<tr class="sec"><td class="l" colspan="{n}">{row[0]}</td></tr>')
             continue
         tds = "".join(
-            f'<td class="{"l" if a == "l" else ""}{" wrap" if a == "w" else ""}">{"" if v is None else v}</td>'
+            f'<td class="{cls.get(a, "")}{" wrap" if a == "w" else ""}">{"" if v is None else v}</td>'
             for v, a in zip(row, align)
         )
-        body.append(f'<tr class="{cls}">{tds}</tr>')
+        body.append(f'<tr class="{rcls}">{tds}</tr>')
     style = f' style="max-height:{max_height}px;overflow-y:auto"' if max_height else ""
     return (f'<div class="s-tbl-wrap"{style}><table class="s-tbl"><thead><tr>{th}</tr></thead>'
             f'<tbody>{"".join(body)}</tbody></table></div>')
@@ -146,7 +147,7 @@ def tv_chart(symbol, height=450, interval="60", range_="3M"):
         "hide_side_toolbar": False, "allow_symbol_change": True, "save_image": False,
         "withdateranges": True, "container_id": f"tv_c_{cid}",
         "backgroundColor": "rgba(0,0,0,1)", "gridColor": "rgba(24,24,24,1)",
-        "studies": ["STD;EMA", "STD;RSI", "Volume@tv-basicstudies"],
+        "studies": [],
         "overrides": {
             "paneProperties.background": "#000000",
             "paneProperties.vertGridProperties.color": "#181818",
@@ -397,9 +398,7 @@ def poly_status(m):
 
 def _extract_participants(evt, limit=5):
     out = []
-    for mk in evt.get("markets", []) or []:
-        if mk.get("closed") and not evt.get("closed"):
-            continue
+    for mk in live_markets(evt):
         name = mk.get("groupItemTitle") or mk.get("question", "")[:40]
         prices = _parse_poly_field(mk.get("outcomePrices", []))
         out.append((name, _safe_float(prices[0]) if prices else 0.0))
@@ -428,7 +427,7 @@ def render_poly_card(evt):
             f'{bar_html(pct, "#FFFFFF" if pct >= 50 else "#6E6E6E")}</div>'
         )
     v24, vtot = _safe_float(evt.get("volume24hr")), _safe_float(evt.get("volume"))
-    n = len(evt.get("markets", []) or [])
+    n = len(live_markets(evt))
     meta = f"24h ${fmt_vol(v24)} · total ${fmt_vol(vtot)}" + (f" · {n} markets" if n > 1 else "")
     return (
         f'<div class="poly-card"><div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">'

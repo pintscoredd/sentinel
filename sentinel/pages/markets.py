@@ -9,6 +9,7 @@ from datetime import datetime
 import numpy as np
 import streamlit as st
 
+from sentinel.core.cache import prefetch
 from sentinel.core.formatting import _esc, fmt_p, fmt_vol
 from sentinel.data.cross_asset import get_sector_rrg, stat_arb_screener
 from sentinel.data.market import get_futures, get_global_indices, get_vix_full, sector_etfs, top_movers, yahoo_quote
@@ -19,7 +20,7 @@ from sentinel.state import key
 from sentinel.ui.components import (
     cards, divider, empty, note, render_news_card, render_stat_arb_cards, section, signed, table, tkr,
 )
-from sentinel.ui.palette import DOWN, FLAT, SERIES, TEXT, TEXT_DIM, UP, signed_color
+from sentinel.ui.palette import DOWN, SERIES, TEXT, TEXT_DIM, UP, signed_color
 from sentinel.ui.theme import dark_fig, go, plot
 
 SUBPAGES = ["Overview", "Ticker", "Rotation", "Volatility"]
@@ -107,6 +108,7 @@ def _news():
 
 
 def _overview():
+    prefetch(get_global_indices, get_futures, sector_etfs, top_movers)
     _global_indices()
     divider()
     left, right = st.columns([1, 1], gap="large")
@@ -120,45 +122,85 @@ def _overview():
 
 
 # ── Rotation ────────────────────────────────────────────────────────────────
+_QUAD = {  # quadrant → (head colour, background tint, plain-English meaning)
+    "LEADING": (UP, "rgba(63,207,142,0.07)", "outperforming and still accelerating"),
+    "WEAKENING": ("#D4D4D4", "rgba(255,255,255,0.035)", "outperforming but losing momentum"),
+    "LAGGING": (DOWN, "rgba(242,85,90,0.07)", "underperforming and still decelerating"),
+    "IMPROVING": ("#8A8A8A", "rgba(255,255,255,0.02)", "underperforming but momentum turning up"),
+}
+_ARROWS = ["→", "↗", "↑", "↖", "←", "↙", "↓", "↘"]
+
+
+def _arrow(deg):
+    return _ARROWS[int(((deg % 360) + 22.5) // 45) % 8]
+
+
 def _rotation():
-    section("Relative rotation graph", "Sector ETFs vs SPY · RS-ratio (x) vs RS-momentum (y), 100 = in line with SPY")
+    section("Sector rotation (RRG)", "Each sector vs the S&P 500. Right = stronger relative trend, up = that trend "
+                                     "is accelerating. Sectors normally rotate clockwise: Improving → Leading → "
+                                     "Weakening → Lagging.")
     rrg = get_sector_rrg()
     if not rrg:
         empty("RRG data unavailable.")
     else:
-        quad_color = {"LEADING": UP, "WEAKENING": SERIES[1], "LAGGING": DOWN, "IMPROVING": SERIES[2]}
-        xs, ys = [s["rs_ratio"] for s in rrg], [s["rs_momentum"] for s in rrg]
-        xp = max(max(abs(x - 100) for x in xs) * 1.3, 1.0)
-        yp = max(max(abs(y - 100) for y in ys) * 1.3, 1.0)
-        fig = dark_fig(520, hovermode="closest")
-        for x0, y0, x1, y1, lbl, ax, ay in ((100, 100, 100 + xp, 100 + yp, "LEADING", 1, 1),
-                                            (100, 100 - yp, 100 + xp, 100, "WEAKENING", 1, -1),
-                                            (100 - xp, 100 - yp, 100, 100, "LAGGING", -1, -1),
-                                            (100 - xp, 100, 100, 100 + yp, "IMPROVING", -1, 1)):
-            fig.add_shape(type="rect", x0=x0, y0=y0, x1=x1, y1=y1, line_width=0, layer="below",
-                          fillcolor="rgba(255,255,255,0.025)" if lbl in ("LEADING", "LAGGING") else "rgba(0,0,0,0)")
-            fig.add_annotation(x=100 + ax * xp * 0.85, y=100 + ay * yp * 0.9, text=lbl, showarrow=False,
-                               font=dict(size=10, color=quad_color[lbl]))
-        fig.add_hline(y=100, line=dict(color="#333", width=1))
-        fig.add_vline(x=100, line=dict(color="#333", width=1))
-        for s in rrg:
-            c = quad_color.get(s["quadrant"], FLAT)
-            if len(s.get("trail_ratio", [])) >= 2:
-                fig.add_trace(go.Scatter(x=s["trail_ratio"], y=s["trail_momentum"], mode="lines",
-                                         line=dict(color=c, width=1), opacity=0.4, hoverinfo="skip"))
-            fig.add_trace(go.Scatter(x=[s["rs_ratio"]], y=[s["rs_momentum"]], mode="markers+text", text=[s["etf"]],
-                                     textposition="top center", textfont=dict(size=10, color=TEXT),
-                                     marker=dict(size=11, color=c, line=dict(width=1, color="#000")),
-                                     hovertemplate=f"{s['sector']} ({s['etf']})<br>RS-ratio %{{x:.2f}}<br>"
-                                                   f"RS-momentum %{{y:.2f}}<br>{s['quadrant']}<extra></extra>"))
-        fig.update_layout(xaxis=dict(title="RS-ratio", range=[100 - xp, 100 + xp]),
-                          yaxis=dict(title="RS-momentum", range=[100 - yp, 100 + yp], side="left"),
-                          margin=dict(l=8, r=16, t=16, b=8))
-        plot(fig, key="rrg")
-        rows = [[_esc(s["sector"]), tkr(s["etf"]), f'{s["rs_ratio"]:.2f}', f'{s["rs_momentum"]:.2f}',
-                 f'<span style="color:{quad_color.get(s["quadrant"], FLAT)};font-weight:600">{s["quadrant"].title()}</span>']
-                for s in sorted(rrg, key=lambda s: -s["rs_ratio"])]
-        table(["Sector", "ETF", "RS-ratio", "RS-momentum", "Quadrant"], rows)
+        c1, c2 = st.columns([1, 3])
+        tail = c1.select_slider("Tail", options=[1, 2, 4, 6, 8], value=4, key="rrg_tail",
+                                format_func=lambda n: f"{n}-week tail" if n > 1 else "No tail")
+        all_etfs = [r["etf"] for r in rrg]
+        pick = c2.multiselect("Sectors", all_etfs, default=all_etfs, key="rrg_pick",
+                              format_func=lambda e: f"{e} · {next(r['sector'] for r in rrg if r['etf'] == e)}",
+                              label_visibility="collapsed")
+        shown = [r for r in rrg if r["etf"] in pick] or rrg
+        pts_x = [x for r in shown for x in r["trail_ratio"][-tail:]]
+        pts_y = [y for r in shown for y in r["trail_momentum"][-tail:]]
+        span = max(max(abs(v - 100) for v in pts_x + pts_y) * 1.18, 2.0)
+        lo, hi = 100 - span, 100 + span
+
+        fig = dark_fig(620, hovermode="closest", margin=dict(l=8, r=8, t=8, b=8))
+        for (x0, x1, y0, y1, q, ax, ay) in ((100, hi, 100, hi, "LEADING", 1, 1), (100, hi, lo, 100, "WEAKENING", 1, -1),
+                                            (lo, 100, lo, 100, "LAGGING", -1, -1), (lo, 100, 100, hi, "IMPROVING", -1, 1)):
+            fig.add_shape(type="rect", x0=x0, x1=x1, y0=y0, y1=y1, fillcolor=_QUAD[q][1], line_width=0, layer="below")
+            fig.add_annotation(x=100 + ax * span * 0.97, y=100 + ay * span * 0.95, text=q.title(), showarrow=False,
+                               xanchor="right" if ax > 0 else "left", yanchor="top" if ay > 0 else "bottom",
+                               font=dict(size=15, color=_QUAD[q][0]), opacity=0.55)
+        fig.add_hline(y=100, line=dict(color="#444", width=1))
+        fig.add_vline(x=100, line=dict(color="#444", width=1))
+        for r in shown:
+            color = _QUAD[r["quadrant"]][0]
+            xs, ys = r["trail_ratio"][-tail:], r["trail_momentum"][-tail:]
+            if len(xs) > 1:
+                fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines+markers", line=dict(color=color, width=1.6, shape="spline"),
+                                         marker=dict(size=[4] * (len(xs) - 1) + [0], color=color), opacity=0.55,
+                                         hoverinfo="skip", showlegend=False))
+                fig.add_annotation(x=xs[-1], y=ys[-1], ax=xs[-2], ay=ys[-2], xref="x", yref="y", axref="x", ayref="y",
+                                   showarrow=True, arrowhead=2, arrowsize=1.2, arrowwidth=1.6, arrowcolor=color, text="")
+            fig.add_trace(go.Scatter(
+                x=[xs[-1]], y=[ys[-1]], mode="markers+text", text=[r["etf"]], textposition="top center",
+                textfont=dict(size=12, color="#EDEDED"), showlegend=False,
+                marker=dict(size=14, color=color, line=dict(width=2, color="#000")),
+                hovertemplate=(f"<b>{r['sector']} ({r['etf']})</b><br>{r['quadrant'].title()} — {_QUAD[r['quadrant']][2]}"
+                               f"<br>RS-ratio %{{x:.2f}} · RS-momentum %{{y:.2f}}"
+                               + (f"<br>1M vs SPY {r['rel_1m']:+.1f}%" if r.get("rel_1m") is not None else "")
+                               + "<extra></extra>")))
+        fig.update_layout(xaxis=dict(title="Relative strength (RS-ratio)", range=[lo, hi], showgrid=False, zeroline=False),
+                          yaxis=dict(title="Relative momentum (RS-momentum)", range=[lo, hi], side="left", showgrid=False,
+                                     zeroline=False, scaleanchor="x", scaleratio=1))
+        left, right = st.columns([3, 2], gap="large")
+        with left:
+            plot(fig, key="rrg")
+        with right:
+            order = {"LEADING": 0, "WEAKENING": 1, "IMPROVING": 2, "LAGGING": 3}
+            rows = []
+            for r in sorted(rrg, key=lambda r: (order[r["quadrant"]], -r["rs_ratio"])):
+                color = _QUAD[r["quadrant"]][0]
+                rows.append([
+                    f'{tkr(r["etf"])} <span class="dim">{_esc(r["sector"])}</span>',
+                    f'<span style="color:{color};font-weight:600">{r["quadrant"].title()}</span>',
+                    f'<span title="direction of travel this week" style="font-size:15px">{_arrow(r["heading_deg"])}</span>',
+                    signed(r.get("rel_1m"), "{:+.1f}", "%"),
+                ])
+            table(["Sector", "Quadrant", "Heading", "1M vs SPY"], rows, align="llcr")
+            st.caption("Heading = direction the sector moved on the graph over the last week.")
     divider()
     section("Statistical arbitrage", "Engle-Granger cointegration on ~1 year of daily closes · z-score of the spread")
     arb = stat_arb_screener()

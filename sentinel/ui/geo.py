@@ -1,4 +1,4 @@
-"""GEO page: Cesium globe embed, live news networks, theater feed, commodity impact."""
+"""GEO page: 3D globe embed, live news networks, theater feed, commodity impact."""
 from __future__ import annotations
 
 import base64
@@ -16,9 +16,8 @@ from sentinel.config import GEO_FINANCIAL_NETWORKS, GEO_IMPACT_TICKERS, GEO_THEA
 from sentinel.core.formatting import _esc, fmt_p
 from sentinel.data.geo import (
     fetch_ais_vessels, fetch_conflict_feed, fetch_military_aircraft_json,
-    fetch_satellite_positions_json,
 )
-from sentinel.data.market import multi_quotes
+from sentinel.data.market import get_global_indices, multi_quotes
 from sentinel.data.news import gdelt_news, newsapi_headlines
 from sentinel.state import key
 from sentinel.ui.components import divider, empty, gdelt_date, render_news_card, section, signed, table
@@ -34,22 +33,30 @@ def _globe_template() -> str:
 @st.cache_data(ttl=300, show_spinner=False)
 def _globe_payload() -> str:
     """Server-side snapshot of keyless feeds, base64 JSON for safe injection."""
-    jobs = {"planes": fetch_military_aircraft_json, "sats": fetch_satellite_positions_json, "vessels": fetch_ais_vessels,
-            "news": fetch_conflict_feed}
+    # Satellites are propagated live in the browser (satellite.js + CelesTrak TLEs).
+    jobs = {"planes": fetch_military_aircraft_json, "vessels": fetch_ais_vessels, "news": fetch_conflict_feed,
+            "markets": get_global_indices}
     out = {}
     with ThreadPoolExecutor(max_workers=5) as pool:
         futs = {k: pool.submit(fn) for k, fn in jobs.items()}
         for k, f in futs.items():
             try:
-                out[k] = f.result(timeout=30) or []
+                out[k] = f.result(timeout=30)
             except Exception:
-                out[k] = []
-    planes, sats, vessels = out["planes"][:400], out["sats"][:80], out["vessels"][:600]
+                out[k] = None
+    planes, vessels = (out["planes"] or [])[:400], (out["vessels"] or [])[:1200]
+    markets = {}
+    idx = out["markets"]
+    if idx is not None and not getattr(idx, "empty", True):
+        for r in idx.to_dict("records"):  # first listed index per country is the headline one
+            cc = r.get("Flag")
+            if cc and cc not in markets:
+                markets[cc] = {"name": r["Index"], "price": r["Value"], "chg": r["% Chg"], "asof": r.get("AsOf", "")}
     data = {
-        "planes": planes, "sats": sats, "vessels": vessels,
+        "planes": planes, "vessels": vessels, "markets": markets,
         "conflicts": (out["news"] or {}).get("signals", []), "headlines": (out["news"] or {}).get("headlines", []),
         "meta": {"generatedAt": datetime.now(pytz.utc).isoformat(),
-                 "counts": {"planes": len(planes), "sats": len(sats), "vessels": len(vessels)}},
+                 "counts": {"planes": len(planes), "vessels": len(vessels)}},
     }
     raw = json.dumps(_clean(data), default=str, ensure_ascii=True, allow_nan=False)
     return base64.b64encode(raw.encode()).decode("ascii")
@@ -70,7 +77,7 @@ def _network_html(net: dict) -> str:
     src = _esc(net["embed_url"])
     fallback = _esc(f"https://www.youtube.com/channel/{net['channel_id']}/live")
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-html,body{{margin:0;background:#000;font:12px Inter,system-ui,sans-serif;color:#6E6E6E}}
+html,body{{margin:0;background:#000;font:12px Inter,system-ui,sans-serif;color:#8C8C8C}}
 .w{{position:relative;width:100%;padding-top:56.25%;background:#000;border:1px solid #1F1F1F;border-radius:10px;overflow:hidden}}
 iframe{{position:absolute;inset:0;width:100%;height:100%;border:0}}
 a{{color:#A3A3A3;text-decoration:none}}.m{{display:flex;justify-content:space-between;margin-top:6px}}</style></head>

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import streamlit as st
 
+from sentinel.core.cache import prefetch
 from sentinel.core.formatting import _esc, fmt_p, fmt_vol
 from sentinel.data.market import calc_stock_fear_greed, get_vix_full, multi_quotes, sector_etfs, yahoo_quote
-from sentinel.data.news import gdelt_news, is_market_relevant
+from sentinel.data.news import google_news, is_market_relevant
 from sentinel.data.polymarket import polymarket_events
 from sentinel.state import save_watchlist
 from sentinel.ui.components import (
@@ -111,8 +112,8 @@ def _polymarket():
 
 
 def _geo():
-    query = st.session_state.geo_watch.strip() or "(war OR sanctions OR tariff OR blockade OR ceasefire)"
-    arts = gdelt_news(query, 15)
+    query = _geo_query()
+    arts = google_news(query, 30)
     seen, shown = set(), 0
     for a in arts or []:
         t = a.get("title", "")
@@ -126,10 +127,18 @@ def _geo():
         if shown >= 6:
             break
     if not shown:
-        empty("GDELT feed unavailable right now.")
+        empty("News feed unavailable right now.")
+
+
+def _geo_query():
+    return st.session_state.geo_watch.strip() or "(war OR sanctions OR tariff OR blockade OR ceasefire)"
 
 
 def render():
+    wl = tuple(st.session_state.watchlist)
+    prefetch(lambda: multi_quotes(tuple(t for t, _ in STRIP)), get_vix_full, calc_stock_fear_greed,
+             lambda: yahoo_quote("^VIX"), sector_etfs, lambda: polymarket_events(40),
+             lambda: google_news(_geo_query(), 30), *([lambda: multi_quotes(wl)] if wl else []))
     section("Market tape", "Day change vs prior close · refreshes every 60 s")
     _tape()
     divider()
@@ -144,5 +153,5 @@ def render():
     with right:
         section("Polymarket · most traded")
         _polymarket()
-        section("Geo watch", "GDELT · last 72 h")
+        section("Geo watch", "Google News · last 48 h")
         _geo()

@@ -133,3 +133,30 @@ def stale_cached_source(
         return wrapper
 
     return decorator
+
+
+def prefetch(*calls: Callable[[], Any], timeout: float = 25.0) -> None:
+    """Warm several cached data calls in parallel before a page renders them.
+
+    Each call is a zero-arg callable (usually a cached fetcher). Results land in
+    the function caches, so the page's later sequential calls return instantly.
+    Failures are ignored here; the page handles missing data itself.
+    """
+    from concurrent.futures import ThreadPoolExecutor, wait
+
+    try:
+        from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+        ctx = get_script_run_ctx()
+    except Exception:  # pragma: no cover - outside Streamlit
+        add_script_run_ctx = ctx = None
+
+    def _run(fn):
+        if ctx is not None:
+            add_script_run_ctx(threading.current_thread(), ctx)
+        try:
+            fn()
+        except Exception:
+            pass
+
+    with ThreadPoolExecutor(max_workers=min(8, len(calls)) or 1) as pool:
+        wait([pool.submit(_run, fn) for fn in calls], timeout=timeout)

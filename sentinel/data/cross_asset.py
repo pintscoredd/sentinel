@@ -5,12 +5,13 @@ import logging
 import math
 from datetime import datetime, timedelta
 
+import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
 
 from sentinel.core.http import _yf_semaphore, get_yf_ticker, yf
-from sentinel.data.market import _extract_ohlcv_frames, get_spy_history
+from sentinel.data.market import _extract_ohlcv_frames
 
 logger = logging.getLogger("sentinel.data")
 
@@ -208,103 +209,59 @@ def get_macro_correlation_matrix(lookback_days=60):
     return {"pearson": pearson, "spearman": spearman, "labels": names, "lookback_days": len(moves)}
 
 
-@st.cache_data(ttl=3600)
-def get_sector_rrg():
-    """Calculate Relative Rotation Graph data: RS-Ratio vs RS-Momentum for sector ETFs vs SPY."""
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_sector_rrg(tail_weeks: int = 8):
+    """Relative Rotation Graph inputs for SPDR sectors vs SPY (JdK-style approximation).
 
+    RS-ratio  = 100 × (ETF/SPY) / its 50-day mean          (relative trend)
+    RS-mom    = 100 + 10-day % change of RS-ratio            (rate of change of that trend)
+    Tails are weekly (Friday) samples so the path shows rotation over time.
+    """
     if yf is None:
         return None
-
-    sector_etf_map = {
-        "XLK": "Technology", "XLF": "Financials", "XLE": "Energy",
-        "XLV": "Healthcare", "XLP": "Staples", "XLU": "Utilities",
-        "XLY": "Discretionary", "XLB": "Materials", "XLC": "Comm Svcs",
-        "XLRE": "Real Estate", "XLI": "Industrials",
-    }
-
-    tickers = list(sector_etf_map.keys())
-
+    names = {"XLK": "Technology", "XLF": "Financials", "XLE": "Energy", "XLV": "Health Care",
+             "XLP": "Staples", "XLU": "Utilities", "XLY": "Discretionary", "XLB": "Materials",
+             "XLC": "Communication", "XLRE": "Real Estate", "XLI": "Industrials"}
+    tickers = list(names) + ["SPY"]
     try:
-        data = yf.download(tickers, period="6mo", progress=False, threads=True)
-        if data.empty:
-            return None
-
-        if isinstance(data.columns, pd.MultiIndex):
-            if "Close" in data.columns.get_level_values(0):
-                closes = data["Close"]
-            elif "Close" in data.columns.get_level_values(1):
-                closes = data.xs("Close", level=1, axis=1)
-            else:
-                closes = data
-        elif "Close" in data.columns:
-            closes = data[["Close"]]
-        else:
-            closes = data
-
-        if hasattr(closes.index, 'tz_localize') and closes.index.tz is not None:
-            closes.index = closes.index.tz_localize(None)
-
-        spy_hist = get_spy_history().tail(130)
-        spy_close = spy_hist["Close"].dropna()
-        if hasattr(spy_close.index, 'tz_localize') and spy_close.index.tz is not None:
-            spy_close.index = spy_close.index.tz_localize(None)
-
-        if spy_close.empty or len(spy_close) < 60:
-            return None
-
-        rows = []
-        for etf, sector_name in sector_etf_map.items():
-            try:
-                etf_close = closes[etf].dropna()
-                if len(etf_close) < 60:
-                    continue
-
-                aligned = pd.DataFrame({"etf": etf_close, "spy": spy_close}).dropna()
-                if len(aligned) < 60:
-                    continue
-
-                rs = aligned["etf"] / aligned["spy"]
-                rs_sma = rs.rolling(60).mean()
-                rs_ratio = (rs / rs_sma * 100).dropna()
-
-                if rs_ratio.empty:
-                    continue
-
-                rs_momentum = rs_ratio.pct_change(periods=10) * 100 + 100
-
-                current_ratio = float(rs_ratio.iloc[-1])
-                current_momentum = float(rs_momentum.dropna().iloc[-1]) if not rs_momentum.dropna().empty else 100.0
-
-                trail_ratio = rs_ratio.resample("W").last().dropna().tail(4).tolist()
-                trail_momentum = rs_momentum.resample("W").last().dropna().tail(4).tolist()
-
-                if current_ratio >= 100 and current_momentum >= 100:
-                    quadrant = "LEADING"
-                elif current_ratio >= 100 and current_momentum < 100:
-                    quadrant = "WEAKENING"
-                elif current_ratio < 100 and current_momentum < 100:
-                    quadrant = "LAGGING"
-                else:
-                    quadrant = "IMPROVING"
-
-                rows.append({
-                    "etf": etf,
-                    "sector": sector_name,
-                    "rs_ratio": round(current_ratio, 2),
-                    "rs_momentum": round(current_momentum, 2),
-                    "quadrant": quadrant,
-                    "trail_ratio": trail_ratio,
-                    "trail_momentum": trail_momentum,
-                })
-            except (KeyError, IndexError, ZeroDivisionError) as e:
-                logger.warning("RRG sector skip: %s", {"etf": etf, "error": str(e)})
-                continue
-
-        return rows if rows else None
+        with _yf_semaphore:
+            data = yf.download(tickers, period="1y", progress=False, threads=True, auto_adjust=True)
     except Exception as e:
-        logger.error("Sector RRG calculation failed: %s", {"error": str(e)})
+        logger.error("RRG download failed: %s", e)
         return None
-
+    frames = _extract_ohlcv_frames(data, tickers)
+    if "SPY" not in frames:
+        return None
+    spy = frames["SPY"]["Close"].dropna()
+    rows = []
+    for etf, sector in names.items():
+        if etf not in frames:
+            continue
+        px = frames[etf]["Close"].dropna()
+        both = pd.concat([px, spy], axis=1, join="inner").dropna()
+        if len(both) < 80:
+            continue
+        rs = both.iloc[:, 0] / both.iloc[:, 1]
+        ratio = (rs / rs.rolling(50).mean() * 100).dropna()
+        mom = (ratio.pct_change(10) * 100 + 100).dropna()
+        df = pd.concat([ratio.rename("r"), mom.rename("m")], axis=1).dropna()
+        if df.empty:
+            continue
+        # Last observation of each week (the current week ends at today's value).
+        weekly = df.groupby(df.index.to_period("W-FRI")).tail(1).tail(tail_weeks)
+        r, m = float(df["r"].iloc[-1]), float(df["m"].iloc[-1])
+        quadrant = ("LEADING" if r >= 100 and m >= 100 else "WEAKENING" if r >= 100
+                    else "LAGGING" if m < 100 else "IMPROVING")
+        prev = weekly.iloc[-2] if len(weekly) >= 2 else weekly.iloc[-1]
+        rows.append({
+            "etf": etf, "sector": sector, "rs_ratio": r, "rs_momentum": m, "quadrant": quadrant,
+            "trail_ratio": [float(x) for x in weekly["r"]], "trail_momentum": [float(x) for x in weekly["m"]],
+            "heading_deg": float(np.degrees(np.arctan2(m - prev["m"], r - prev["r"]))),
+            "speed": float(np.hypot(r - prev["r"], m - prev["m"])),
+            "perf_1m": float(px.iloc[-1] / px.iloc[-22] - 1) * 100 if len(px) > 22 else None,
+            "rel_1m": float((px.iloc[-1] / px.iloc[-22]) / (spy.iloc[-1] / spy.iloc[-22]) - 1) * 100 if len(px) > 22 else None,
+        })
+    return rows or None
 
 _COT_CONTRACTS = {
     "13874A": ("E-mini S&P 500", "ES"),

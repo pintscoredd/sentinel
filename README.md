@@ -29,9 +29,12 @@ Keys entered in the sidebar apply to that browser session only.
 | `ALPACA_API_KEY` + `ALPACA_SECRET_KEY` | Live SPY 0DTE chain, VWAP, direction model |
 | `MARINESIA_API_KEY` | Extra AIS vessels at chokepoints |
 
-Everything else is keyless: Yahoo Finance, Hyperliquid, CoinGecko, Polymarket, CBOE
-delayed options, CFTC COT, GDELT, USGS, NASA EONET, adsb.lol, CelesTrak,
-Digitraffic, Wikidata, World Bank.
+Everything else is keyless: Yahoo Finance, Nasdaq earnings calendar, Hyperliquid,
+CoinGecko, Polymarket, CBOE delayed options, CFTC COT, Google News RSS, GDELT, USGS,
+NASA EONET, adsb.lol, CelesTrak, Digitraffic (Finnish AIS), Wikidata, Wikipedia,
+World Bank. In the browser the globe also calls Planespotters (aircraft photos) and
+CelesTrak (TLEs propagated live with satellite.js); earnings logos come from
+Financial Modeling Prep's public image endpoint.
 
 ## Layout
 
@@ -67,10 +70,15 @@ every data call is cached, so switching pages stays fast.
   never fabricate missing values.
 - Hyperliquid funding is hourly; APR = hourly rate × 8,760. OI is converted at mark.
 - The BTC ETF chart is a directional dollar-volume proxy, not creation/redemption flow.
-- Polymarket "liquidity view" flags thin markets; it is not a trading signal.
+- Polymarket "liquidity view" flags thin markets; it is not a trading signal. Placeholder
+  outcomes (inactive, zero-volume "Team H" / "Other") are hidden.
+- Conflict markers group the last 48 h of headlines by region; they mark a region, not
+  an exact event location.
 
 ## Third-party code
 
 Portions adapted from God's Eye View and OSIRIS (MIT); see `THIRD_PARTY_NOTICES.md`.
-The globe uses [globe.gl](https://github.com/vasturiano/globe.gl) (MIT) and the Esri
-Dark Gray Canvas basemap.
+The globe uses [globe.gl](https://github.com/vasturiano/globe.gl) (MIT),
+[satellite.js](https://github.com/shashwatak/satellite-js) (MIT) and the Esri Dark Gray
+Canvas basemap. Aircraft photos are © their photographers via Planespotters.net; ship
+silhouettes are illustrative, with a link to VesselFinder for real photos.

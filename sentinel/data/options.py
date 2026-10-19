@@ -593,3 +593,41 @@ def get_gamma_squeeze_scanner():
     except Exception as e:
         logger.error("Gamma squeeze scanner failed: %s", {"error": str(e)})
         return []
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def earnings_expected_move(ticker: str, report_date: str, slot: str = "amc"):
+    """Options-implied earnings move: ATM straddle on the first expiry that includes the report.
+
+    For an after-close report the reaction trades the next session, so the
+    expiry must be strictly after the report date.
+    """
+    exps = options_expiries(ticker)
+    if not exps:
+        return None
+    rd = datetime.strptime(report_date, "%Y-%m-%d").date()
+    valid = [e for e in exps if (datetime.strptime(e, "%Y-%m-%d").date() > rd if slot != "bmo"
+                                 else datetime.strptime(e, "%Y-%m-%d").date() >= rd)]
+    if not valid:
+        return None
+    expiry = valid[0]
+    calls, puts, expiry = options_chain(ticker, expiry)
+    tk = get_yf_ticker(ticker)
+    try:
+        spot = float(tk.fast_info.last_price)
+    except Exception:
+        return None
+    if calls is None or puts is None or not spot:
+        return None
+
+    def _mid(df, k):
+        row = df.iloc[(df["strike"] - k).abs().argsort()[:1]].iloc[0]
+        b, a, last = (float(row.get(c) or 0) for c in ("bid", "ask", "lastPrice"))
+        return (b + a) / 2 if b > 0 and a >= b else (last or None)
+
+    k = float(calls.iloc[(calls["strike"] - spot).abs().argsort()[:1]]["strike"].iloc[0])
+    c, p = _mid(calls, k), _mid(puts, k)
+    if not c or not p:
+        return None
+    straddle = c + p
+    return {"expiry": expiry, "strike": k, "spot": spot, "straddle": straddle, "move_pct": straddle / spot * 100}

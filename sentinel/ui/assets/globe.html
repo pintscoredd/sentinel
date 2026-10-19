@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sentinel Globe</title>
 <script src="https://cdn.jsdelivr.net/npm/globe.gl@2.46.1/dist/globe.gl.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.0/dist/satellite.min.js"></script>
 <style>
-:root{--bg:#000;--panel:rgba(8,8,8,.92);--border:#1f1f1f;--border2:#333;--text:#ededed;--muted:#a3a3a3;--dim:#6e6e6e;--up:#3fcf8e;--down:#f2555a}
+:root{--bg:#000;--panel:rgba(8,8,8,.92);--border:#1f1f1f;--border2:#333;--text:#ededed;--muted:#a3a3a3;--dim:#8a8a8a;--up:#3fcf8e;--down:#f2555a}
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{background:#000;color:var(--text);width:100%;height:100%;overflow:hidden;font:12px Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
 .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;backdrop-filter:blur(6px)}
@@ -46,7 +47,12 @@ button{font:inherit;color:inherit}
 .row span:first-child{color:var(--dim)}
 .row span:last-child{text-align:right;font-variant-numeric:tabular-nums}
 .leader{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #141414}
-.leader img{width:44px;height:44px;border-radius:6px;object-fit:cover;filter:grayscale(1);background:#111;flex:none}
+.chead{display:flex;gap:12px;align-items:center;margin-bottom:4px}
+.chead .flag{height:40px;max-width:72px;object-fit:contain;border-radius:3px;box-shadow:0 0 0 1px #2a2a2a;flex:none}
+.wiki p{margin:10px 0 6px;font-size:13px;line-height:1.55;color:#C9C9C9}
+.wiki a{font-size:12px;color:#A3A3A3;text-decoration:none}
+.wiki a:hover{color:#fff}
+.leader img{width:44px;height:44px;border-radius:6px;object-fit:cover;background:#111;flex:none}
 .src{color:var(--dim);font-size:10px;margin-top:10px}
 
 #card{position:absolute;z-index:40;width:290px;padding:12px 14px;display:none}
@@ -77,7 +83,7 @@ button{font:inherit;color:inherit}
 #knobs{display:none;margin-top:6px}
 #knobs label{display:flex;justify-content:space-between;align-items:center;gap:6px;color:var(--dim);font-size:10px;margin:4px 0}
 #knobs input{width:110px;accent-color:#fff}
-#attr{position:absolute;right:12px;bottom:52px;z-index:15;color:#555;font-size:9px;max-width:50%;text-align:right;pointer-events:auto}
+#attr{position:absolute;right:12px;bottom:52px;z-index:15;color:#7a7a7a;font-size:9px;max-width:50%;text-align:right;pointer-events:auto}
 #attr a{color:#777;text-decoration:none}
 
 #ls{position:absolute;inset:0;background:#000;z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
@@ -120,7 +126,7 @@ button{font:inherit;color:inherit}
 
 <div id="bottom">
   <div id="news" class="panel"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-    <span class="lbl">Conflict headlines · GDELT</span><button class="btn" onclick="document.getElementById('news').classList.toggle('min')">–</button></div>
+    <span class="lbl">Conflict headlines · last 48 h</span><button class="btn" onclick="document.getElementById('news').classList.toggle('min')">–</button></div>
     <div class="body" id="newsBody"></div></div>
   <div class="panel ctl">
     <button class="btn on" id="bmBtn" onclick="toggleBasemap()">Basemap</button>
@@ -269,7 +275,7 @@ const LAYERS = [
   {id: 'refineries', name: 'Refineries'},
   {id: 'ports', name: 'Major ports'},
 ];
-const ON = new Set(['borders']);
+const ON = new Set(['borders', 'conflicts']);
 const CACHE = {};   // layer → array of point/path objects (built once)
 let globe, countries = [], hoverPoly = null, basemap = true;
 
@@ -290,21 +296,96 @@ async function fetchJSON(url, ms = 12000) {
 
 // ── Layer builders → normalized points {lat,lng,alt,r,color,info} / paths {pts,color,info}
 const pt = (layer, lat, lng, info, o = {}) => ({layer, lat, lng, alt: o.alt ?? 0.005, r: o.r ?? 0.25, color: o.color || SHADE[layer], info});
+let SATS = [], satTimer = null, orbitPath = null;
+function satPoint(s, when) {
+  const pv = satellite.propagate(s.rec, when);
+  if (!pv || !pv.position) return null;
+  const gd = satellite.eciToGeodetic(pv.position, satellite.gstime(when));
+  const lat = satellite.degreesLat(gd.latitude), lng = satellite.degreesLong(gd.longitude), km = gd.height;
+  if (!isFinite(lat) || !isFinite(lng)) return null;
+  const v = pv.velocity ? Math.hypot(pv.velocity.x, pv.velocity.y, pv.velocity.z) : 0;
+  const incl = s.rec.inclo * 180 / Math.PI, period = 2 * Math.PI / s.rec.no;  // minutes
+  const crewed = s.group.startsWith('Space');
+  return Object.assign(s, {lat, lng, alt: Math.min(km / 6371, 0.8), color: crewed ? '#FFFFFF' : '#C2C2C2', size: crewed ? 1.6 : 0.7,
+   info: {kind: 'sat', sat: s, cat: `Satellite · ${s.group} · CelesTrak`, title: s.name,
+    body: `Altitude  ${Math.round(km).toLocaleString()} km\nSpeed  ${v.toFixed(2)} km/s\nInclination  ${incl.toFixed(1)}°\nOrbital period  ${period.toFixed(0)} min\nNORAD ID  ${s.id}\nPosition  live (SGP4)`}});
+}
+function startSatClock() {
+  if (satTimer) return;
+  satTimer = setInterval(() => {
+    if (!ON.has('satellites') || !SATS.length) return;
+    const now = new Date();
+    CACHE.satellites = SATS.map(s => satPoint(s, now)).filter(Boolean);
+    globe.objectsData(CACHE.satellites.slice());
+  }, 3000);
+}
+function groundTrack(s) {
+  const pts = [], t0 = Date.now(), period = 2 * Math.PI / s.rec.no;
+  for (let m = 0; m <= period; m += Math.max(1, period / 120)) {
+    const pv = satellite.propagate(s.rec, new Date(t0 + m * 60000));
+    if (!pv || !pv.position) continue;
+    const gd = satellite.eciToGeodetic(pv.position, satellite.gstime(new Date(t0 + m * 60000)));
+    pts.push([satellite.degreesLat(gd.latitude), satellite.degreesLong(gd.longitude), Math.min(gd.height / 6371, 0.8)]);
+  }
+  return {layer: 'orbit', pts, color: '#FFFFFF', info: {cat: 'Orbit (next revolution)', title: s.name, body: ''}};
+}
+const SHIP_SHADE = {Cargo: '#BDBDBD', Tanker: '#FFFFFF', Passenger: '#8FB8FF', Fishing: '#8A8A8A', Tug: '#8A8A8A',
+                    'Service vessel': '#8A8A8A', Military: '#F2555A', 'Pleasure craft': '#6E6E6E', 'High-speed craft': '#D4D4D4'};
+// Side-profile silhouettes (illustrative, by AIS ship class).
+const SHIP_SVG = {
+  Cargo: '<path d="M4 34h92l-8 12H12z"/><rect x="18" y="22" width="12" height="12"/><rect x="31" y="22" width="12" height="12"/><rect x="44" y="22" width="12" height="12"/><rect x="57" y="16" width="12" height="18"/><rect x="74" y="12" width="12" height="22"/><rect x="77" y="6" width="3" height="6"/>',
+  Tanker: '<path d="M4 34h92l-8 12H12z"/><rect x="14" y="30" width="58" height="4"/><circle cx="26" cy="29" r="3"/><circle cx="40" cy="29" r="3"/><circle cx="54" cy="29" r="3"/><rect x="76" y="16" width="12" height="18"/><rect x="80" y="10" width="3" height="6"/>',
+  Passenger: '<path d="M4 34h92l-8 12H12z"/><rect x="14" y="26" width="72" height="8"/><rect x="20" y="18" width="60" height="8"/><rect x="28" y="11" width="40" height="7"/><rect x="56" y="5" width="6" height="6"/>',
+  Fishing: '<path d="M14 34h70l-6 12H20z"/><rect x="58" y="22" width="14" height="12"/><path d="M30 34 L36 8 L38 34z"/><path d="M36 8 L22 26" stroke="currentColor" stroke-width="1.5" fill="none"/>',
+  Tug: '<path d="M14 34h70l-8 12H20z"/><rect x="34" y="20" width="22" height="14"/><rect x="40" y="12" width="12" height="8"/><rect x="44" y="6" width="4" height="6"/>',
+  Military: '<path d="M4 34h92l-10 10H14z"/><path d="M30 34l6-12h26l6 12z"/><rect x="44" y="12" width="4" height="10"/><rect x="18" y="30" width="10" height="4"/><rect x="72" y="30" width="10" height="4"/>',
+};
+SHIP_SVG['Service vessel'] = SHIP_SVG.Tug; SHIP_SVG['Pleasure craft'] = SHIP_SVG.Fishing; SHIP_SVG['High-speed craft'] = SHIP_SVG.Passenger;
+const shipSvg = type => `<svg viewBox="0 0 100 50" width="100%" height="64" fill="currentColor" style="color:#D4D4D4;margin:6px 0 2px" role="img" aria-label="${esc(type || 'Vessel')} silhouette">${SHIP_SVG[type] || SHIP_SVG.Cargo}<path d="M0 47h100" stroke="#333" stroke-width="2"/></svg>`;
+
 const BUILD = {
   milair: () => (DATA.planes || []).filter(a => isFinite(a.lat) && isFinite(a.lon)).map(a => {
     const ground = a.on_ground === true, ft = Number(a.alt_baro) || 0;
-    return pt('milair', a.lat, a.lon, {cat: 'Military aircraft · adsb.lol', title: String(a.flight || a.hex || 'Unknown').trim(),
+    return pt('milair', a.lat, a.lon, {kind: 'aircraft', hex: a.hex, reg: a.registration,
+      cat: 'Military aircraft · adsb.lol', title: String(a.flight || a.hex || 'Unknown').trim(),
       body: `Altitude  ${ground ? 'on ground' : Math.round(ft).toLocaleString() + ' ft'}\nSpeed  ${Math.round(a.gs || 0)} kt\n` +
             `Track  ${Math.round(a.track || 0)}°\nType  ${a.aircraft_type || '—'}\nRegistration  ${a.registration || '—'}\nICAO hex  ${a.hex || '—'}`},
       {alt: ground ? 0.004 : 0.02 + Math.min(ft, 50000) / 50000 * 0.04, r: 0.22});
   }),
-  satellites: () => (DATA.sats || []).filter(s => isFinite(s.lat) && isFinite(s.lon)).map(s =>
-    pt('satellites', s.lat, s.lon, {cat: 'Satellite · CelesTrak TLE', title: String(s.name || 'Satellite').slice(0, 80),
-      body: `Altitude  ${Math.round(s.alt_km || 0).toLocaleString()} km\nSpeed  ${(s.vel_kms || 0).toFixed(2)} km/s\nPosition at snapshot time`},
-      {alt: Math.min((s.alt_km || 400) / 6371, 0.6), r: 0.18})),
+  satellites: async () => {
+    if (typeof satellite === 'undefined') throw new Error('satellite.js unavailable');
+    const groups = [['stations', 'Space station / crewed'], ['visual', 'Bright satellite'], ['gnss', 'Navigation (GNSS)'], ['weather', 'Weather']];
+    const seen = new Set(), list = [];
+    for (const [g, label] of groups) {
+      let txt = '';
+      try {
+        const r = await fetch(`https://celestrak.org/NORAD/elements/gp.php?GROUP=${g}&FORMAT=tle`);
+        if (r.ok) txt = await r.text();
+      } catch (e) { continue; }
+      const L = txt.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+      for (let i = 0; i + 2 < L.length; i += 3) {
+        if (!L[i + 1].startsWith('1 ') || !L[i + 2].startsWith('2 ')) { i -= 2; continue; }
+        const id = L[i + 1].slice(2, 7).trim();
+        if (seen.has(id)) continue;
+        seen.add(id);
+        try {
+          const rec = satellite.twoline2satrec(L[i + 1], L[i + 2]);
+          list.push({name: L[i], id, group: label, rec});
+        } catch (e) { /* malformed TLE */ }
+      }
+    }
+    SATS = list.slice(0, 400);
+    const pts = SATS.map(s => satPoint(s, new Date())).filter(Boolean);
+    setStat('st-sat', `sats ${pts.length} live`, pts.length > 0);
+    return pts;
+  },
   vessels: () => (DATA.vessels || []).filter(v => isFinite(v.lat) && isFinite(v.lon)).map(v =>
-    pt('vessels', v.lat, v.lon, {cat: 'AIS vessel', title: v.name || 'Vessel',
-      body: `MMSI  ${v.mmsi || '—'}\nSpeed  ${(v.speed || 0).toFixed(1)} kt\nCourse  ${Math.round(v.heading || 0)}°`}, {r: 0.12, alt: 0.003})),
+    pt('vessels', v.lat, v.lon, {kind: 'ship', v, cat: `${v.type || 'Vessel'} · AIS (${v.source || 'public AIS'})`, title: v.name || 'Vessel',
+      body: [`Speed  ${(v.speed || 0).toFixed(1)} kt · course ${Math.round(v.heading || 0)}°`,
+             v.destination ? `Destination  ${v.destination}` : '',
+             v.length ? `Size  ${Math.round(v.length)} m × ${Math.round(v.beam || 0)} m${v.draught ? ' · draught ' + v.draught.toFixed(1) + ' m' : ''}` : '',
+             `MMSI  ${v.mmsi || '—'}${v.imo ? ' · IMO ' + v.imo : ''}${v.callsign ? ' · ' + v.callsign : ''}`].filter(Boolean).join('\n')},
+      {r: 0.13, alt: 0.003, color: SHIP_SHADE[v.type] || '#8A8A8A'})),
   nuclear: () => NUCLEAR_PLANTS.map(([n, c, lat, lng, mw, re, st]) => pt('nuclear', lat, lng,
     {cat: `Nuclear plant · ${c}`, title: n, body: `Capacity  ${mw.toLocaleString()} MW\nReactors  ${re}\nStatus  ${st}`},
     {r: 0.35, color: st === 'Active' ? '#FFFFFF' : '#6E6E6E'})),
@@ -351,16 +432,18 @@ async function ensure(id) {
   const fn = BUILD[id] || PATHS[id];
   CACHE[id] = fn ? await fn() : [];
   setCount(id, CACHE[id].length);
+  if (id === 'satellites') startSatClock();
   return CACHE[id];
 }
 
 function refresh() {
   const pts = [], paths = [];
   for (const id of ON) {
-    if (!CACHE[id]) continue;
+    if (!CACHE[id] || id === 'satellites') continue;
     (PATHS[id] ? paths : pts).push(...CACHE[id]);
   }
-  globe.pointsData(pts).pathsData(paths);
+  if (orbitPath && ON.has('satellites')) paths.push(orbitPath);
+  globe.pointsData(pts).pathsData(paths).objectsData(ON.has('satellites') ? (CACHE.satellites || []).slice() : []);
   globe.polygonsData(ON.has('borders') ? countries : []);
   const conf = ON.has('conflicts') ? (DATA.conflicts || []) : [];
   globe.ringsData(conf).labelsData(conf);
@@ -388,12 +471,42 @@ function showCard(info, ev) {
     a.textContent = 'Source ↗'; a.style.cssText = 'display:block;margin-top:8px;color:#a3a3a3;text-decoration:none';
     $('cardBody').appendChild(a);
   }
+  const extra = document.createElement('div');
+  $('cardBody').appendChild(extra);
+  if (info.kind === 'ship') {
+    const v = info.v || {};
+    extra.innerHTML = shipSvg(v.type) + '<div class="lbl" style="margin-bottom:6px">Illustrative ' + esc((v.type || 'vessel').toLowerCase()) + ' profile</div>';
+    extra.insertAdjacentHTML('beforeend', `<a class="btn" style="display:inline-block;margin-top:4px;text-decoration:none" target="_blank" rel="noopener noreferrer" href="https://www.vesselfinder.com/vessels/details/${encodeURIComponent(v.imo || v.mmsi || '')}">Photos & details on VesselFinder ↗</a>`);
+  }
+  if (info.kind === 'aircraft' && info.hex) {
+    extra.innerHTML = '<div class="lbl" style="margin-top:8px">Loading photo…</div>';
+    fetchJSON(`https://api.planespotters.net/pub/photos/hex/${encodeURIComponent(info.hex)}`, 8000).then(d => {
+      const ph = d && d.photos && d.photos[0];
+      if (!ph) {
+        extra.innerHTML = `<div class="lbl" style="margin-top:8px">No public photo for this airframe.</div>` +
+          (info.reg ? `<a class="btn" style="display:inline-block;margin-top:6px;text-decoration:none" target="_blank" rel="noopener noreferrer" href="https://www.planespotters.net/search?q=${encodeURIComponent(info.reg)}">Search Planespotters ↗</a>` : '');
+        return;
+      }
+      const img = (ph.thumbnail_large || ph.thumbnail || {}).src;
+      extra.innerHTML = `<a href="${esc(safeUrl(ph.link))}" target="_blank" rel="noopener noreferrer"><img src="${esc(safeUrl(img))}" alt="Photo of ${esc(info.title)}" style="width:100%;border-radius:8px;margin-top:8px;display:block"></a>
+        <div class="lbl" style="margin-top:4px;text-transform:none;letter-spacing:0">© ${esc(ph.photographer || 'photographer')} · Planespotters.net</div>`;
+      positionCard();
+    }).catch(() => { extra.innerHTML = '<div class="lbl" style="margin-top:8px">Photo service unavailable.</div>'; });
+  }
+  if (info.kind === 'sat' && info.sat) {
+    orbitPath = groundTrack(info.sat); refresh();
+  }
+  lastPos = {x: ev ? ev.clientX : window.innerWidth / 2, y: ev ? ev.clientY : window.innerHeight / 2};
+  positionCard();
+}
+let lastPos = {x: 0, y: 0};
+function positionCard() {
   const card = $('card'); card.classList.add('show');
-  const x = ev ? ev.clientX : window.innerWidth / 2, y = ev ? ev.clientY : window.innerHeight / 2;
+  const {x, y} = lastPos;
   card.style.left = Math.max(10, Math.min(x + 16, window.innerWidth - card.offsetWidth - 10)) + 'px';
   card.style.top = Math.max(56, Math.min(y - 10, window.innerHeight - card.offsetHeight - 60)) + 'px';
 }
-function closeCard() { $('card').classList.remove('show'); }
+function closeCard() { $('card').classList.remove('show'); if (orbitPath) { orbitPath = null; refresh(); } }
 function closeSide() { $('side').classList.remove('show'); }
 let mouse = {x: 0, y: 0};
 document.addEventListener('mousemove', e => { mouse = {x: e.clientX, y: e.clientY}; const tt = $('tt');
@@ -420,7 +533,7 @@ async function sparql(q) {
 const v = (b, k) => (b[k] ? b[k].value : '');
 // Country facts + current heads of state/government (Wikidata, keyless, CORS-enabled).
 async function wikidataCountry(iso2) {
-  const facts = await sparql(`SELECT
+  const factsQ = sparql(`SELECT
       (GROUP_CONCAT(DISTINCT ?capL; separator=", ") AS ?capital)
       (GROUP_CONCAT(DISTINCT ?curL; separator=", ") AS ?currency)
       (GROUP_CONCAT(DISTINCT ?langL; separator=", ") AS ?languages)
@@ -430,15 +543,23 @@ async function wikidataCountry(iso2) {
       OPTIONAL { ?c wdt:P38 ?cur . ?cur rdfs:label ?curL FILTER(lang(?curL)="en") }
       OPTIONAL { ?c wdt:P37 ?lang . ?lang rdfs:label ?langL FILTER(lang(?langL)="en") }
       OPTIONAL { ?c wdt:P2046 ?area } OPTIONAL { ?c wdt:P41 ?flag }
-      OPTIONAL { ?c wdt:P30 ?cont . ?cont rdfs:label ?contL FILTER(lang(?contL)="en") } }`);
+      OPTIONAL { ?c wdt:P30 ?cont . ?cont rdfs:label ?contL FILTER(lang(?contL)="en") } }`).catch(() => []);
+  // Kept separate: joining these into the query above multiplies rows and times out.
+  const extraQ = sparql(`SELECT (GROUP_CONCAT(DISTINCT ?govL; separator=", ") AS ?government) (SAMPLE(?wiki) AS ?wiki)
+      WHERE { ?c wdt:P297 "${iso2}" .
+      OPTIONAL { ?c wdt:P122 ?gov . ?gov rdfs:label ?govL FILTER(lang(?govL)="en") }
+      OPTIONAL { ?w schema:about ?c ; schema:isPartOf <https://en.wikipedia.org/> ; schema:name ?wiki } }`).catch(() => []);
+  const hdiQ = sparql(`SELECT ?hdi ?hdiYear WHERE { ?c wdt:P297 "${iso2}" ; p:P1081 ?s . ?s ps:P1081 ?hdi ; pq:P585 ?t .
+      BIND(YEAR(?t) AS ?hdiYear) } ORDER BY DESC(?t) LIMIT 1`).catch(() => []);
   // Truthy wdt: values are the current (preferred-rank) office holders. Fall back to the English
   // Wikipedia title when an item has no English label.
-  const heads = await sparql(`SELECT ?hsLabel ?hsWiki ?hsImg ?hgLabel ?hgWiki ?hgImg WHERE { ?c wdt:P297 "${iso2}" .
+  const headsQ = sparql(`SELECT ?hsLabel ?hsWiki ?hsImg ?hgLabel ?hgWiki ?hgImg WHERE { ?c wdt:P297 "${iso2}" .
       OPTIONAL { ?c wdt:P35 ?hs . OPTIONAL { ?hs wdt:P18 ?hsImg }
         OPTIONAL { ?a1 schema:about ?hs ; schema:isPartOf <https://en.wikipedia.org/> ; schema:name ?hsWiki } }
       OPTIONAL { ?c wdt:P6 ?hg . OPTIONAL { ?hg wdt:P18 ?hgImg }
         OPTIONAL { ?a2 schema:about ?hg ; schema:isPartOf <https://en.wikipedia.org/> ; schema:name ?hgWiki } }
-      SERVICE wikibase:label { bd:serviceParam wikibase:language "en". } } LIMIT 6`);
+      SERVICE wikibase:label { bd:serviceParam wikibase:language "en". } } LIMIT 6`).catch(() => []);
+  const [facts, extra, hdi, heads] = await Promise.all([factsQ, extraQ, hdiQ, headsQ]);
   const seen = new Set(), leaders = [];
   const nameOf = (b, k) => { const l = v(b, k + 'Label'); return /^Q\d+$/.test(l) || !l ? v(b, k + 'Wiki') : l; };
   for (const b of heads) {
@@ -450,9 +571,25 @@ async function wikidataCountry(iso2) {
       leaders.push({role, name, img: img ? img.replace('http://', 'https://') + '?width=120' : ''});
     }
   }
-  return {facts: facts[0] || {}, leaders};
+  return {facts: Object.assign({}, facts[0] || {}, extra[0] || {}, hdi[0] || {}), leaders};
 }
 let countryReq = 0;
+const WB = [
+  ['NY.GDP.MKTP.CD', 'GDP', x => fmtUsd(x)],
+  ['NY.GDP.MKTP.KD.ZG', 'Real GDP growth', x => x.toFixed(1) + '%'],
+  ['NY.GDP.PCAP.CD', 'GDP per capita', x => '$' + Math.round(x).toLocaleString()],
+  ['SP.POP.TOTL', 'Population', x => x >= 1e9 ? (x / 1e9).toFixed(2) + ' B' : (x / 1e6).toFixed(1) + ' M'],
+  ['FP.CPI.TOTL.ZG', 'Inflation (CPI)', x => x.toFixed(1) + '%'],
+  ['SL.UEM.TOTL.ZS', 'Unemployment', x => x.toFixed(1) + '%'],
+  ['GC.DOD.TOTL.GD.ZS', 'Central govt debt / GDP', x => x.toFixed(0) + '%'],
+  ['BN.CAB.XOKA.GD.ZS', 'Current account / GDP', x => (x > 0 ? '+' : '') + x.toFixed(1) + '%'],
+  ['MS.MIL.XPND.GD.ZS', 'Military spending / GDP', x => x.toFixed(1) + '%'],
+  ['SP.DYN.LE00.IN', 'Life expectancy', x => x.toFixed(1) + ' yrs'],
+];
+async function wikiSummary(title) {
+  if (!title) return null;
+  return fetchJSON('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(title.replace(/ /g, '_')), 9000);
+}
 async function showCountry(p) {
   const name = p.ADMIN || p.NAME;
   // Natural Earth uses ISO_A3 = "-99" for France and Norway; fall back to the _EH / ADM0 codes.
@@ -463,36 +600,44 @@ async function showCountry(p) {
   $('side').classList.add('show');
   $('sideBody').innerHTML = `<div class="lbl">${esc(iso3 || '')}</div><div class="cn">${esc(name)}</div><div class="src">Loading…</div>`;
   if (!iso3) return;
-  const [wd, gdp, pop, infl] = await Promise.all([
+  const [wd, ...wb] = await Promise.all([
     iso2 ? wikidataCountry(iso2).catch(() => ({facts: {}, leaders: []})) : Promise.resolve({facts: {}, leaders: []}),
-    wbLatest(iso3, 'NY.GDP.MKTP.CD').catch(() => null), wbLatest(iso3, 'SP.POP.TOTL').catch(() => null),
-    wbLatest(iso3, 'FP.CPI.TOTL.ZG').catch(() => null),
+    ...WB.map(([ind]) => wbLatest(iso3, ind).catch(() => null)),
   ]);
   if (req !== countryReq) return;
   const f = wd.facts, leaders = wd.leaders;
   const row = (k, val) => `<div class="row"><span>${esc(k)}</span><span>${esc(val || '—')}</span></div>`;
-  const area = Number(v(f, 'area'));
-  const overview = [row('Capital', v(f, 'capital')), row('Continent', v(f, 'continent') || p.CONTINENT),
-    row('Sub-region', p.SUBREGION), row('Area', area ? Math.round(area).toLocaleString() + ' km²' : ''),
-    row('Currency', v(f, 'currency')), row('Official languages', v(f, 'languages').split(', ').slice(0, 3).join(', ')),
-  ].join('') + '<div class="src">Wikidata · Natural Earth</div>';
-  const economy = [row(`GDP${gdp ? ' (' + gdp.y + ')' : ''}`, gdp ? fmtUsd(gdp.v) : ''),
-    row(`Population${pop ? ' (' + pop.y + ')' : ''}`, pop ? (pop.v / 1e6).toFixed(1) + ' M' : ''),
-    row('GDP per capita', gdp && pop ? '$' + Math.round(gdp.v / pop.v).toLocaleString() : ''),
-    row(`Inflation${infl ? ' (' + infl.y + ')' : ''}`, infl ? infl.v.toFixed(1) + '%' : ''),
-  ].join('') + '<div class="src">World Bank (latest available year)</div>';
+  const area = Number(v(f, 'area')), hdi = Number(v(f, 'hdi'));
+  const mkt = (DATA.markets || {})[iso2 || ''];
+  const mktRow = mkt ? `<div class="row"><span>${esc(mkt.name)}</span><span>${esc(Number(mkt.price).toLocaleString(undefined, {maximumFractionDigits: 2}))}
+      <b style="color:${mkt.chg >= 0 ? '#3FCF8E' : '#F2555A'};font-weight:500;margin-left:6px">${mkt.chg >= 0 ? '+' : ''}${Number(mkt.chg).toFixed(2)}%</b></span></div>` : '';
+  const overview = `<div id="wiki" class="wiki"><div class="src">Loading summary…</div></div>` + [
+    row('Capital', v(f, 'capital')), row('Government', v(f, 'government').split(', ').slice(0, 2).join(', ')),
+    row('Continent', v(f, 'continent') || p.CONTINENT), row('Sub-region', p.SUBREGION),
+    row('Area', area ? Math.round(area).toLocaleString() + ' km²' : ''), row('Currency', v(f, 'currency')),
+    row('Official languages', v(f, 'languages').split(', ').slice(0, 3).join(', ')),
+    row(`Human Development Index${v(f, 'hdiYear') ? ' (' + v(f, 'hdiYear') + ')' : ''}`, hdi ? hdi.toFixed(3) : ''),
+  ].join('') + mktRow + '<div class="src">Wikipedia · Wikidata · Natural Earth' + (mkt ? ' · Yahoo Finance' : '') + '</div>';
+  const economy = WB.map(([, label, fmt], i) => row(label + (wb[i] ? ` (${wb[i].y})` : ''), wb[i] ? fmt(wb[i].v) : '')).join('')
+    + '<div class="src">World Bank (latest available year)</div>';
   const people = leaders.length ? leaders.map(l => `<div class="leader">${l.img ? `<img src="${esc(safeUrl(l.img))}" alt="" loading="lazy">` : '<img alt="">'}
       <div><div>${esc(l.name)}</div><div class="lbl" style="margin-top:2px">${esc(l.role)}</div></div></div>`).join('') + '<div class="src">Wikidata (current office holders)</div>'
     : '<div class="src">No current office holders found on Wikidata.</div>';
-  const flagUrl = v(f, 'flag') ? v(f, 'flag').replace('http://', 'https://') + '?width=80' : '';
-  const flag = flagUrl ? `<img src="${esc(safeUrl(flagUrl))}" alt="" style="height:16px;margin-top:6px;filter:grayscale(1);border:1px solid #222">` : '';
-  $('sideBody').innerHTML = `<div class="lbl">${esc(iso3)}</div><div class="cn">${esc(name)}</div>${flag}
+  const flagUrl = v(f, 'flag') ? v(f, 'flag').replace('http://', 'https://') + '?width=160' : '';
+  const flag = flagUrl ? `<img class="flag" src="${esc(safeUrl(flagUrl))}" alt="Flag of ${esc(name)}">` : '';
+  $('sideBody').innerHTML = `<div class="chead">${flag}<div><div class="lbl">${esc(iso3)}</div><div class="cn">${esc(name)}</div></div></div>
     <div class="tabs"><button class="tab on" data-t="o">Overview</button><button class="tab" data-t="e">Economy</button><button class="tab" data-t="l">Leaders</button></div>
     <div id="tab-o">${overview}</div><div id="tab-e" style="display:none">${economy}</div><div id="tab-l" style="display:none">${people}</div>`;
   $('sideBody').querySelectorAll('.tab').forEach(b => b.onclick = () => {
     $('sideBody').querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === b));
     ['o', 'e', 'l'].forEach(t => { $('tab-' + t).style.display = t === b.dataset.t ? 'block' : 'none'; });
   });
+  wikiSummary(v(f, 'wiki') || name).then(w => {
+    if (req !== countryReq || !$('wiki')) return;
+    const txt = (w && w.extract) || '';
+    $('wiki').innerHTML = txt ? `<p>${esc(txt.length > 380 ? txt.slice(0, 380).replace(/\s\S*$/, '') + '…' : txt)}</p>
+      <a href="${esc(safeUrl(w.content_urls && w.content_urls.desktop && w.content_urls.desktop.page))}" target="_blank" rel="noopener noreferrer">Read on Wikipedia ↗</a>` : '';
+  }).catch(() => { if ($('wiki')) $('wiki').innerHTML = ''; });
 }
 
 // ── Controls
@@ -513,7 +658,7 @@ function renderNews() {
   const items = DATA.headlines || [];
   $('newsBody').innerHTML = items.length ? items.slice(0, 4).map(a => `<a class="it" href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener noreferrer">
       ${esc(String(a.title).slice(0, 120))}<div class="d">${esc(a.domain || '')}</div></a>`).join('')
-    : '<div class="d">No headlines available (GDELT rate limit).</div>';
+    : '<div class="d">No headlines available right now.</div>';
 }
 
 function init() {
@@ -533,17 +678,23 @@ function init() {
     .pointLat('lat').pointLng('lng').pointAltitude('alt').pointRadius('r').pointColor('color').pointResolution(6)
     .pointsMerge(false).pointsTransitionDuration(0)
     .onPointHover(d => hover(d && d.info.title)).onPointClick((d, ev) => showCard(d.info, ev))
+    // Satellites: small spheres at true orbital altitude (one cloned mesh each)
+    .objectLat('lat').objectLng('lng').objectAltitude('alt').objectFacesSurface(false)
+    .onObjectHover(d => hover(d && d.info.title)).onObjectClick((d, ev) => showCard(d.info, ev))
     // Paths
     .pathPoints('pts').pathColor('color').pathStroke(1.2).pathTransitionDuration(0)
     .onPathHover(d => hover(d && d.info.title)).onPathClick((d, ev) => showCard(d.info, ev))
     // Conflict news signals
     .ringLat('lat').ringLng('lon').ringColor(() => t => `rgba(242,85,90,${1 - t})`).ringMaxRadius(3.5)
     .ringPropagationSpeed(1.6).ringRepeatPeriod(1400)
-    .labelLat('lat').labelLng('lon').labelText('label').labelSize(0.55).labelDotRadius(0.35).labelColor(() => '#F2555A')
-    .labelResolution(2).labelAltitude(0.01)
-    .onLabelClick((d, ev) => showCard({cat: 'News signal · GDELT 48h (regional centroid, not an event location)', title: d.label,
-       body: (d.titles || []).map(t => '• ' + t).join('\n'), url: d.url}, ev))
+    .labelLat('lat').labelLng('lon').labelText(d => `${d.label} · ${d.count}`).labelSize(0.8).labelDotRadius(0.35).labelColor(() => '#F2555A')
+    .labelResolution(2).onLabelHover(d => hover(d && `${d.label}: ${d.count} stories`)).labelAltitude(0.01)
+    .onLabelClick((d, ev) => showCard({cat: `Conflict news · ${d.count} stories, last 48h (regional marker, not an exact location)`, title: d.label,
+       body: (d.titles || []).map((t, i) => '• ' + t + (d.sources && d.sources[i] ? '  — ' + d.sources[i] : '')).join('\n'), url: d.url}, ev))
     .onGlobeClick(() => { closeCard(); });
+  const baseSat = globe.objectThreeObject();
+  globe.objectThreeObject(d => { const m = baseSat.clone(); m.material = baseSat.material.clone();
+    m.material.color.set(d.color); m.material.opacity = 0.95; m.scale.setScalar(d.size || 0.7); return m; });
   globe.controls().enableDamping = true;
   globe.controls().minDistance = 120;
   globe.controls().maxDistance = 900;
@@ -558,7 +709,7 @@ function init() {
 
   const c = (DATA.meta && DATA.meta.counts) || {};
   setStat('st-air', `mil-air ${c.planes ?? 0}`, (c.planes || 0) > 0);
-  setStat('st-sat', `sats ${c.sats ?? 0}`, (c.sats || 0) > 0);
+  setStat('st-sat', 'sats: live on toggle', true);
   setStat('st-ais', `AIS ${c.vessels ?? 0}`, (c.vessels || 0) > 0);
   const age = () => {
     const t = DATA.meta && DATA.meta.generatedAt ? new Date(DATA.meta.generatedAt) : null;
@@ -569,6 +720,8 @@ function init() {
   age(); setInterval(age, 30000);
   setInterval(() => { $('clk').textContent = new Date().toISOString().slice(11, 19) + ' UTC'; }, 1000);
   buildLayerPanel();
+  setCount('conflicts', (DATA.conflicts || []).length);
+  refresh();
   renderNews();
   $('ls').classList.add('gone');
 }

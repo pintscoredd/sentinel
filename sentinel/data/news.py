@@ -5,9 +5,7 @@ import logging
 
 import streamlit as st
 
-from sentinel.core.http import (
-    _fetch_robust_json,
-)
+from sentinel.core.http import _fetch_robust_json, _get_http_session
 from sentinel.core.formatting import _is_english
 from sentinel.core.secrets import unwrap_secret as _unwrap_secret
 
@@ -18,15 +16,57 @@ from sentinel.data.market import market_snapshot_str, multi_quotes
 logger = logging.getLogger("sentinel.data")
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def google_news(query: str, max_rec: int = 20, days: int = 2) -> list[dict]:
+    """Google News RSS search, normalised to GDELT-style dicts (title, url, domain, seendate).
+
+    Keyless; used when GDELT rate-limits (it throttles shared cloud IPs heavily).
+    Feed terms: personal, non-commercial use.
+    """
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+
+    session = _get_http_session()
+    try:
+        r = session.get("https://news.google.com/rss/search",
+                        params={"q": f"{query} when:{int(days)}d", "hl": "en-US", "gl": "US", "ceid": "US:en"},
+                        timeout=10)
+        if r.status_code != 200 or len(r.content) > 5_000_000:
+            return []
+        root = ET.fromstring(r.content)
+    except Exception as e:
+        logger.warning("Google News RSS failed: %s", e)
+        return []
+    out = []
+    for item in root.iter("item"):
+        title = (item.findtext("title") or "").strip()
+        src_el = item.find("source")
+        source = (src_el.text or "").strip() if src_el is not None else ""
+        if source and title.endswith(" - " + source):
+            title = title[: -len(source) - 3]
+        try:
+            seen = parsedate_to_datetime(item.findtext("pubDate") or "").strftime("%Y%m%dT%H%M%SZ")
+        except Exception:
+            seen = ""
+        if title and _is_english(title):
+            out.append({"title": title, "url": item.findtext("link") or "", "domain": source, "seendate": seen})
+        if len(out) >= max_rec:
+            break
+    return out
+
+
 @stale_cached_source(ttl=600, retry_ttl=60)
 def gdelt_news(query, max_rec=15):
-    """GDELT article list (last 72 h). One request; GDELT allows ~1 request / 5 s."""
+    """News articles for *query* from the last 72 h: GDELT, falling back to Google News RSS."""
     data = _fetch_robust_json("https://api.gdeltproject.org/api/v2/doc/doc", params={
         "query": f"{query} sourcelang:english", "mode": "artlist", "maxrecords": int(max_rec),
         "format": "json", "timespan": "72h", "sort": "datedesc"}, timeout=10)
     arts = (data or {}).get("articles", []) if isinstance(data, dict) else []
-    return [a for a in arts if _is_english(a.get("title", ""))][:max_rec]
-
+    arts = [a for a in arts if _is_english(a.get("title", ""))][:max_rec]
+    if arts:
+        return arts
+    # Google's syntax wants plain words; GDELT-style parentheses/OR still work there.
+    return google_news(query, max_rec, days=3)
 
 @st.cache_data(ttl=300)
 def newsapi_headlines(key, query="stock market finance"):

@@ -1047,3 +1047,59 @@ def get_balance_sheet_metrics(ticker):
     except Exception as e:
         logger.debug(f"get_balance_sheet_metrics error: {e}")
         return None
+
+
+_NASDAQ_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/124.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Origin": "https://www.nasdaq.com",
+    "Referer": "https://www.nasdaq.com/",
+}
+_TIME_SLOTS = {"time-pre-market": "bmo", "time-after-hours": "amc"}
+
+
+def _money(v):
+    """'$1,807,009,840,000' / '($0.12)' / 'N/A' → float or None."""
+    s = str(v or "").replace("$", "").replace(",", "").strip()
+    neg = s.startswith("(") and s.endswith(")")
+    s = s.strip("()")
+    try:
+        f = float(s)
+    except ValueError:
+        return None
+    return -f if neg else f
+
+
+@st.cache_data(ttl=3 * 3600, show_spinner=False)
+def nasdaq_earnings_day(day: str) -> list[dict]:
+    """US earnings reports scheduled for *day* (YYYY-MM-DD) from Nasdaq's public calendar."""
+    data = _fetch_robust_json("https://api.nasdaq.com/api/calendar/earnings", params={"date": day},
+                              headers=_NASDAQ_HEADERS, timeout=12)
+    rows = (((data or {}).get("data") or {}).get("rows")) or []
+    out = []
+    for r in rows:
+        sym = str(r.get("symbol") or "").strip().upper()
+        if not sym:
+            continue
+        out.append({
+            "date": day, "symbol": sym, "name": str(r.get("name") or sym).strip(),
+            "slot": _TIME_SLOTS.get(r.get("time"), "tbd"),
+            "market_cap": _money(r.get("marketCap")),
+            "eps_est": _money(r.get("epsForecast")),
+            "n_est": _safe_int(r.get("noOfEsts"), 0) or None,
+            "last_eps": _money(r.get("lastYearEPS")),
+            "last_date": str(r.get("lastYearRptDt") or ""),
+            "fiscal_q": str(r.get("fiscalQuarterEnding") or ""),
+        })
+    return out
+
+
+def earnings_week(monday) -> list[dict]:
+    """All reports Monday–Friday of the week starting *monday* (a date), fetched in parallel."""
+    import concurrent.futures
+    from datetime import timedelta as _td
+    days = [(monday + _td(days=i)).isoformat() for i in range(5)]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+        results = list(pool.map(nasdaq_earnings_day, days))
+    return [r for day in results for r in day]

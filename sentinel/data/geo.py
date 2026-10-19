@@ -157,6 +157,56 @@ def fetch_satellite_positions_json():
     return [] if df is None or df.empty else df.to_dict("records")
 
 
+_DT_HEADERS = {"Digitraffic-User": "Sentinel/1.0", "Accept": "application/json"}
+
+
+def ais_ship_type(code) -> str:
+    """AIS ship-type code (ITU-R M.1371) → readable class."""
+    try:
+        c = int(code)
+    except (TypeError, ValueError):
+        return "Unknown"
+    if 70 <= c <= 79:
+        return "Cargo"
+    if 80 <= c <= 89:
+        return "Tanker"
+    if 60 <= c <= 69:
+        return "Passenger"
+    if c == 30:
+        return "Fishing"
+    if c in (31, 32, 52):
+        return "Tug"
+    if c == 35:
+        return "Military"
+    if c in (36, 37):
+        return "Pleasure craft"
+    if 40 <= c <= 49:
+        return "High-speed craft"
+    if c in (50, 51, 53, 54, 55, 58, 59):
+        return "Service vessel"
+    return "Other"
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _digitraffic_vessel_meta() -> dict:
+    """MMSI → name/type/IMO/destination/dimensions for vessels seen by Finnish AIS."""
+    data = _fetch_robust_json("https://meri.digitraffic.fi/api/ais/v1/vessels", timeout=20, headers=_DT_HEADERS)
+    out = {}
+    for v in data or []:
+        mmsi = str(v.get("mmsi") or "")
+        if not mmsi:
+            continue
+        a, b, c, d = (_safe_float(v.get(k), 0) for k in ("referencePointA", "referencePointB", "referencePointC", "referencePointD"))
+        out[mmsi] = {
+            "name": str(v.get("name") or "").strip() or None, "type": ais_ship_type(v.get("shipType")),
+            "imo": v.get("imo") or None, "callsign": v.get("callSign") or None,
+            "destination": str(v.get("destination") or "").strip() or None,
+            "length": (a + b) or None, "beam": (c + d) or None,
+            "draught": (_safe_float(v.get("draught"), 0) / 10) or None,  # reported in 0.1 m
+        }
+    return out
+
+
 @stale_cached_source(ttl=300, retry_ttl=30)
 def fetch_ais_vessels():
     """Fetch genuine public AIS observations; never synthesize vessel positions."""
@@ -211,16 +261,24 @@ def fetch_ais_vessels():
                 except Exception:
                     pass
 
-    try:
-        data = _fetch_robust_json("https://meri.digitraffic.fi/api/ais/v1/locations", timeout=12, headers={"User-Agent": "SENTINEL/3.0", "Accept": "application/json"})
-        if not data:
-            data = {}
-        for f in data.get("features", [])[:200]:
-            props, coords = f.get("properties", {}), f.get("geometry", {}).get("coordinates", [])
-            if len(coords) < 2: continue
-            vessels.append({"mmsi": str(props.get("mmsi", "")), "lat": float(coords[1]), "lon": float(coords[0]), "speed": float(props.get("sog", 0) or 0), "heading": float(props.get("cog", props.get("heading", 0)) or 0), "name": f"MMSI-{props.get('mmsi', 'UNKN')}", "type": "cargo"})
-    except Exception as e:
-        logger.debug(f"Error caught: {e}")
+    meta = _digitraffic_vessel_meta()
+    data = _fetch_robust_json("https://meri.digitraffic.fi/api/ais/v1/locations", timeout=15, headers=_DT_HEADERS)
+    for f in ((data or {}).get("features") or [])[:1500]:
+        props, coords = f.get("properties", {}) or {}, (f.get("geometry") or {}).get("coordinates") or []
+        if len(coords) < 2:
+            continue
+        mmsi = str(f.get("mmsi") or props.get("mmsi") or "")
+        m = meta.get(mmsi, {})
+        vessels.append({
+            "mmsi": mmsi, "lat": float(coords[1]), "lon": float(coords[0]),
+            "speed": float(props.get("sog", 0) or 0),
+            "heading": float(props.get("cog", props.get("heading", 0)) or 0),
+            "name": m.get("name") or f"MMSI {mmsi}", "type": m.get("type") or "Unknown",
+            "imo": m.get("imo"), "callsign": m.get("callsign"), "destination": m.get("destination"),
+            "length": m.get("length"), "beam": m.get("beam"), "draught": m.get("draught"),
+            "source": "Digitraffic (Finland)",
+        })
+
     seen = {}
     for v in vessels:
         mmsi = v.get("mmsi", "")
@@ -263,11 +321,20 @@ _CONFLICT_REGIONS = [
 
 @stale_cached_source(ttl=900, retry_ttl=120)
 def fetch_conflict_feed():
-    """{'signals': [...], 'headlines': [...]} from one GDELT query (last 48 h)."""
-    data = _fetch_robust_json("https://api.gdeltproject.org/api/v2/doc/doc", params={
-        "query": "(war OR attack OR airstrike OR missile OR military OR fighting OR blockade) sourcelang:english",
-        "mode": "artlist", "maxrecords": 150, "format": "json", "timespan": "48h", "sort": "datedesc"}, timeout=12)
-    arts = (data or {}).get("articles", []) if isinstance(data, dict) else []
+    """{'signals': [...], 'headlines': [...]} from conflict coverage in the last ~48 h.
+
+    Google News RSS first (one request, not rate-limited like GDELT on shared
+    cloud IPs), GDELT as fallback. Articles are bucketed into regions by keyword;
+    markers sit at regional centroids, not at event locations.
+    """
+    from sentinel.data.news import google_news
+    q = "war OR airstrike OR missile OR attack OR clashes OR drone strike OR shelling"
+    arts = google_news(q, 120, days=2)
+    if not arts:
+        data = _fetch_robust_json("https://api.gdeltproject.org/api/v2/doc/doc", params={
+            "query": "(war OR attack OR airstrike OR missile OR military OR fighting OR blockade) sourcelang:english",
+            "mode": "artlist", "maxrecords": 150, "format": "json", "timespan": "48h", "sort": "datedesc"}, timeout=12)
+        arts = (data or {}).get("articles", []) if isinstance(data, dict) else []
     seen, clean = set(), []
     for a in arts:
         t = str(a.get("title", "")).strip()
@@ -275,13 +342,14 @@ def fetch_conflict_feed():
         if len(t) < 25 or k in seen:
             continue
         seen.add(k)
-        clean.append({"title": t[:160], "url": a.get("url", ""), "domain": str(a.get("domain", "")).replace("www.", "")})
+        clean.append({"title": t[:160], "url": a.get("url", ""), "domain": str(a.get("domain", "")).replace("www.", ""),
+                      "seendate": a.get("seendate", "")})
     signals = []
     for kws, lat, lon, label in _CONFLICT_REGIONS:
         hits = [a for a in clean if any(kw in a["title"].lower() for kw in kws)]
         if hits:
-            signals.append({"label": f"{label} · {len(hits)}", "lat": lat, "lon": lon, "url": hits[0]["url"],
-                            "titles": [h["title"] for h in hits[:4]]})
+            signals.append({"label": label, "count": len(hits), "lat": lat, "lon": lon, "url": hits[0]["url"],
+                            "titles": [h["title"] for h in hits[:5]], "sources": [h["domain"] for h in hits[:5]]})
     if not clean:
         return {}
-    return {"signals": signals, "headlines": clean[:6]}
+    return {"signals": signals, "headlines": clean[:8]}

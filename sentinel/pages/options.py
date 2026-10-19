@@ -298,7 +298,8 @@ def _zero_dte():
         empty("Gamma data unavailable (CBOE delayed feed did not respond).")
     else:
         flip = find_gamma_flip(gex)
-        mp = compute_max_pain(chain) * (spx["spx_spy_ratio"] if spx else 1) if chain else None
+        mp_raw = compute_max_pain(chain) if chain else None  # None when the chain has no open interest
+        mp = mp_raw * (spx["spx_spy_ratio"] if spx else 1) if mp_raw else None
         wall_k, wall_v = max(gex.items(), key=lambda kv: abs(kv[1]))
         left, right = st.columns([3, 2])
         with left:

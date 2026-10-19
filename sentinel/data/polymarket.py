@@ -44,6 +44,22 @@ def _parse_poly_field(field):
     return field if isinstance(field, list) else []
 
 
+def live_markets(evt):
+    """Tradable sub-markets of an event.
+
+    Polymarket pre-creates placeholder outcomes ("Team H", "Other") that are
+    inactive with zero volume and a dummy 50/50 price; showing them is misleading.
+    """
+    out = []
+    for m in evt.get("markets", []) or []:
+        if m.get("closed") or m.get("active") is False:
+            continue
+        if _safe_float(m.get("volumeNum", m.get("volume"))) <= 0 and _safe_float(m.get("liquidityNum")) <= 0:
+            continue
+        out.append(m)
+    return out
+
+
 def _poly_liquidity_score(market):
     vol = _safe_float(market.get("volume", 0))
     liq = _safe_float(market.get("liquidity", 0))
@@ -69,6 +85,8 @@ def score_poly_mispricing(markets, limit=15):
     """
     out = []
     for m in markets or []:
+        if m.get("active") is False or _safe_float(m.get("volumeNum", m.get("volume"))) <= 0:
+            continue
         title = m.get("question") or m.get("title") or ""
         prices = _parse_poly_field(m.get("outcomePrices"))
         if not title or len(prices) < 2:

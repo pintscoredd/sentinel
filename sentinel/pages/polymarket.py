@@ -6,7 +6,7 @@ from urllib.parse import quote
 import streamlit as st
 
 from sentinel.core.formatting import _esc, _safe_float, fmt_usd
-from sentinel.data.polymarket import _parse_poly_field, polymarket_events, polymarket_markets, score_poly_mispricing
+from sentinel.data.polymarket import _parse_poly_field, live_markets, polymarket_events, polymarket_markets, score_poly_mispricing
 from sentinel.ui.components import (
     cards, divider, empty, note, poly_url, render_poly_card, section, table,
 )
@@ -16,9 +16,7 @@ from sentinel.ui.theme import dark_fig, go, plot
 
 def _lead(evt):
     best_name, best_p = None, -1.0
-    for mk in evt.get("markets", []) or []:
-        if mk.get("closed"):
-            continue
+    for mk in live_markets(evt):
         pp = _parse_poly_field(mk.get("outcomePrices"))
         p = _safe_float(pp[0], -1) if pp else -1
         if p > best_p:

@@ -98,6 +98,9 @@ div[data-testid="stButtonGroup"] button[kind*="Active"] p {{ color: #000 !import
   border-radius: 6px !important; font-size: 13px !important;
 }}
 [data-baseweb="popover"] li {{ font-size: 13px !important; }}
+/* Multiselect chips: primaryColor is white, so default chips are white-on-white. */
+[data-baseweb="tag"], [data-testid="stMultiSelect"] [data-tag] {{ background: #1C1C1C !important; border: 1px solid var(--border2) !important; border-radius: 6px !important; }}
+[data-baseweb="tag"] span, [data-testid="stMultiSelect"] [data-tag] span, [data-testid="stMultiSelect"] [data-tag] button {{ color: var(--text) !important; }}
 .stSlider [data-baseweb="slider"] div[role="slider"] {{ background: var(--accent) !important; border-color: var(--accent) !important; }}
 [data-testid="stExpander"] {{ border: 1px solid var(--border) !important; border-radius: 8px !important; background: var(--panel) !important; }}
 [data-testid="stExpander"] summary {{ color: var(--text) !important; }}
@@ -147,6 +150,7 @@ div[data-testid="stButtonGroup"] button[kind*="Active"] p {{ color: #000 !import
   letter-spacing:.08em; text-transform:uppercase; padding:8px 10px; text-align:right; white-space:nowrap; border-bottom:1px solid var(--border); }}
 .s-tbl td {{ padding:7px 10px; text-align:right; color:var(--text); border-bottom:1px solid var(--border); white-space:nowrap; }}
 .s-tbl th.l, .s-tbl td.l {{ text-align:left; }}
+.s-tbl th.c, .s-tbl td.c {{ text-align:center; }}
 .s-tbl th, .s-tbl td, .opt-tbl th, .opt-tbl td, .em-table th, .em-table td {{ border-left:0 !important; border-right:0 !important; }}
 .s-tbl, .opt-tbl, .em-table {{ margin:0 !important; border:0 !important; }}
 .s-tbl td.wrap {{ white-space:normal; min-width:220px; }}
