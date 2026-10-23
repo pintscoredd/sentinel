@@ -485,7 +485,7 @@ def top_movers():
         "GE","RTX","CAT","HON","UNP","LMT","DE","WM","NSC","ITW",
         "XOM","CVX","COP","SLB","EOG","PSX","MPC","OXY","VLO","HAL",
         "LIN","APD","ECL","SHW","NEM","FCX","NUE","VMC","ALB","MOS",
-        "PLD","AMT","CCI","EQIX","PSA","SPG","WELL","O","DLR","EQR",
+        "PLD","AMT","CCI","EQIX","PSA","SPG","WELL","O","DLR","EXR",
         "NEE","DUK","SO","AEP","D","EXC","PCG","SRE","XEL","CEG",
     ]
     seen = set()
@@ -668,7 +668,7 @@ def get_ticker_exchange(ticker):
         "DE","MCD","DIS","MO","PM","T","VZ","PFE","ABBV","BMY","MRK","LLY","ABT",
         "TMO","UNP","NSC","SHW","ECL","LIN","APD","NUE","FCX","CLF","X","DD",
         "DOW","NEM","FCX","PSX","MPC","VLO","OXY","COP","SLB","HAL","EOG","DVN",
-        "PLD","AMT","CCI","PSA","SPG","O","DLR","WELL","EQR","NEE","DUK",
+        "PLD","AMT","CCI","PSA","SPG","O","DLR","WELL","EXR","NEE","DUK",
         "SO","AEP","D","EXC","PCG","SRE","XEL","CEG","WM","RSG","CMG","YUM",
         "DG","DLTR","TGT","KR","SYY","CLX","KMB","GIS","CPB","CAG","HRL",
     }

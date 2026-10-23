@@ -15,6 +15,20 @@ python -m pip install -r requirements.txt
 python -m streamlit run sentinel_app.py
 ```
 
+## Smoke test
+
+Before pushing, check that every data feed still answers (needs network, no keys):
+
+```bash
+.venv/bin/python tests/smoke_data.py
+```
+
+It calls each public fetcher in `sentinel/data/` once and prints the time, result size or
+exception. It exits non-zero on any exception, or when a core feed (quotes, screener,
+Treasury curve, earnings week) is empty. Keyed feeds report `empty` without keys; that
+is expected. Pass a name filter to run a subset (`tests/smoke_data.py macro`), or run it
+under pytest with `.venv/bin/python -m pytest tests/smoke_data.py` if pytest is installed.
+
 ## API keys (all optional)
 
 Put them in `.streamlit/secrets.toml` (never commit it) or environment variables.
