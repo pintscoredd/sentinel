@@ -41,6 +41,9 @@ input[type=search]{background:var(--panel);border:1px solid var(--border2);color
 .tbdl{display:flex;flex-wrap:wrap;gap:4px;padding:0 4px}
 .tbdl button{background:var(--panel2);border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:3px 7px;font:inherit;font-size:11px;cursor:pointer}
 .tbdl button:hover{color:var(--text)}
+.sp{font-size:11px;font-weight:700;line-height:1}.sp.up{color:var(--up)}.sp.dn{color:var(--down)}.sp.fl{color:var(--dim)}
+.rep h4{display:flex;align-items:center;gap:5px;color:var(--dim);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;margin:2px 4px 6px}
+.repg{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .empty{color:var(--dim);font-size:12px;text-align:center;padding:10px 0}
 #det{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;padding:16px;z-index:9}
 #det.show{display:flex}
@@ -96,8 +99,14 @@ function logo(s) {
   return `<div class="logo"><img src="https://financialmodelingprep.com/image-stock/${encodeURIComponent(s)}.png" alt="" loading="lazy" crossorigin="anonymous"
     onload="checkLogo(this)" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'ph',textContent:'${esc(s).slice(0,4)}'}))"></div>`;
 }
+function badge(r) {
+  if (r.eps_actual == null) return '';
+  if (r.surprise == null) return '<span class="sp fl">reported</span>';
+  const c = r.surprise > 0.5 ? 'up' : r.surprise < -0.5 ? 'dn' : 'fl';
+  return `<span class="sp ${c}" title="EPS surprise vs consensus">${r.surprise > 0 ? '+' : ''}${r.surprise.toFixed(1)}%</span>`;
+}
 function tile(r) {
-  return `<button class="tile${WL.has(r.symbol) ? ' wl' : ''}${sel === r.symbol ? ' sel' : ''}" data-s="${esc(r.symbol)}" title="${esc(r.name)}">${logo(r.symbol)}<span class="tk">${esc(r.symbol)}</span></button>`;
+  return `<button class="tile${WL.has(r.symbol) ? ' wl' : ''}${sel === r.symbol ? ' sel' : ''}" data-s="${esc(r.symbol)}" title="${esc(r.name)}">${logo(r.symbol)}<span class="tk">${esc(r.symbol)}</span>${badge(r)}</button>`;
 }
 function filtered() {
   const q = document.getElementById('q').value.trim().toLowerCase(), wl = document.getElementById('wlOnly').classList.contains('on');
@@ -112,9 +121,15 @@ function render() {
       return `<div class="slot"><h4>${slot === 'bmo' ? SUN : MOON}${slot === 'bmo' ? 'Pre' : 'Post'}</h4>${list.length ? list.slice(0, n).map(tile).join('') : '<div class="empty">—</div>'}
         ${list.length > PER ? `<button class="more" data-k="${key}">${open[key] ? 'Show less' : '+' + (list.length - PER) + ' more'}</button>` : ''}</div>`;
     };
-    const tbd = day.filter(r => r.slot === 'tbd');
+    // After a company reports, Nasdaq drops its time-of-day but adds actual EPS and the surprise.
+    const rep = day.filter(r => r.slot === 'tbd' && r.eps_actual != null);
+    const tbd = day.filter(r => r.slot === 'tbd' && r.eps_actual == null);
+    const timed = day.some(r => r.slot !== 'tbd');
+    const rk = d.iso + 'rep', rn = open[rk] ? rep.length : PER * 2;
+    const repHtml = rep.length ? `<div class="rep"><h4 title="Badge = EPS surprise vs consensus">Reported · ${rep.length}</h4><div class="repg">${rep.slice(0, rn).map(tile).join('')}</div>
+        ${rep.length > PER * 2 ? `<button class="more" data-k="${rk}">${open[rk] ? 'Show less' : '+' + (rep.length - PER * 2) + ' more'}</button>` : ''}</div>` : '';
     return `<section class="day${d.iso === TODAY ? ' today' : ''}"><div class="dh"><b>${d.dow}</b><span>${d.label}${d.iso === TODAY ? ' · today' : ''}</span></div>
-      <div class="slots">${col('bmo')}${col('amc')}</div>
+      ${timed || !rep.length ? `<div class="slots">${col('bmo')}${col('amc')}</div>` : ''}${repHtml}
       ${tbd.length ? `<div class="tbd"><h4 class="lbl" style="color:var(--dim);font-size:11px;letter-spacing:.08em;margin-bottom:6px">TIME NOT CONFIRMED · ${tbd.length}</h4><div class="tbdl">${tbd.slice(0, 18).map(r => `<button data-s="${esc(r.symbol)}">${esc(r.symbol)}</button>`).join('')}${tbd.length > 18 ? `<span class="hint">+${tbd.length - 18}</span>` : ''}</div></div>` : ''}
     </section>`;
   }).join('');
@@ -123,13 +138,14 @@ function detail(sym) {
   const r = DATA.find(x => x.symbol === sym); if (!r) return;
   sel = sym; render();
   const growth = r.eps_est != null && r.last_eps ? (r.eps_est / Math.abs(r.last_eps) - 1) * 100 * Math.sign(r.last_eps) : null;
-  const when = r.slot === 'bmo' ? 'Before market open' : r.slot === 'amc' ? 'After market close' : 'Time not confirmed';
+  const when = r.slot === 'bmo' ? 'Before market open' : r.slot === 'amc' ? 'After market close' : r.eps_actual != null ? 'Reported' : 'Time not confirmed';
   const d = DAYS.find(x => x.iso === r.date);
   document.getElementById('card').innerHTML = `<button class="x" aria-label="Close" onclick="closeDet()">✕</button>
     <div class="ch">${logo(r.symbol)}<div><h3>${esc(r.symbol)}</h3><p>${esc(r.name)}</p></div></div>
     <div class="row"><span>Reports</span><span>${d ? d.dow + ' ' + d.label : r.date} · ${when}</span></div>
     <div class="row"><span>Fiscal quarter</span><span>${esc(r.fiscal_q || '—')}</span></div>
     <div class="row"><span>Consensus EPS</span><span>${eps(r.eps_est)}${r.n_est ? ' · ' + r.n_est + ' analysts' : ''}</span></div>
+    ${r.eps_actual != null ? `<div class="row"><span>Reported EPS</span><span>${eps(r.eps_actual)}${r.surprise != null ? ` · <b style="color:${r.surprise >= 0 ? 'var(--up)' : 'var(--down)'}">${r.surprise >= 0 ? 'beat' : 'miss'} ${Math.abs(r.surprise).toFixed(1)}%</b>` : ''}</span></div>` : ''}
     <div class="row"><span>Year-ago EPS</span><span>${eps(r.last_eps)}${r.last_date ? ' · ' + esc(r.last_date) : ''}</span></div>
     <div class="row"><span>Implied EPS growth</span><span style="color:${growth == null ? 'inherit' : growth >= 0 ? 'var(--up)' : 'var(--down)'}">${growth == null ? '—' : (growth >= 0 ? '+' : '') + growth.toFixed(1) + '%'}</span></div>
     <div class="row"><span>Market cap</span><span>${usd(r.market_cap)}</span></div>

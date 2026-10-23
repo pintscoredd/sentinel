@@ -14,6 +14,7 @@ from sentinel.core.formatting import _esc, fmt_p, fmt_vol
 from sentinel.data.cross_asset import get_sector_rrg, stat_arb_screener
 from sentinel.data.market import get_futures, get_global_indices, get_vix_full, sector_etfs, top_movers, yahoo_quote
 from sentinel.data.news import finnhub_news, is_market_relevant
+from sentinel.data.screener import breadth, large_caps, market_screener, movers, sector_table
 from sentinel.data.options import get_gamma_squeeze_scanner, get_iv_skew, get_iv_term_structure, get_rv_iv_spread
 from sentinel.pages.ticker import render_ticker
 from sentinel.state import key
@@ -21,9 +22,10 @@ from sentinel.ui.components import (
     cards, divider, empty, note, render_news_card, render_stat_arb_cards, section, signed, table, tkr,
 )
 from sentinel.ui.palette import DOWN, SERIES, TEXT, TEXT_DIM, UP, signed_color
+from sentinel.ui.charts import market_heatmap
 from sentinel.ui.theme import dark_fig, go, plot
 
-SUBPAGES = ["Overview", "Ticker", "Rotation", "Volatility"]
+SUBPAGES = ["Overview", "Heatmap", "Ticker", "Rotation", "Volatility"]
 
 
 # ── Overview ────────────────────────────────────────────────────────────────
@@ -78,6 +80,18 @@ def _sectors():
 
 
 def _movers():
+    df = market_screener()
+    if not df.empty:
+        section("Top movers", "US stocks above $10B market cap · day change · Nasdaq screener")
+        gainers, losers = movers(df, 10)
+        c1, c2 = st.columns(2)
+        for col, data, title in ((c1, gainers, "Gainers"), (c2, losers, "Losers")):
+            with col:
+                rows = [[tkr(r.symbol), f'<span class="dim">{_esc(r.name[:28])}</span>', fmt_p(r.price),
+                         signed(r.pct, "{:+.2f}", "%", True), fmt_vol(r.volume)] for r in data.itertuples()]
+                table([title, "Company", "Last", "Change %", "Volume"], rows, align="llrrr",
+                      empty_text=f"No {title.lower()} today.")
+        return
     section("Top movers", "~120 large caps · day change vs prior close")
     gainers, losers = top_movers()
     c1, c2 = st.columns(2)
@@ -108,7 +122,7 @@ def _news():
 
 
 def _overview():
-    prefetch(get_global_indices, get_futures, sector_etfs, top_movers)
+    prefetch(get_global_indices, get_futures, sector_etfs, market_screener)
     _global_indices()
     divider()
     left, right = st.columns([1, 1], gap="large")
@@ -119,6 +133,53 @@ def _overview():
     divider()
     _movers()
     _news()
+
+
+# ── Heatmap ─────────────────────────────────────────────────────────────────
+def _heatmap():
+    df = market_screener()
+    if df.empty:
+        empty("Market snapshot unavailable (Nasdaq screener did not respond). Try again in a minute.")
+        return
+    b = breadth(df)
+    ad = f"{b['ad_ratio']:.2f}" if b.get("ad_ratio") else "—"
+    cards([
+        ("Advancers / decliners", f"{b['up']:,} / {b['down']:,}", f"A/D ratio {ad} · {b['n']:,} stocks > $300M",
+         TEXT_DIM, signed_color(b["up"] - b["down"])),
+        ("Share of stocks up", f"{b['pct_up']:.0f}%", "broad participation" if b["pct_up"] >= 60
+         else "narrow / weak" if b["pct_up"] <= 40 else "mixed", TEXT_DIM, signed_color(b["pct_up"] - 50)),
+        ("Cap-weighted move", f"{b['cap_weighted']:+.2f}%", "what the index feels", TEXT_DIM, signed_color(b["cap_weighted"])),
+        ("Equal-weighted move", f"{b['equal_weighted']:+.2f}%", "what the average stock did", TEXT_DIM,
+         signed_color(b["equal_weighted"])),
+        ("Moves beyond ±4%", f"{b['big_up']} up · {b['big_down']} down", "stocks > $300M", TEXT_DIM, TEXT),
+    ], 170)
+    c1, c2 = st.columns([3, 1])
+    with c2:
+        n = st.select_slider("Companies shown", [50, 100, 200, 300, 500], value=200, key="hm_n")
+    with c1:
+        section("US market heatmap", "Area = market cap · colour = day change (capped at ±3%) · click a sector to zoom")
+    fig = market_heatmap(large_caps(df, n))
+    if fig:
+        plot(fig, key="heatmap")
+    st.caption("Source: Nasdaq stock screener (delayed). Sector labels follow Nasdaq's classification.")
+    divider()
+    left, right = st.columns([3, 2], gap="large")
+    with left:
+        section("Sector breadth", "Cap-weighted change and share of members up · stocks > $300M")
+        st_ = sector_table(df)
+        rows = []
+        for r in st_.itertuples():
+            w = max(0.0, min(100.0, r.pct_up))
+            bar = (f'<div class="s-bar" style="min-width:90px"><div style="width:{w:.0f}%;'
+                   f'background:{UP if w >= 50 else DOWN}"></div></div>')
+            rows.append([_esc(r.sector), signed(r.pct, "{:+.2f}", "%", True), f"{r.pct_up:.0f}%", bar, f"{r.n:,}"])
+        table(["Sector", "Cap-wtd", "% up", "", "Stocks"], rows, align="lrrlr")
+    with right:
+        section("Most active", "By share volume today")
+        act = df.nlargest(12, "volume")
+        rows = [[tkr(r.symbol), fmt_p(r.price), signed(r.pct, "{:+.2f}", "%", True), fmt_vol(r.volume)]
+                for r in act.itertuples()]
+        table(["Ticker", "Last", "Change %", "Volume"], rows)
 
 
 # ── Rotation ────────────────────────────────────────────────────────────────
@@ -287,6 +348,8 @@ def render():
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     if sub == "Overview":
         _overview()
+    elif sub == "Heatmap":
+        _heatmap()
     elif sub == "Ticker":
         with st.form("ticker_lookup", border=False):
             c1, c2 = st.columns([3, 1])

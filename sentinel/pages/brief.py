@@ -9,9 +9,11 @@ from sentinel.core.formatting import _esc, fmt_p, fmt_vol
 from sentinel.data.market import calc_stock_fear_greed, get_vix_full, multi_quotes, sector_etfs, yahoo_quote
 from sentinel.data.news import google_news, is_market_relevant
 from sentinel.data.polymarket import polymarket_events
+from sentinel.data.screener import breadth, market_screener
+from sentinel.data.sessions import exchange_status
 from sentinel.state import save_watchlist
 from sentinel.ui.components import (
-    cards, divider, empty, gdelt_date, poly_status, quote_cards, render_news_card, render_poly_card,
+    cards, divider, empty, exchange_board, gdelt_date, poly_status, quote_cards, render_news_card, render_poly_card,
     section, signed, table, tkr,
 )
 from sentinel.ui.palette import DOWN, FLAT, TEXT, UP
@@ -19,6 +21,14 @@ from sentinel.ui.palette import DOWN, FLAT, TEXT, UP
 STRIP = [("^GSPC", "S&P 500"), ("^IXIC", "Nasdaq"), ("^RUT", "Russell 2000"), ("^VIX", "VIX"),
          ("^TNX", "US 10Y"), ("DX-Y.NYB", "Dollar index"), ("GC=F", "Gold"), ("CL=F", "WTI crude"),
          ("BTC-USD", "Bitcoin")]
+
+
+@st.fragment(run_every="60s")
+def _sessions():
+    rows = exchange_status()
+    n_open = sum(r["status"] == "OPEN" for r in rows)
+    section("World markets", f"{n_open} of {len(rows)} exchanges open now · regular hours, holidays not shown")
+    exchange_board(rows)
 
 
 @st.fragment(run_every="60s")
@@ -47,6 +57,10 @@ def _sentiment():
     if posture:
         items.append(("Vol posture", posture.title(), "from VIX 1Y rank", FLAT,
                       UP if posture == "RISK-ON" else DOWN if posture == "RISK-OFF" else TEXT))
+    b = breadth(market_screener())
+    if b:
+        items.append(("Market breadth", f"{b['pct_up']:.0f}% up", f"{b['up']:,} advancers · {b['down']:,} decliners",
+                      FLAT, UP if b["pct_up"] >= 55 else DOWN if b["pct_up"] <= 45 else TEXT))
     if items:
         cards(items, 150)
     else:
@@ -137,8 +151,9 @@ def _geo_query():
 def render():
     wl = tuple(st.session_state.watchlist)
     prefetch(lambda: multi_quotes(tuple(t for t, _ in STRIP)), get_vix_full, calc_stock_fear_greed,
-             lambda: yahoo_quote("^VIX"), sector_etfs, lambda: polymarket_events(40),
+             lambda: yahoo_quote("^VIX"), sector_etfs, market_screener, lambda: polymarket_events(40),
              lambda: google_news(_geo_query(), 30), *([lambda: multi_quotes(wl)] if wl else []))
+    _sessions()
     section("Market tape", "Day change vs prior close · refreshes every 60 s")
     _tape()
     divider()

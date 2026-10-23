@@ -60,7 +60,7 @@ def _key_indicators(fk):
         yoy = df["value"].pct_change(12) * 100
         return float(yoy.iloc[-1]), float(yoy.iloc[-1] - yoy.iloc[-2]), df["date"].iloc[-1]
 
-    for label, code in (("CPI inflation (YoY)", "CPIAUCSL"), ("Core PCE (YoY)", "PCEPILFE")):
+    for label, code in (("CPI inflation (YoY)", "CPIAUCSL"), ("Core CPI (YoY)", "CPILFESL"), ("Core PCE (YoY)", "PCEPILFE")):
         v, d, dt = _yoy(code)
         if v is not None:
             items.append((label, f"{v:.2f}%", f"{d:+.2f} pts m/m · {dt:%b %Y}", signed_color(-d)))
@@ -69,8 +69,16 @@ def _key_indicators(fk):
         df = fred_series(code, fk, 40)
         if df is not None and len(df) >= 2:
             v, p = df["value"].iloc[-1], df["value"].iloc[-2]
-            items.append((label, f"{v:.2f}{unit}", f"{v - p:+.2f} · {df['date'].iloc[-1]:%b %d, %Y}",
+            dt = df["date"].iloc[-1]
+            when = f"{dt:%b %Y}" if (df["date"].dt.day == 1).all() else f"{dt:%b %d, %Y}"
+            items.append((label, f"{v:.2f}{unit}", f"{v - p:+.2f} · {when}",
                           signed_color(-(v - p))))
+    nfp = fred_series("PAYEMS", fk, start=start)
+    if nfp is not None and len(nfp) >= 4:
+        d = nfp["value"].diff()
+        avg3 = d.tail(3).mean()
+        items.append(("Nonfarm payrolls (m/m)", f"{d.iloc[-1]:+,.0f}k", f"3-mo avg {avg3:+,.0f}k · {nfp['date'].iloc[-1]:%b %Y}",
+                      signed_color(d.iloc[-1])))
     m2 = fred_series("M2SL", fk, start=start)
     if m2 is not None and len(m2) >= 14:
         yoy = (m2["value"].iloc[-1] / m2["value"].iloc[-13] - 1) * 100
@@ -119,9 +127,10 @@ def _surprise():
 
 
 def _overview(fk):
-    _regime(fk)
-    divider()
-    section("Key indicators", "Latest FRED observations")
+    if fk:
+        _regime(fk)
+        divider()
+    section("Key indicators", "Latest FRED observations" if fk else "Latest official releases · BLS, NY Fed, Treasury")
     _key_indicators(fk)
     divider()
     left, right = st.columns([3, 2], gap="large")
@@ -243,18 +252,15 @@ def _liquidity(fk):
 def render():
     fk = key("fred_key")
     if not fk:
-        note('Most macro panels use FRED. Add a free key (<a href="https://fred.stlouisfed.org/docs/api/api_key.html" '
-             'target="_blank" rel="noopener">fred.stlouisfed.org</a>) as FRED_API_KEY in secrets or in the sidebar. '
-             'Keyless panels are shown below.', "warn", html=True)
+        note('Running keyless: yields from Treasury.gov, CPI and jobs from BLS, fed funds from the NY Fed. '
+             'Add a free FRED key (<a href="https://fred.stlouisfed.org/docs/api/api_key.html" target="_blank" '
+             'rel="noopener">fred.stlouisfed.org</a>) for the regime score, PCE, credit spreads, liquidity and '
+             'global central banks.', html=True)
     sub = st.segmented_control("Section", SUBPAGES, default="Overview", key="mac_sub",
                                label_visibility="collapsed") or "Overview"
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     if sub == "Overview":
-        if fk:
-            _overview(fk)
-        else:
-            section("Economic calendar", "Estimated schedule")
-            _calendar(None)
+        _overview(fk)
     elif sub == "Rates":
         _rates(fk)
     else:

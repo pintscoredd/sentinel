@@ -1091,6 +1091,9 @@ def nasdaq_earnings_day(day: str) -> list[dict]:
             "last_eps": _money(r.get("lastYearEPS")),
             "last_date": str(r.get("lastYearRptDt") or ""),
             "fiscal_q": str(r.get("fiscalQuarterEnding") or ""),
+            # Present once the company has reported (Nasdaq then drops the time-of-day).
+            "eps_actual": _money(r.get("eps")),
+            "surprise": _safe_float(str(r.get("surprise") or "").replace("%", ""), None),
         })
     return out
 

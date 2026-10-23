@@ -22,14 +22,15 @@ Keys entered in the sidebar apply to that browser session only.
 
 | Key | Unlocks |
 | --- | --- |
-| `FRED_API_KEY` | Macro regime, curve, inflation, net liquidity, central banks, sovereign yields |
+| `FRED_API_KEY` | Macro regime score, PCE, credit spreads, net liquidity, central banks, sovereign yields (yields, CPI, jobs and fed funds work without it) |
 | `FINNHUB_API_KEY` | Insider transactions, market news, economic calendar actual vs consensus |
 | `GEMINI_API_KEY` | Sentinel AI |
 | `NEWSAPI_KEY` | Extra headlines on the Geo page |
 | `ALPACA_API_KEY` + `ALPACA_SECRET_KEY` | Live SPY 0DTE chain, VWAP, direction model |
 | `MARINESIA_API_KEY` | Extra AIS vessels at chokepoints |
 
-Everything else is keyless: Yahoo Finance, Nasdaq earnings calendar, Hyperliquid,
+Everything else is keyless: Yahoo Finance, Nasdaq (earnings calendar and stock screener for
+the heatmap/breadth), Treasury.gov yield curve, BLS (CPI, jobs), NY Fed (fed funds), Hyperliquid,
 CoinGecko, Polymarket, CBOE delayed options, CFTC COT, Google News RSS, GDELT, USGS,
 NASA EONET, adsb.lol, CelesTrak, Digitraffic (Finnish AIS), Wikidata, Wikipedia,
 World Bank. In the browser the globe also calls Planespotters (aircraft photos) and

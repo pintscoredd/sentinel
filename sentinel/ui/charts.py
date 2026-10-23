@@ -57,8 +57,6 @@ def candlestick_chart(df, title="", height=420, ma_windows=(20, 50), show_volume
 
 def yield_curve_chart(fred_key, height=280):
     """Current Treasury curve with the curve from ~1 month and ~1 year ago."""
-    if not fred_key:
-        return None
     mats = [("1M", "DGS1MO"), ("3M", "DGS3MO"), ("6M", "DGS6MO"), ("1Y", "DGS1"), ("2Y", "DGS2"),
             ("3Y", "DGS3"), ("5Y", "DGS5"), ("7Y", "DGS7"), ("10Y", "DGS10"), ("20Y", "DGS20"), ("30Y", "DGS30")]
     start = (pd.Timestamp.today() - pd.Timedelta(days=400)).strftime("%Y-%m-%d")
@@ -92,8 +90,6 @@ def yield_curve_chart(fred_key, height=280):
 
 def yield_history_chart(fred_key, height=260):
     """3-year history of the 2Y/5Y/10Y/30Y yields."""
-    if not fred_key:
-        return None
     start = (pd.Timestamp.today() - pd.DateOffset(years=3)).strftime("%Y-%m-%d")
     fig = dark_fig(height, showlegend=True, title=dict(text="Treasury yields · 3 years"))
     added = False
@@ -111,8 +107,6 @@ def yield_history_chart(fred_key, height=260):
 
 def cpi_vs_rates_chart(fred_key, height=260):
     """CPI and core PCE year-over-year vs the effective fed funds rate (5 years)."""
-    if not fred_key:
-        return None
     start = (pd.Timestamp.today() - pd.DateOffset(years=6)).strftime("%Y-%m-%d")
     fig = dark_fig(height, showlegend=True, title=dict(text="Inflation (YoY) vs fed funds"))
     added = False
@@ -223,4 +217,40 @@ def render_0dte_gex_chart(gex, gamma_flip, max_pain, spot_spx=None, display_pct=
                            font=dict(size=10, color=color), bgcolor="rgba(0,0,0,0.6)")
     fig.update_layout(yaxis=dict(range=[lo, hi], tickformat=",.0f"), xaxis=dict(rangeslider=dict(visible=False)),
                       uirevision="gex")
+    return fig
+
+
+def market_heatmap(df, height=620, clip=3.0):
+    """Finviz-style treemap: sector → stock, area = market cap, colour = day change (±*clip*%)."""
+    if go is None or df is None or df.empty:
+        return None
+    d = df.copy()
+    sect = d.groupby("sector").apply(lambda g: (g["pct"] * g["mcap"]).sum() / g["mcap"].sum(), include_groups=False)
+    ids = [f"s:{s}" for s in sect.index] + [f"t:{t}" for t in d["symbol"]]
+    labels = list(sect.index) + list(d["symbol"])
+    parents = [""] * len(sect) + [f"s:{s}" for s in d["sector"]]
+    values = [0] * len(sect) + list(d["mcap"])
+    pct = list(sect.values) + list(d["pct"])
+    names = ["sector, cap-weighted"] * len(sect) + list(d["name"].str.slice(0, 40))
+    prices = [None] * len(sect) + list(d["price"])
+    caps = [d.loc[d["sector"] == s, "mcap"].sum() for s in sect.index] + list(d["mcap"])
+
+    def _cap(v):
+        return f"${v / 1e12:.2f}T" if v >= 1e12 else f"${v / 1e9:.0f}B"
+
+    hover = [f"<b>{lb}</b> · {nm}<br>{p:+.2f}%" + (f" · ${pr:,.2f}" if pr else "") + f"<br>Market cap {_cap(c)}"
+             for lb, nm, p, pr, c in zip(labels, names, pct, prices, caps)]
+    fig = dark_fig(height, margin=dict(l=0, r=0, t=8, b=0), uniformtext=dict(minsize=9, mode="hide"),
+                   xaxis=dict(visible=False), yaxis=dict(visible=False))
+    fig.add_trace(go.Treemap(
+        ids=ids, labels=labels, parents=parents, values=values, branchvalues="remainder",
+        marker=dict(colors=[max(-clip, min(clip, p)) for p in pct], cmin=-clip, cmid=0, cmax=clip,
+                    colorscale=[[0, "#B3262B"], [0.35, "#5A1D20"], [0.5, "#1C1C1C"], [0.65, "#1B4D36"], [1, "#2FA36B"]],
+                    line=dict(color="#000000", width=1), pad=dict(t=18, l=2, r=2, b=2),
+                    colorbar=dict(thickness=8, len=0.5, ticksuffix="%", tickfont=dict(color=TEXT_DIM, size=10),
+                                  outlinewidth=0)),
+        text=[f"{p:+.2f}%" for p in pct], texttemplate="<b>%{label}</b><br>%{text}", textposition="middle center",
+        textfont=dict(color="#FFFFFF", size=12), hovertext=hover, hoverinfo="text",
+        pathbar=dict(visible=True, thickness=20, textfont=dict(size=11)), maxdepth=2, root=dict(color="#000000"), tiling=dict(packing="squarify"),
+    ))
     return fig

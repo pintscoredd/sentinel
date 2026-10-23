@@ -57,16 +57,20 @@ def google_news(query: str, max_rec: int = 20, days: int = 2) -> list[dict]:
 
 @stale_cached_source(ttl=600, retry_ttl=60)
 def gdelt_news(query, max_rec=15):
-    """News articles for *query* from the last 72 h: GDELT, falling back to Google News RSS."""
-    data = _fetch_robust_json("https://api.gdeltproject.org/api/v2/doc/doc", params={
-        "query": f"{query} sourcelang:english", "mode": "artlist", "maxrecords": int(max_rec),
-        "format": "json", "timespan": "72h", "sort": "datedesc"}, timeout=10)
-    arts = (data or {}).get("articles", []) if isinstance(data, dict) else []
-    arts = [a for a in arts if _is_english(a.get("title", ""))][:max_rec]
+    """News articles for *query* from the last 72 h.
+
+    Google News RSS first (fast, reliable); GDELT only when Google returns nothing,
+    since GDELT throttles shared/cloud IPs to one request per 5 s and often stalls.
+    """
+    arts = google_news(query, max_rec, days=3)
     if arts:
         return arts
-    # Google's syntax wants plain words; GDELT-style parentheses/OR still work there.
-    return google_news(query, max_rec, days=3)
+    data = _fetch_robust_json("https://api.gdeltproject.org/api/v2/doc/doc", params={
+        "query": f"{query} sourcelang:english", "mode": "artlist", "maxrecords": int(max_rec),
+        "format": "json", "timespan": "72h", "sort": "datedesc"}, timeout=6)
+    arts = (data or {}).get("articles", []) if isinstance(data, dict) else []
+    return [a for a in arts if _is_english(a.get("title", ""))][:max_rec]
+
 
 @st.cache_data(ttl=300)
 def newsapi_headlines(key, query="stock market finance"):

@@ -145,7 +145,7 @@ def get_cross_asset_volatility():
     if yf is None:
         return None
     labels = {"^VIX": "VIX · S&P 500", "^VXN": "VXN · Nasdaq-100", "^GVZ": "GVZ · Gold",
-              "^OVX": "OVX · Crude oil", "^EVZ": "EVZ · EUR/USD"}
+              "^OVX": "OVX · Crude oil", "^MOVE": "MOVE · Treasuries"}
     tickers = list(labels)
     try:
         with _yf_semaphore:

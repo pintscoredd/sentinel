@@ -98,6 +98,15 @@ div[data-testid="stButtonGroup"] button[kind*="Active"] p {{ color: #000 !import
   border-radius: 6px !important; font-size: 13px !important;
 }}
 [data-baseweb="popover"] li {{ font-size: 13px !important; }}
+/* World exchange board */
+.xg {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(132px,1fr)); gap:6px; }}
+.xg .x {{ border:1px solid var(--border); border-radius:8px; padding:7px 10px; background:var(--panel); }}
+.xg .x.open {{ border-color:rgba(63,207,142,.45); }}
+.xg .x.lunch {{ border-color:var(--border2); }}
+.xg .c {{ display:flex; justify-content:space-between; align-items:center; font-size:12px; font-weight:700; color:var(--text); letter-spacing:.03em; }}
+.xg .s {{ font-size:10px; font-weight:700; letter-spacing:.06em; color:var(--dim); }}
+.xg .open .s {{ color:var(--up); }}
+.xg .m {{ font-size:11px; color:var(--dim); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
 /* Multiselect chips: primaryColor is white, so default chips are white-on-white. */
 [data-baseweb="tag"], [data-testid="stMultiSelect"] [data-tag] {{ background: #1C1C1C !important; border: 1px solid var(--border2) !important; border-radius: 6px !important; }}
 [data-baseweb="tag"] span, [data-testid="stMultiSelect"] [data-tag] span, [data-testid="stMultiSelect"] [data-tag] button {{ color: var(--text) !important; }}

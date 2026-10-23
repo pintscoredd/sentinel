@@ -447,3 +447,14 @@ def quote_cards(quotes: list[dict], labels: dict | None = None, min_width: int =
         sub = f"{q['pct']:+.2f}%  {q['change']:+,.2f}" if q.get("pct") is not None else ""
         items.append((labels.get(t, t), fmt_p(q["price"], t), sub, signed_color(q.get("pct"))))
     cards(items, min_width)
+
+
+def exchange_board(rows: list[dict]) -> None:
+    """Grid of world exchanges with open/closed state (rows from data.sessions.exchange_status)."""
+    cells = "".join(
+        f'<div class="x {r["status"].lower()}"><div class="c"><span>{_esc(r["code"])}</span>'
+        f'<span class="s">{_esc(r["status"])}</span></div>'
+        f'<div class="m">{_esc(r["city"])} · {_esc(r["local"])}</div>'
+        f'<div class="m">{_esc(r["verb"].capitalize())} in {_esc(r["in"])}</div></div>'
+        for r in rows)
+    st.markdown(f'<div class="xg">{cells}</div>', unsafe_allow_html=True)

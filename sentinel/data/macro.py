@@ -1,13 +1,20 @@
-"""FRED-driven macro: rates, calendar, liquidity, curve."""
+"""Macro data: rates, calendar, liquidity, curve.
+
+FRED is the primary source. Without a FRED key, `fred_series` falls back to keyless
+official feeds for the series they cover: Treasury.gov (constant-maturity yields),
+BLS (CPI, core CPI, unemployment, payrolls) and the NY Fed (effective fed funds).
+"""
 from __future__ import annotations
 
+import io
 import logging
+from datetime import date
 
 import pandas as pd
 import streamlit as st
 
 from sentinel.core.http import (
-    _fetch_robust_json, get_yf_ticker,
+    _fetch_robust_json, _get_http_session, get_yf_ticker,
 )
 from sentinel.core.secrets import unwrap_secret as _unwrap_secret
 
@@ -26,7 +33,10 @@ def fred_series(series_id, key, limit=36, start=None):
     """
     key = _unwrap_secret(key)
     if not key:
-        return None
+        df = _keyless_series(series_id, start)
+        if df is None or df.empty:
+            return None
+        return df if start else df.tail(int(limit)).reset_index(drop=True)
     params = {"series_id": series_id, "api_key": key, "file_type": "json", "sort_order": "desc"}
     if start:
         params["observation_start"] = start
@@ -42,6 +52,90 @@ def fred_series(series_id, key, limit=36, start=None):
     df["date"] = pd.to_datetime(df["date"])
     df = df.dropna(subset=["value"]).sort_values("date")[["date", "value"]].reset_index(drop=True)
     return df if not df.empty else None
+
+
+# ── Keyless fallbacks ──────────────────────────────────────────────────────────
+_TREASURY_COLS = {"DGS1MO": "1 Mo", "DGS3MO": "3 Mo", "DGS6MO": "6 Mo", "DGS1": "1 Yr", "DGS2": "2 Yr",
+                  "DGS3": "3 Yr", "DGS5": "5 Yr", "DGS7": "7 Yr", "DGS10": "10 Yr", "DGS20": "20 Yr", "DGS30": "30 Yr"}
+# FRED id → BLS id (seasonally adjusted where FRED's is).
+_BLS_IDS = {"CPIAUCSL": "CUSR0000SA0", "CPILFESL": "CUSR0000SA0L1E", "UNRATE": "LNS14000000", "PAYEMS": "CES0000000001"}
+_UA = {"User-Agent": "Mozilla/5.0 (Sentinel market dashboard)"}
+
+
+@st.cache_data(ttl=3 * 3600, show_spinner=False)
+def treasury_curve_year(year: int):
+    """Daily Treasury par yield curve for one calendar year (Treasury.gov CSV, keyless)."""
+    url = ("https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/"
+           f"{int(year)}/all?type=daily_treasury_yield_curve&field_tdr_date_value={int(year)}&page&_format=csv")
+    try:
+        r = _get_http_session().get(url, headers=_UA, timeout=15)
+        r.raise_for_status()
+        df = pd.read_csv(io.StringIO(r.text))
+    except Exception as e:
+        logger.warning("Treasury curve %s failed: %s", year, e)
+        return None
+    if "Date" not in df:
+        return None
+    df["date"] = pd.to_datetime(df["Date"], format="%m/%d/%Y", errors="coerce")
+    return df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+
+
+@st.cache_data(ttl=12 * 3600, show_spinner=False)
+def _bls_bundle(start_year: int):
+    """All mapped BLS series in one request (the keyless API allows ~25 requests/day per IP)."""
+    try:
+        r = _get_http_session().post("https://api.bls.gov/publicAPI/v1/timeseries/data/", headers=_UA, timeout=20,
+                                     json={"seriesid": list(_BLS_IDS.values()), "startyear": str(start_year),
+                                           "endyear": str(date.today().year)})
+        data = r.json()
+    except Exception as e:
+        logger.warning("BLS request failed: %s", e)
+        return {}
+    if data.get("status") != "REQUEST_SUCCEEDED":
+        logger.warning("BLS: %s", data.get("message"))
+        return {}
+    out = {}
+    for ser in (data.get("Results") or {}).get("series", []):
+        rows = [(pd.Timestamp(int(o["year"]), int(o["period"][1:]), 1), pd.to_numeric(o["value"], errors="coerce"))
+                for o in ser.get("data", []) if str(o.get("period", "")).startswith("M") and o["period"] != "M13"]
+        if rows:
+            out[ser["seriesID"]] = pd.DataFrame(rows, columns=["date", "value"]).dropna().sort_values("date")
+    return out
+
+
+@st.cache_data(ttl=3 * 3600, show_spinner=False)
+def _nyfed_effr():
+    start = (date.today().replace(year=date.today().year - 6)).isoformat()
+    data = _fetch_robust_json("https://markets.newyorkfed.org/api/rates/unsecured/effr/search.json",
+                              params={"startDate": start, "endDate": date.today().isoformat()}, timeout=15)
+    rows = [(pd.Timestamp(x["effectiveDate"]), x.get("percentRate")) for x in (data or {}).get("refRates", [])]
+    if not rows:
+        return None
+    return pd.DataFrame(rows, columns=["date", "value"]).dropna().sort_values("date").reset_index(drop=True)
+
+
+def _keyless_series(series_id, start=None):
+    start_ts = pd.Timestamp(start) if start else pd.Timestamp.today() - pd.Timedelta(days=800)
+    df = None
+    if series_id in _TREASURY_COLS:
+        col = _TREASURY_COLS[series_id]
+        frames = [treasury_curve_year(y) for y in range(start_ts.year, date.today().year + 1)]
+        frames = [f for f in frames if f is not None and col in f]
+        if frames:
+            df = pd.concat([f[["date", col]] for f in frames]).rename(columns={col: "value"})
+    elif series_id in _BLS_IDS:
+        # Ask for 12 extra months so year-over-year changes have a base.
+        df = _bls_bundle(min(start_ts.year - 1, date.today().year - 2)).get(_BLS_IDS[series_id])
+    elif series_id in ("DFF", "FEDFUNDS"):
+        df = _nyfed_effr()
+        if df is not None and series_id == "FEDFUNDS":
+            df = df.set_index("date")["value"].resample("MS").mean().dropna().reset_index()
+    if df is None or df.empty:
+        return None
+    df = df.copy()
+    df["value"] = pd.to_numeric(df["value"], errors="coerce")
+    df = df.dropna().drop_duplicates("date").sort_values("date")
+    return df[df["date"] >= start_ts - pd.DateOffset(months=13 if series_id in _BLS_IDS else 0)].reset_index(drop=True)
 
 
 @st.cache_data(ttl=3600)
@@ -401,8 +495,6 @@ def get_yield_curve_history(fred_key, lookback_weeks=52):
     
     Returns DataFrame with columns: Date, Maturity, Yield, Maturity_Num
     """
-    if not fred_key:
-        return None
     try:
         all_data = {}
         for series_id, label in _YIELD_MATURITIES:
@@ -535,9 +627,7 @@ def get_yield_curve_inversions(fred_key=None):
         ("30Y − 2Y", "DGS30", "DGS2", "Full curve slope"),
     ]
     import concurrent.futures
-    fred_key = _unwrap_secret(fred_key)
-    if not fred_key:
-        return []
+    fred_key = _unwrap_secret(fred_key)  # keyless: Treasury.gov via fred_series
     ids = sorted({x for _, a, b, _ in SPREADS for x in (a, b)})
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         raw = dict(pool.map(lambda sid: (sid, fred_series(sid, fred_key, 10)), ids))

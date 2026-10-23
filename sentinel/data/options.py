@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
@@ -491,7 +491,7 @@ def get_gamma_squeeze_scanner():
         "GME", "AMC", "KOSS", "BB", "NOK", "PLTR", "SOFI",
         "RIVN", "LCID", "MARA", "RIOT", "COIN", "CVNA", "UPST",
         "SNOW", "DKNG", "SPCE", "BYND", "FUBO", "WKHS",
-        "TLRY", "SNDL", "CLOV", "SKLZ", "RKT", "OPEN",
+        "TLRY", "SNDL", "CLOV", "RKT", "OPEN",
     ]
 
     try:
@@ -605,7 +605,7 @@ def earnings_expected_move(ticker: str, report_date: str, slot: str = "amc"):
     exps = options_expiries(ticker)
     if not exps:
         return None
-    rd = datetime.strptime(report_date, "%Y-%m-%d").date()
+    rd = report_date if isinstance(report_date, date) else datetime.strptime(str(report_date)[:10], "%Y-%m-%d").date()
     valid = [e for e in exps if (datetime.strptime(e, "%Y-%m-%d").date() > rd if slot != "bmo"
                                  else datetime.strptime(e, "%Y-%m-%d").date() >= rd)]
     if not valid:
