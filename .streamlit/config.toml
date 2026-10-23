@@ -1,0 +1,19 @@
+[client]
+# Never show tracebacks to visitors; details go to the server log.
+showErrorDetails = false
+toolbarMode = "minimal"
+
+[server]
+fileWatcherType = "none"
+runOnSave = false
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "dark"
+primaryColor = "#FFFFFF"
+backgroundColor = "#000000"
+secondaryBackgroundColor = "#0A0A0A"
+textColor = "#EDEDED"
+font = "sans serif"
