@@ -6,6 +6,7 @@ import streamlit as st
 
 from sentinel.core.formatting import _esc, fmt_pct, fmt_usd
 from sentinel.data.hyperliquid import (
+    hl_cross_venue_funding, hl_oi_trend,
     CANDLE_INTERVALS, hl_candles, hl_funding_history, hl_markets, hl_order_book,
     hl_perp_dexs, hl_recent_trades, hl_summary,
 )
@@ -84,6 +85,10 @@ def render():
     df = hl_markets(dex)
     if df.empty:
         return
+
+    if dex == "":
+        divider()
+        _crowding(df)
 
     divider()
     section("Funding extremes", "Positive funding: longs pay shorts. Annualised from the current hourly rate.")
@@ -188,3 +193,89 @@ def render():
         st.caption(f"{_esc(coin)} · refreshes every 15 s · data © Hyperliquid public API")
 
     _detail()
+
+
+_QUADS = [  # (price up?, funding positive?) → label, colour, meaning
+    ((True, True), "Longs chasing", UP, "price up and longs paying: trend with crowded longs"),
+    ((False, True), "Longs trapped", DOWN, "price down while longs still pay: long-squeeze risk"),
+    ((True, False), "Shorts squeezed", "#8FB8FF", "price up while shorts pay: short-squeeze in progress"),
+    ((False, False), "Shorts pressing", FLAT, "price down with shorts paying: bearish consensus"),
+]
+
+
+def _crowding(df):
+    section("Crowd positioning", "Who is paying to hold the position. Funding annualised · liquid markets (OI ≥ $5M)")
+    liq = df[df["oi_usd"] >= 5e6].copy()
+    if liq.empty:
+        empty("Not enough liquid markets.")
+        return
+    oi_chg, mins = hl_oi_trend(df)
+    if oi_chg is not None:
+        liq["oi_chg"] = liq["coin"].map(oi_chg)
+    # Hyperliquid funding = premium + a fixed interest component (0.00125%/h ≈ 10.95% APR), so markets
+    # with no premium all sit at the baseline. Crowding is measured relative to it; premium breaks ties.
+    base = 0.00125 * 24 * 365
+    liq["excess"] = liq["funding_apr_pct"] - base
+    ranked = liq.sort_values(["excess", "premium_pct"], ascending=False)
+    longs = ranked[ranked["excess"] > 0.5].head(3)
+    shorts = ranked[ranked["excess"] < -0.5].iloc[::-1].head(3)
+
+    def head(d):
+        if d.empty:
+            return "None"
+        r = d.iloc[0]
+        return f"{r.symbol} {r.funding_apr_pct:+.0f}%"
+
+    def rest(d, what):
+        if d.empty:
+            return f"no market far from the {base:.1f}% baseline"
+        more = ", ".join(f"{r.symbol} {r.funding_apr_pct:+.0f}%" for r in d.iloc[1:].itertuples())
+        return (f"then {more} · " if more else "") + what
+
+    above, below = int((liq["excess"] > 0.5).sum()), int((liq["excess"] < -0.5).sum())
+    cards([
+        ("Most crowded long", head(longs), rest(longs, "APR longs pay"), TEXT_DIM, UP),
+        ("Most crowded short", head(shorts), rest(shorts, "APR (negative = shorts pay)"), TEXT_DIM, DOWN),
+        ("Crowding balance", f"{above} long · {below} short",
+         f"of {len(liq)} liquid markets away from the {base:.2f}% baseline"),
+        ("OI trend", f"{mins} min window" if oi_chg is not None else "warming up",
+         "change in open interest tracked by this app" if oi_chg is not None
+         else "Hyperliquid has no OI history; the app records it (~10 min)"),
+    ], 200)
+
+    left, right = st.columns([3, 2], gap="large")
+    with left:
+        fig = dark_fig(440, hovermode="closest", showlegend=True,
+                       title=dict(text="Regime map · 24h price change × funding (bubble = open interest)"))
+        for (up, pos), name, color, meaning in _QUADS:
+            q = liq[((liq["chg_24h_pct"] >= 0) == up) & ((liq["funding_apr_pct"] >= 0) == pos)]
+            if q.empty:
+                continue
+            size = (q["oi_usd"] / liq["oi_usd"].max()) ** 0.5 * 46 + 6
+            label = [s if o >= liq["oi_usd"].quantile(0.8) else "" for s, o in zip(q["symbol"], q["oi_usd"])]
+            fig.add_trace(go.Scatter(
+                x=q["chg_24h_pct"], y=q["funding_apr_pct"], mode="markers+text", name=name, text=label,
+                textposition="top center", textfont=dict(size=10, color="#D4D4D4"),
+                marker=dict(size=size, color=color, opacity=0.55, line=dict(width=1, color="#000")),
+                customdata=list(zip(q["symbol"], q["oi_usd"] / 1e6)),
+                hovertemplate="<b>%{customdata[0]}</b><br>24h %{x:+.2f}%<br>Funding %{y:+.1f}% APR"
+                              "<br>OI $%{customdata[1]:,.0f}M<br>" + meaning + "<extra></extra>"))
+        fig.add_hline(y=0, line=dict(color="#333", width=1))
+        fig.add_vline(x=0, line=dict(color="#333", width=1))
+        fig.update_layout(xaxis=dict(ticksuffix="%", title=dict(text="24h price change", font=dict(size=10))),
+                          yaxis=dict(ticksuffix="%", title=dict(text="Funding APR", font=dict(size=10))),
+                          legend=dict(orientation="h", y=-0.15))
+        plot(fig, key="hl_regime")
+    with right:
+        xv = hl_cross_venue_funding()
+        top = liq.nlargest(18, "oi_usd")[["coin", "symbol", "oi_usd"] + (["oi_chg"] if "oi_chg" in liq else [])]
+        m = top.merge(xv, on="coin", how="left")
+        def apr(v):
+            return '<span class="dim">—</span>' if v != v or v is None else signed(v, "{:+.1f}", "%")
+        rows = [[tkr(r.symbol), apr(r.Hyperliquid), apr(r.Binance), apr(r.Bybit), apr(r.spread_vs_cex)]
+                + ([signed(r.oi_chg, "{:+.1f}", "%")] if "oi_chg" in m else []) for r in m.itertuples()]
+        section("Funding across venues", "Predicted next funding, % APR · spread = Hyperliquid minus CEX average")
+        table(["Coin", "Hyperliquid", "Binance", "Bybit", "Spread"] + ([f"OI {mins}m"] if "oi_chg" in m else []),
+              rows, max_height=440)
+        st.caption("A positive spread means longs pay more on Hyperliquid than on Binance/Bybit (basis-trade opportunity, "
+                   "before fees). Binance/Bybit rates are as published by Hyperliquid.")

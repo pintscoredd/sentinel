@@ -190,3 +190,66 @@ def hl_recent_trades(coin: str) -> pd.DataFrame:
     })
     out["usd"] = out["px"] * out["sz"]
     return out.sort_values("time", ascending=False).reset_index(drop=True)
+
+
+_VENUES = {"HlPerp": "Hyperliquid", "BinPerp": "Binance", "BybitPerp": "Bybit"}
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def hl_cross_venue_funding() -> pd.DataFrame:
+    """Predicted next funding per coin on Hyperliquid, Binance and Bybit, annualised (% APR).
+
+    Hyperliquid publishes the other venues' predicted rates itself, so this works
+    from regions where Binance/Bybit APIs are geo-blocked.
+    """
+    data = _info({"type": "predictedFundings"}, timeout=12)
+    rows = []
+    for item in data or []:
+        try:
+            coin, venues = item
+        except (TypeError, ValueError):
+            continue
+        row = {"coin": coin}
+        for venue, info in venues or []:
+            name = _VENUES.get(venue)
+            if not name or not info:
+                continue
+            rate, hours = _safe_float(info.get("fundingRate"), None), _safe_float(info.get("fundingIntervalHours"), 1) or 1
+            if rate is not None:
+                row[name] = rate / hours * HOURS_PER_YEAR * 100
+        rows.append(row)
+    df = pd.DataFrame(rows)
+    for v in _VENUES.values():
+        if v not in df:
+            df[v] = float("nan")
+    if not df.empty:
+        others = df[["Binance", "Bybit"]].mean(axis=1, skipna=True)
+        df["spread_vs_cex"] = df["Hyperliquid"] - others  # >0: longs pay more on Hyperliquid
+    return df
+
+
+@st.cache_resource(show_spinner=False)
+def _oi_store() -> dict:
+    return {"snaps": []}  # [(timestamp, {coin: oi_usd})], shared across sessions in this process
+
+
+def hl_oi_trend(df: pd.DataFrame, min_age_s: int = 600, keep_s: int = 4 * 3600):
+    """OI change per coin vs the oldest snapshot taken this process (≥ *min_age_s* ago).
+
+    Hyperliquid's public API has no OI history, so the app records its own; the
+    trend appears once the app has been running ~10 minutes. Returns (Series %, minutes) or (None, 0).
+    """
+    if df is None or df.empty:
+        return None, 0
+    store, now = _oi_store(), time.time()
+    snaps = [s for s in store["snaps"] if now - s[0] <= keep_s]
+    if not snaps or now - snaps[-1][0] >= 60:
+        snaps.append((now, dict(zip(df["coin"], df["oi_usd"]))))
+    store["snaps"] = snaps[-300:]
+    old = next((s for s in snaps if now - s[0] >= min_age_s), None)
+    if old is None:
+        return None, 0
+    base = pd.Series(old[1])
+    cur = df.set_index("coin")["oi_usd"]
+    chg = (cur / base.reindex(cur.index) - 1) * 100
+    return chg.replace([float("inf"), float("-inf")], float("nan")), int((now - old[0]) / 60)

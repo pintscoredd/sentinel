@@ -34,7 +34,7 @@ import streamlit.logger  # noqa: E402
 streamlit.logger.set_log_level("error")
 
 from sentinel.data import (  # noqa: E402
-    cross_asset, crypto, fundamentals, geo, hyperliquid, macro, market,
+    breadth, cross_asset, crypto, exposure, fundamentals, funds, geo, hyperliquid, macro, market,
     news, options, polymarket, screener, sessions, zero_dte,
 )
 
@@ -85,6 +85,16 @@ def _cboe_gex():
 
 
 # (name, callable, core). Core feeds must return data; the rest may be empty.
+def _poly_history():
+    evts = polymarket.polymarket_events(5)
+    for e in evts:
+        for m in polymarket.live_markets(e):
+            toks = polymarket.market_tokens(m)
+            if toks:
+                return polymarket.poly_price_history(toks[0][1], "1w")
+    return []
+
+
 CHECKS: list[tuple[str, Callable, bool]] = [
     # market
     ("market.multi_quotes", lambda: market.multi_quotes(("SPY", "QQQ", "AAPL", "^VIX", "BTC-USD")), True),
@@ -178,6 +188,15 @@ CHECKS: list[tuple[str, Callable, bool]] = [
     ("geo.fetch_conflict_feed", geo.fetch_conflict_feed, False),
     # sessions
     ("sessions.exchange_status", sessions.exchange_status, False),
+    # dealer exposure, crowding, breadth, 13F, Polymarket depth, country risk inputs
+    ("exposure.exposure_chain[SPX]", lambda: exposure.exposure_chain("SPX")[1], False),
+    ("hyperliquid.hl_cross_venue_funding", hyperliquid.hl_cross_venue_funding, False),
+    ("breadth.breadth_history", breadth.breadth_history, False),
+    ("funds.fund_report[Berkshire]", lambda: funds.fund_report(1067983).get("holdings"), False),
+    ("polymarket.poly_leaderboard", polymarket.poly_leaderboard, False),
+    ("polymarket.poly_price_history", _poly_history, False),
+    ("geo.fetch_travel_advisories", geo.fetch_travel_advisories, False),
+    ("geo.fetch_gdacs_alerts", geo.fetch_gdacs_alerts, False),
 ]
 
 

@@ -330,6 +330,9 @@ def fetch_conflict_feed():
     from sentinel.data.news import google_news
     q = "war OR airstrike OR missile OR attack OR clashes OR drone strike OR shelling"
     arts = google_news(q, 120, days=2)
+    # Second pass for political instability, so country risk sees more than kinetic conflict.
+    arts = list(arts or []) + list(google_news("coup OR protests OR riots OR unrest OR sanctions OR terrorist OR insurgents",
+                                               100, days=2) or [])
     if not arts:
         data = _fetch_robust_json("https://api.gdeltproject.org/api/v2/doc/doc", params={
             "query": "(war OR attack OR airstrike OR missile OR military OR fighting OR blockade) sourcelang:english",
@@ -352,4 +355,39 @@ def fetch_conflict_feed():
                             "titles": [h["title"] for h in hits[:5]], "sources": [h["domain"] for h in hits[:5]]})
     if not clean:
         return {}
-    return {"signals": signals, "headlines": clean[:8]}
+    return {"signals": signals, "headlines": clean[:8],
+            "items": [{"t": a["title"], "u": a["url"], "d": a["domain"]} for a in clean[:220]]}
+
+
+@stale_cached_source(ttl=6 * 3600, retry_ttl=900)
+def fetch_travel_advisories():
+    """US State Department travel advisory level (1–4) by country name (keyless)."""
+    import re
+    data = _fetch_robust_json("https://cadataapi.state.gov/api/TravelAdvisories", timeout=20)
+    out = []
+    for a in data or []:
+        m = re.match(r"\s*(.+?)\s*-\s*Level\s*(\d)\s*:\s*(.+)", str(a.get("Title", "")))
+        if m:
+            out.append({"name": m.group(1).strip(), "level": int(m.group(2)), "text": m.group(3).strip(),
+                        "url": a.get("Link", "")})
+    return out
+
+
+@stale_cached_source(ttl=1800, retry_ttl=600)
+def fetch_gdacs_alerts(days: int = 14):
+    """Orange/red GDACS disaster alerts (quakes, cyclones, floods, volcanoes, drought, fires) in the last *days*."""
+    from datetime import date, timedelta
+    today = date.today()
+    # GDACS stalls when ';' arrives percent-encoded, so the query string is built by hand.
+    url = ("https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH?alertlevel=Orange;Red"
+           f"&eventlist=EQ;TC;FL;VO;DR;WF&fromDate={today - timedelta(days=days)}&toDate={today}")
+    data = _fetch_robust_json(url, timeout=40)  # GDACS often takes 5–15 s
+    names = {"EQ": "Earthquake", "TC": "Tropical cyclone", "FL": "Flood", "VO": "Volcano", "DR": "Drought", "WF": "Wildfire"}
+    out = []
+    for f in (data or {}).get("features", []) if isinstance(data, dict) else []:
+        p = f.get("properties") or {}
+        countries = [c.strip() for c in str(p.get("country") or "").split(",") if c.strip()]
+        out.append({"type": names.get(p.get("eventtype"), p.get("eventtype")), "alert": p.get("alertlevel"),
+                    "countries": countries[:30], "name": str(p.get("name") or "")[:120],
+                    "url": ((p.get("url") or {}).get("report") if isinstance(p.get("url"), dict) else "") or ""})
+    return out

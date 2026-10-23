@@ -15,7 +15,8 @@ import streamlit.components.v1 as components
 from sentinel.config import GEO_FINANCIAL_NETWORKS, GEO_IMPACT_TICKERS, GEO_THEATERS
 from sentinel.core.formatting import _esc, fmt_p
 from sentinel.data.geo import (
-    fetch_ais_vessels, fetch_conflict_feed, fetch_military_aircraft_json,
+    fetch_ais_vessels, fetch_conflict_feed, fetch_gdacs_alerts, fetch_military_aircraft_json,
+    fetch_travel_advisories,
 )
 from sentinel.data.market import get_global_indices, multi_quotes
 from sentinel.data.news import gdelt_news, newsapi_headlines
@@ -35,15 +36,19 @@ def _globe_payload() -> str:
     """Server-side snapshot of keyless feeds, base64 JSON for safe injection."""
     # Satellites are propagated live in the browser (satellite.js + CelesTrak TLEs).
     jobs = {"planes": fetch_military_aircraft_json, "vessels": fetch_ais_vessels, "news": fetch_conflict_feed,
-            "markets": get_global_indices}
+            "markets": get_global_indices, "advisories": fetch_travel_advisories, "disasters": fetch_gdacs_alerts}
     out = {}
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        futs = {k: pool.submit(fn) for k, fn in jobs.items()}
-        for k, f in futs.items():
-            try:
-                out[k] = f.result(timeout=30)
-            except Exception:
-                out[k] = None
+    # Slow optional feeds get a short wait; their fetch keeps running in the background and
+    # fills the cache for the next 5-minute snapshot instead of holding up the globe.
+    waits = {"disasters": 12, "advisories": 15}
+    pool = ThreadPoolExecutor(max_workers=6)
+    futs = {k: pool.submit(fn) for k, fn in jobs.items()}
+    for k, f in futs.items():
+        try:
+            out[k] = f.result(timeout=waits.get(k, 30))
+        except Exception:
+            out[k] = None
+    pool.shutdown(wait=False)
     planes, vessels = (out["planes"] or [])[:400], (out["vessels"] or [])[:1200]
     markets = {}
     idx = out["markets"]
@@ -54,6 +59,8 @@ def _globe_payload() -> str:
                 markets[cc] = {"name": r["Index"], "price": r["Value"], "chg": r["% Chg"], "asof": r.get("AsOf", "")}
     data = {
         "planes": planes, "vessels": vessels, "markets": markets,
+        "advisories": out["advisories"] or [], "disasters": out["disasters"] or [],
+        "conflictItems": (out["news"] or {}).get("items", []),
         "conflicts": (out["news"] or {}).get("signals", []), "headlines": (out["news"] or {}).get("headlines", []),
         "meta": {"generatedAt": datetime.now(pytz.utc).isoformat(),
                  "counts": {"planes": len(planes), "vessels": len(vessels)}},

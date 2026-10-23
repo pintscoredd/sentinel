@@ -370,11 +370,14 @@ def _zero_dte():
 
 
 def render():
-    sub = st.segmented_control("Section", ["Chain & strategy", "SPX 0DTE"], default="Chain & strategy",
+    sub = st.segmented_control("Section", ["Chain & strategy", "Exposure (GEX)", "SPX 0DTE"], default="Chain & strategy",
                                key="opt_sub", label_visibility="collapsed") or "Chain & strategy"
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     if sub == "Chain & strategy":
         _chain_section()
+    elif sub == "Exposure (GEX)":
+        from sentinel.pages import exposure
+        exposure.render()
     else:
         @st.fragment(run_every="60s")
         def _live():

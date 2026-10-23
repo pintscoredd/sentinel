@@ -634,10 +634,10 @@ def compute_spx_direction(chain, spx_metrics, vix_data, gex_profile=None):
 
 @st.cache_data(ttl=300)
 def fetch_cboe_gex(ticker="SPX"):
-    urls = [
-        f"https://cdn.cboe.com/api/global/delayed_quotes/options/_{ticker}.json",
-        f"https://cdn.cboe.com/api/global/delayed_quotes/options/{ticker}.json",
-    ]
+    ticker = str(ticker).upper().lstrip("^")
+    # Cash indexes live under an underscore prefix; stocks/ETFs do not (and 403 there).
+    index = ticker in {"SPX", "NDX", "RUT", "VIX", "XSP", "DJX", "OEX", "XEO", "MRUT"}
+    urls = [f"https://cdn.cboe.com/api/global/delayed_quotes/options/{'_' if index else ''}{ticker}.json"]
     for url in urls:
         try:
             data = _fetch_robust_json(url, timeout=15)

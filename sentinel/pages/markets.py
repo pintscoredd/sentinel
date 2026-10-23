@@ -14,6 +14,7 @@ from sentinel.core.formatting import _esc, fmt_p, fmt_vol
 from sentinel.data.cross_asset import get_sector_rrg, stat_arb_screener
 from sentinel.data.market import get_futures, get_global_indices, get_vix_full, sector_etfs, top_movers, yahoo_quote
 from sentinel.data.news import finnhub_news, is_market_relevant
+from sentinel.data.breadth import breadth_history
 from sentinel.data.screener import breadth, large_caps, market_screener, movers, sector_table
 from sentinel.data.options import get_gamma_squeeze_scanner, get_iv_skew, get_iv_term_structure, get_rv_iv_spread
 from sentinel.pages.ticker import render_ticker
@@ -25,7 +26,7 @@ from sentinel.ui.palette import DOWN, SERIES, TEXT, TEXT_DIM, UP, signed_color
 from sentinel.ui.charts import market_heatmap
 from sentinel.ui.theme import dark_fig, go, plot
 
-SUBPAGES = ["Overview", "Heatmap", "Ticker", "Rotation", "Volatility"]
+SUBPAGES = ["Overview", "Heatmap", "Ticker", "Rotation", "Volatility", "Funds (13F)"]
 
 
 # ── Overview ────────────────────────────────────────────────────────────────
@@ -180,6 +181,62 @@ def _heatmap():
         rows = [[tkr(r.symbol), fmt_p(r.price), signed(r.pct, "{:+.2f}", "%", True), fmt_vol(r.volume)]
                 for r in act.itertuples()]
         table(["Ticker", "Last", "Change %", "Volume"], rows)
+    divider()
+    _trend_breadth()
+
+
+def _trend_breadth():
+    section("Trend breadth · 500 largest US stocks", "Share above their 50/200-day averages and 52-week highs vs lows")
+    with st.spinner("Computing breadth (first load downloads 2 years of prices, then cached 6 h)…"):
+        b = breadth_history()
+    if not b:
+        empty("Breadth history unavailable right now.")
+        return
+    d = b["daily"]
+    last, prev5 = d.iloc[-1], d.iloc[-6] if len(d) > 5 else d.iloc[0]
+
+    def tone(v, lo=40, hi=60):
+        return UP if v >= hi else DOWN if v <= lo else TEXT
+
+    net = int(last["highs"] - last["lows"])
+    cards([
+        ("Above 50-day avg", f"{last['pct50']:.0f}%", f"{last['pct50'] - prev5['pct50']:+.0f} pts vs 5 days ago",
+         TEXT_DIM, tone(last["pct50"])),
+        ("Above 200-day avg", f"{last['pct200']:.0f}%", f"{last['pct200'] - prev5['pct200']:+.0f} pts vs 5 days ago",
+         TEXT_DIM, tone(last["pct200"])),
+        ("52-week highs", f"{int(last['highs'])}", f"of {int(last['n'])} stocks", TEXT_DIM, UP if last["highs"] else TEXT),
+        ("52-week lows", f"{int(last['lows'])}", f"of {int(last['n'])} stocks", TEXT_DIM, DOWN if last["lows"] else TEXT),
+        ("Net new highs", f"{net:+d}", "healthy" if net > 10 else "deteriorating" if net < -10 else "neutral",
+         TEXT_DIM, signed_color(net)),
+    ], 160)
+    from plotly.subplots import make_subplots
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.6, 0.4], vertical_spacing=0.06)
+    fig.add_trace(go.Scatter(x=d.index, y=d["pct50"], name="% above 50-day", line=dict(color="#FFFFFF", width=1.8)), 1, 1)
+    fig.add_trace(go.Scatter(x=d.index, y=d["pct200"], name="% above 200-day", line=dict(color="#8A8A8A", width=1.8)), 1, 1)
+    fig.add_hline(y=50, line=dict(color="#333", dash="dot", width=1), row=1, col=1)
+    fig.add_trace(go.Bar(x=d.index, y=d["highs"], name="New highs", marker_color=UP, marker_line_width=0), 2, 1)
+    fig.add_trace(go.Bar(x=d.index, y=-d["lows"], name="New lows", marker_color=DOWN, marker_line_width=0,
+                         customdata=d["lows"], hovertemplate="%{customdata:.0f}<extra>New lows</extra>"), 2, 1)
+    base = dark_fig(460, hovermode="x unified", showlegend=True, barmode="relative")
+    fig.update_layout(base.layout)
+    fig.update_yaxes(ticksuffix="%", range=[0, 100], row=1, col=1)
+    fig.update_yaxes(title=dict(text="Highs / lows", font=dict(size=10)), row=2, col=1)
+    fig.update_layout(legend=dict(orientation="h", y=1.08), margin=dict(l=8, r=8, t=36, b=8))
+    plot(fig, key="breadth_hist")
+
+    def chips(items, color):
+        if not items:
+            return '<span class="dim">None today.</span>'
+        return " ".join(f'<span class="s-pill" style="color:{color};margin:0 4px 4px 0" title="{_esc(i["name"])}">'
+                        f'{_esc(i["symbol"])}</span>' for i in items[:40])
+    c1, c2 = st.columns(2, gap="large")
+    with c1:
+        section(f"New 52-week highs · {len(b['highs'])}", "Largest first")
+        st.markdown(chips(b["highs"], UP), unsafe_allow_html=True)
+    with c2:
+        section(f"New 52-week lows · {len(b['lows'])}", "Largest first")
+        st.markdown(chips(b["lows"], DOWN), unsafe_allow_html=True)
+    st.caption(f"As of {b['as_of']} close · {b['universe']} stocks with enough history · Yahoo Finance daily data.")
 
 
 # ── Rotation ────────────────────────────────────────────────────────────────
@@ -363,5 +420,8 @@ def render():
             note("Enter a symbol to load quote, chart, fundamentals, earnings, insiders and short interest.")
     elif sub == "Rotation":
         _rotation()
+    elif sub == "Funds (13F)":
+        from sentinel.pages import funds
+        funds.render()
     else:
         _volatility()

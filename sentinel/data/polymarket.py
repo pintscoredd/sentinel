@@ -113,3 +113,58 @@ def score_poly_mispricing(markets, limit=15):
         })
     out.sort(key=lambda x: x["score"], reverse=True)
     return out[:limit]
+
+
+# ── Market depth (CLOB + data API, keyless) ─────────────────────────────────
+_CLOB = "https://clob.polymarket.com"
+_DATA = "https://data-api.polymarket.com"
+_FIDELITY = {"1d": 5, "1w": 60, "1m": 240, "max": 1440}  # minutes per point
+
+
+def market_tokens(market) -> list[tuple[str, str]]:
+    """[(outcome label, CLOB token id)] for a Gamma market dict."""
+    outs = _parse_poly_field(market.get("outcomes")) or ["Yes", "No"]
+    toks = _parse_poly_field(market.get("clobTokenIds"))
+    return list(zip([str(o) for o in outs], [str(t) for t in toks]))
+
+
+@stale_cached_source(ttl=300, retry_ttl=60)
+def poly_price_history(token_id: str, interval: str = "1w"):
+    """[(unix_ts, price 0–1)] for one outcome token."""
+    data = _fetch_robust_json(f"{_CLOB}/prices-history", params={
+        "market": token_id, "interval": interval, "fidelity": _FIDELITY.get(interval, 60)}, timeout=12)
+    hist = (data or {}).get("history", []) if isinstance(data, dict) else []
+    return [(int(h["t"]), float(h["p"])) for h in hist if "t" in h and "p" in h]
+
+
+@stale_cached_source(ttl=300, retry_ttl=60)
+def poly_holders(condition_id: str, limit: int = 10):
+    """{outcome index: [holder dicts]} — largest positions per side."""
+    data = _fetch_robust_json(f"{_DATA}/holders", params={"market": condition_id, "limit": int(limit)}, timeout=12)
+    out = {}
+    for block in data or []:
+        for h in block.get("holders", []) or []:
+            out.setdefault(int(h.get("outcomeIndex", 0)), []).append({
+                "name": h.get("name") or h.get("pseudonym") or (h.get("proxyWallet") or "")[:10],
+                "wallet": h.get("proxyWallet", ""), "amount": _safe_float(h.get("amount"))})
+    return out
+
+
+@stale_cached_source(ttl=60, retry_ttl=30)
+def poly_trades(condition_id: str, limit: int = 25):
+    data = _fetch_robust_json(f"{_DATA}/trades", params={"market": condition_id, "limit": int(limit)}, timeout=12)
+    return [{"ts": int(t.get("timestamp") or 0), "side": t.get("side", ""), "outcome": t.get("outcome", ""),
+             "price": _safe_float(t.get("price")), "size": _safe_float(t.get("size")),
+             "name": t.get("name") or t.get("pseudonym") or (t.get("proxyWallet") or "")[:10],
+             "wallet": t.get("proxyWallet", "")} for t in (data or []) if isinstance(t, dict)]
+
+
+@stale_cached_source(ttl=900, retry_ttl=120)
+def poly_leaderboard(period: str = "WEEK", order: str = "PNL", limit: int = 25):
+    """Top traders for DAY/WEEK/MONTH/ALL by PNL or VOL."""
+    data = _fetch_robust_json(f"{_DATA}/v1/leaderboard", params={
+        "timePeriod": period, "orderBy": order, "limit": int(limit)}, timeout=12)
+    rows = data if isinstance(data, list) else (data or {}).get("data", []) if isinstance(data, dict) else []
+    return [{"rank": int(_safe_float(r.get("rank"), 0)), "name": r.get("userName") or r.get("user_name") or "",
+             "wallet": r.get("proxyWallet") or r.get("user_id") or "", "pnl": _safe_float(r.get("pnl")),
+             "volume": _safe_float(r.get("vol", r.get("volume")))} for r in rows]

@@ -42,6 +42,7 @@ Keys entered in the sidebar apply to that browser session only.
 | `NEWSAPI_KEY` | Extra headlines on the Geo page |
 | `ALPACA_API_KEY` + `ALPACA_SECRET_KEY` | Live SPY 0DTE chain, VWAP, direction model |
 | `MARINESIA_API_KEY` | Extra AIS vessels at chokepoints |
+| `SEC_CONTACT` | Contact email sent to SEC EDGAR for the 13F tracker (SEC asks automated clients to identify themselves) |
 
 Everything else is keyless: Yahoo Finance, Nasdaq (earnings calendar and stock screener for
 the heatmap/breadth), Treasury.gov yield curve, BLS (CPI, jobs), NY Fed (fed funds), Hyperliquid,
@@ -50,6 +51,23 @@ NASA EONET, adsb.lol, CelesTrak, Digitraffic (Finnish AIS), Wikidata, Wikipedia,
 World Bank. In the browser the globe also calls Planespotters (aircraft photos) and
 CelesTrak (TLEs propagated live with satellite.js); earnings logos come from
 Financial Modeling Prep's public image endpoint.
+
+## Highlights
+
+- **Options → Exposure (GEX):** dealer gamma, delta and vanna by strike and by strike × expiry, the gamma-flip
+  level (Black-Scholes re-priced profile) and call/put walls for SPX, NDX, RUT or any optionable stock (CBOE delayed).
+- **Markets → Heatmap:** market-cap treemap, breadth, sector participation, % of the 500 largest stocks above
+  their 50/200-day averages and 52-week highs vs lows.
+- **Markets → Funds (13F):** latest holdings and quarter-over-quarter changes for 18 well-known managers, plus
+  the most-bought / most-sold stocks across all of them.
+- **Perps:** Hyperliquid crowding board, regime map and funding vs Binance/Bybit.
+- **Polymarket:** price history, largest holders, live trades and the trader leaderboard.
+- **Geo:** 3D globe with live satellites, military aircraft (with photos), AIS ships and a country-risk
+  choropleth (US travel advisories, conflict/unrest headlines, GDACS disasters, local market stress).
+
+Ideas for several of these came from open-source projects: World Monitor (country instability index),
+gammagrid and EzOptions (exposure views), rishisidhu/hyperliquid-dashboard (crowding), humanplane/terminal
+(Polymarket depth), GreekSoup (13F) and xang1234/stock-screener (breadth). The code here is written for Sentinel.
 
 ## Layout
 

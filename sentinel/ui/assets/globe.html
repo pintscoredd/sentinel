@@ -47,6 +47,12 @@ button{font:inherit;color:inherit}
 .row span:first-child{color:var(--dim)}
 .row span:last-child{text-align:right;font-variant-numeric:tabular-nums}
 .leader{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #141414}
+.dim{color:#8a8a8a}.rk{margin:10px 0 4px}.rb{height:4px;background:#1c1c1c;border-radius:2px;overflow:hidden;margin-top:4px}
+.rb div{height:100%;background:#F2555A}.rd{font-size:11.5px;color:#a3a3a3;margin-top:5px;line-height:1.5}.rd a{color:#d4d4d4;text-decoration:none}
+.riskhead{display:flex;gap:12px;align-items:center;margin:8px 0 6px}.riskhead .rs{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums}
+#riskLegend{position:absolute;left:50%;transform:translateX(-50%);bottom:14px;z-index:15;display:none;gap:8px;align-items:center;
+  background:rgba(8,8,8,.85);border:1px solid #1f1f1f;border-radius:8px;padding:6px 10px;font-size:11px;color:#a3a3a3}
+#riskLegend .g{width:140px;height:8px;border-radius:4px;background:linear-gradient(90deg,rgba(242,85,90,.06),rgba(242,85,90,.81))}
 .chead{display:flex;gap:12px;align-items:center;margin-bottom:4px}
 .chead .flag{height:40px;max-width:72px;object-fit:contain;border-radius:3px;box-shadow:0 0 0 1px #2a2a2a;flex:none}
 .wiki p{margin:10px 0 6px;font-size:13px;line-height:1.55;color:#C9C9C9}
@@ -123,6 +129,7 @@ button{font:inherit;color:inherit}
   <div class="lbl" id="cardLbl"></div><div class="t" id="cardTitle"></div><div class="b" id="cardBody"></div></div>
 <div id="tt"></div>
 <div id="attr"></div>
+<div id="riskLegend"><span>Low</span><div class="g"></div><span>Severe</span><span style="margin-left:6px">· click a country for the breakdown</span></div>
 
 <div id="bottom">
   <div id="news" class="panel"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
@@ -261,6 +268,7 @@ const LAYERS = [
   {grp: 'Context'},
   {id: 'borders', name: 'Country borders', on: true},
   {id: 'conflicts', name: 'Conflict news (approx.)'},
+  {id: 'risk', name: 'Country risk score'},
   {grp: 'Tracking'},
   {id: 'milair', name: 'Military aircraft'},
   {id: 'satellites', name: 'Satellites'},
@@ -444,7 +452,8 @@ function refresh() {
   }
   if (orbitPath && ON.has('satellites')) paths.push(orbitPath);
   globe.pointsData(pts).pathsData(paths).objectsData(ON.has('satellites') ? (CACHE.satellites || []).slice() : []);
-  globe.polygonsData(ON.has('borders') ? countries : []);
+  globe.polygonsData(ON.has('borders') || ON.has('risk') ? countries : []);
+  $('riskLegend').style.display = ON.has('risk') ? 'flex' : 'none';
   const conf = ON.has('conflicts') ? (DATA.conflicts || []) : [];
   globe.ringsData(conf).labelsData(conf);
 }
@@ -454,7 +463,8 @@ async function toggleLayer(id) {
   const on = !ON.has(id);
   btn.classList.toggle('on', on);
   if (on) ON.add(id); else ON.delete(id);
-  if (on && id !== 'borders' && id !== 'conflicts') {
+  if (on && id === 'risk' && !(RISK && RISK.size)) buildRisk();
+  if (on && id !== 'borders' && id !== 'conflicts' && id !== 'risk') {
     try { await ensure(id); } catch (e) { console.warn(id, e); btn.classList.remove('on'); ON.delete(id); setCount(id, 0); }
   }
   if (id === 'conflicts') setCount('conflicts', (DATA.conflicts || []).length);
@@ -573,6 +583,95 @@ async function wikidataCountry(iso2) {
   }
   return {facts: Object.assign({}, facts[0] || {}, extra[0] || {}, hdi[0] || {}), leaders};
 }
+// ── Country risk score (inspired by World Monitor's Country Instability Index) ─────────
+// 0–100 blend: US travel advisory 45%, conflict/unrest headline mentions (48 h) 35%,
+// active GDACS orange/red disaster alerts 12%, local stock-index drop today 8%.
+const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/&/g, ' and ')
+  .replace(/[^a-z0-9 ]+/g, ' ').replace(/\bthe\b/g, ' ').replace(/\s+/g, ' ').trim();
+const ALIASES = {  // extra official/short names used by State Dept, GDACS and headlines
+  'United States of America': ['United States'], 'Myanmar': ['Burma'], 'Ivory Coast': ["Cote d'Ivoire", 'Côte d’Ivoire'],
+  'Democratic Republic of the Congo': ['Democratic Republic of Congo', 'DR Congo', 'DRC', 'Congo-Kinshasa'],
+  'Republic of the Congo': ['Congo-Brazzaville', 'Republic of Congo'], 'East Timor': ['Timor-Leste'], 'eSwatini': ['Eswatini', 'Swaziland'],
+  'Republic of Serbia': ['Serbia'], 'United Republic of Tanzania': ['Tanzania'], 'Czechia': ['Czech Republic'],
+  'Turkey': ['Türkiye', 'Turkiye'], 'Palestine': ['West Bank', 'Gaza', 'Palestinian Territories'], 'Macedonia': ['North Macedonia'],
+  'The Bahamas': ['Bahamas'], 'Gambia': ['The Gambia'], 'Cabo Verde': ['Cape Verde'], 'North Korea': ['DPRK'], 'South Korea': ['Republic of Korea'],
+};
+const NEWS_TERMS = {  // demonyms, capitals and actors that signal a country in headlines
+  'Russia': ['Russian', 'Kremlin', 'Moscow'], 'Ukraine': ['Ukrainian', 'Kyiv', 'Kharkiv', 'Odesa', 'Zelensky', 'Zelenskyy'],
+  'Israel': ['Israeli', 'IDF', 'Netanyahu'], 'Palestine': ['Palestinian', 'Hamas', 'Gaza', 'West Bank'], 'Iran': ['Iranian', 'Tehran', 'IRGC'],
+  'Syria': ['Syrian', 'Damascus'], 'Yemen': ['Yemeni', 'Houthi', 'Houthis'], 'Sudan': ['Sudanese', 'Darfur', 'Khartoum', 'RSF'],
+  'Lebanon': ['Lebanese', 'Hezbollah', 'Beirut'], 'China': ['Chinese', 'Beijing'], 'Taiwan': ['Taiwanese', 'Taipei'],
+  'North Korea': ['Pyongyang', 'Kim Jong Un'], 'Myanmar': ['Burmese', 'junta'], 'Pakistan': ['Pakistani', 'Islamabad'],
+  'Afghanistan': ['Afghan', 'Taliban', 'Kabul'], 'Somalia': ['Somali', 'Shabaab', 'Mogadishu'], 'Nigeria': ['Nigerian', 'Boko Haram'],
+  'Mali': ['Malian', 'Bamako'], 'Venezuela': ['Venezuelan', 'Caracas', 'Maduro'], 'Haiti': ['Haitian', 'Port-au-Prince'],
+  'Iraq': ['Iraqi', 'Baghdad'], 'Libya': ['Libyan', 'Tripoli'], 'Ethiopia': ['Ethiopian', 'Tigray', 'Amhara'],
+  'Democratic Republic of the Congo': ['Goma', 'Kinshasa', 'M23'], 'Mexico': ['Mexican'], 'Colombia': ['Colombian'],
+  'Turkey': ['Turkish', 'Ankara', 'Erdogan'], 'Serbia': ['Serbian'], 'Republic of Serbia': ['Serbian', 'Belgrade'], 'Kosovo': ['Kosovar', 'Pristina'],
+  'India': ['New Delhi', 'Kashmir'], 'Bangladesh': ['Bangladeshi', 'Dhaka'], 'Georgia': ['Tbilisi'], 'Armenia': ['Armenian'], 'Azerbaijan': ['Azerbaijani', 'Baku'],
+  'Burkina Faso': ['Burkinabe', 'Ouagadougou'], 'Niger': ['Niamey'], 'Mozambique': ['Mozambican', 'Cabo Delgado'], 'Philippines': ['Philippine', 'Filipino', 'Manila'],
+  'Ecuador': ['Ecuadorian'], 'Peru': ['Peruvian'], 'Kenya': ['Kenyan', 'Nairobi'], 'Egypt': ['Egyptian', 'Cairo'], 'Saudi Arabia': ['Saudi', 'Riyadh'],
+};
+const ADV_SCORE = [0, 0, 20, 55, 85];
+let RISK = null;
+function buildRisk() {
+  const advBy = new Map((DATA.advisories || []).map(a => [norm(a.name), a]));
+  const disBy = new Map();
+  (DATA.disasters || []).forEach(e => (e.countries || []).forEach(c => { const k = norm(c); if (!disBy.has(k)) disBy.set(k, []); disBy.get(k).push(e); }));
+  const items = (DATA.conflictItems || []).map(it => ({...it, n: ' ' + norm(it.t) + ' '}));
+  RISK = new Map();
+  for (const f of countries) {
+    const p = f.properties;
+    const names = [...new Set([p.ADMIN, p.NAME, p.NAME_LONG, p.FORMAL_EN, p.GEOUNIT, p.BRK_NAME, ...(ALIASES[p.ADMIN] || [])]
+      .filter(Boolean).map(norm))];
+    let adv = null;
+    for (const n of names) if (advBy.has(n)) { adv = advBy.get(n); break; }
+    const dis = [];
+    for (const n of names) (disBy.get(n) || []).forEach(e => { if (!dis.includes(e)) dis.push(e); });
+    const terms = [...new Set([...names, ...(NEWS_TERMS[p.ADMIN] || []).map(norm)])].filter(t => t.length >= 3);
+    const news = terms.length ? items.filter(it => terms.some(t => it.n.includes(' ' + t + ' '))) : [];
+    const iso2 = [p.ISO_A2, p.ISO_A2_EH].find(x => x && x !== '-99');
+    const mkt = (DATA.markets || {})[iso2 || ''];
+    const parts = {
+      advisory: adv ? ADV_SCORE[adv.level] || 0 : null,
+      news: Math.min(1, news.length / 12) * 100,
+      disaster: dis.some(e => e.alert === 'Red') ? 100 : dis.length ? 60 : 0,
+      market: mkt ? Math.min(1, Math.max(0, -mkt.chg) / 3) * 100 : 0,
+    };
+    const w = {advisory: 0.45, news: 0.35, disaster: 0.12, market: 0.08};
+    let num = 0, den = 0;
+    for (const k in w) if (parts[k] != null) { num += parts[k] * w[k]; den += w[k]; }
+    const score = den ? num / den : 0;
+    const band = score >= 70 ? 'Severe' : score >= 50 ? 'High' : score >= 35 ? 'Elevated' : score >= 20 ? 'Guarded' : 'Low';
+    RISK.set(p.ADMIN, {score, band, parts, adv, dis, news, mkt});
+  }
+}
+function riskLabel(p) {
+  const name = p.ADMIN || p.NAME;
+  if (!ON.has('risk') || !RISK) return name;
+  const r = RISK.get(p.ADMIN);
+  return r ? `${name} · risk ${Math.round(r.score)} (${r.band})` : name;
+}
+function riskHtml(p) {
+  if (!(RISK && RISK.size)) buildRisk();
+  const r = RISK.get(p.ADMIN);
+  if (!r) return '<div class="src">No risk data for this territory.</div>';
+  const bar = (label, v, w, detail) => `<div class="rk"><div class="row"><span>${esc(label)} <span class="dim">· ${w}</span></span>
+      <span>${v == null ? '—' : Math.round(v)}</span></div><div class="rb"><div style="width:${v == null ? 0 : Math.round(v)}%"></div></div>
+      ${detail ? `<div class="rd">${detail}</div>` : ''}</div>`;
+  const adv = r.adv ? `Level ${r.adv.level}: ${esc(r.adv.text)} · <a href="${esc(safeUrl(r.adv.url))}" target="_blank" rel="noopener noreferrer">State Dept ↗</a>` : 'No US advisory listed';
+  const news = r.news.length ? r.news.slice(0, 5).map(n => `• <a href="${esc(safeUrl(n.u))}" target="_blank" rel="noopener noreferrer">${esc(n.t.slice(0, 110))}</a> <span class="dim">${esc(n.d || '')}</span>`).join('<br>')
+    + (r.news.length > 5 ? `<br><span class="dim">+${r.news.length - 5} more</span>` : '') : 'No conflict/unrest headlines in the last 48 h';
+  const dis = r.dis.length ? r.dis.map(e => `${esc(e.alert)} alert · ${esc(e.type)} — ${esc(e.name)}`).join('<br>') : 'No orange/red GDACS alerts (14 days)';
+  const mkt = r.mkt ? `${esc(r.mkt.name)} ${r.mkt.chg >= 0 ? '+' : ''}${Number(r.mkt.chg).toFixed(2)}% today` : 'No index tracked';
+  return `<div class="riskhead"><div class="rs" style="color:${r.score >= 50 ? '#F2555A' : r.score >= 20 ? '#EDEDED' : '#8A8A8A'}">${Math.round(r.score)}</div>
+      <div><div style="font-weight:600">${esc(r.band)} risk</div><div class="dim" style="font-size:12px">0–100 composite · updates with the 5-min snapshot</div></div></div>
+    ${bar('Travel advisory', r.parts.advisory, '45%', adv)}
+    ${bar('Conflict & unrest news', r.parts.news, '35%', `${r.news.length} headline${r.news.length === 1 ? '' : 's'} mention it<br>${news}`)}
+    ${bar('Disaster alerts', r.parts.disaster, '12%', dis)}
+    ${bar('Market stress', r.parts.market, '8%', mkt)}
+    <div class="src">Indicative only: headline counts measure coverage, not severity. Sources: US State Dept, Google News, GDACS, Yahoo Finance.</div>`;
+}
+
 let countryReq = 0;
 const WB = [
   ['NY.GDP.MKTP.CD', 'GDP', x => fmtUsd(x)],
@@ -626,11 +725,11 @@ async function showCountry(p) {
   const flagUrl = v(f, 'flag') ? v(f, 'flag').replace('http://', 'https://') + '?width=160' : '';
   const flag = flagUrl ? `<img class="flag" src="${esc(safeUrl(flagUrl))}" alt="Flag of ${esc(name)}">` : '';
   $('sideBody').innerHTML = `<div class="chead">${flag}<div><div class="lbl">${esc(iso3)}</div><div class="cn">${esc(name)}</div></div></div>
-    <div class="tabs"><button class="tab on" data-t="o">Overview</button><button class="tab" data-t="e">Economy</button><button class="tab" data-t="l">Leaders</button></div>
-    <div id="tab-o">${overview}</div><div id="tab-e" style="display:none">${economy}</div><div id="tab-l" style="display:none">${people}</div>`;
+    <div class="tabs"><button class="tab on" data-t="o">Overview</button><button class="tab" data-t="e">Economy</button><button class="tab" data-t="l">Leaders</button><button class="tab" data-t="r">Risk</button></div>
+    <div id="tab-o">${overview}</div><div id="tab-e" style="display:none">${economy}</div><div id="tab-l" style="display:none">${people}</div><div id="tab-r" style="display:none">${riskHtml(p)}</div>`;
   $('sideBody').querySelectorAll('.tab').forEach(b => b.onclick = () => {
     $('sideBody').querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === b));
-    ['o', 'e', 'l'].forEach(t => { $('tab-' + t).style.display = t === b.dataset.t ? 'block' : 'none'; });
+    ['o', 'e', 'l', 'r'].forEach(t => { $('tab-' + t).style.display = t === b.dataset.t ? 'block' : 'none'; });
   });
   wikiSummary(v(f, 'wiki') || name).then(w => {
     if (req !== countryReq || !$('wiki')) return;
@@ -669,10 +768,17 @@ function init() {
     .showAtmosphere(true).atmosphereColor('#9a9a9a').atmosphereAltitude(0.12)
     .globeTileEngineUrl(tileUrl)
     // Countries
-    .polygonCapColor(d => d === hoverPoly ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.015)')
+    .polygonCapColor(d => {
+      if (ON.has('risk') && RISK) {
+        const r = RISK.get(d.properties.ADMIN);
+        const a = r ? 0.06 + r.score / 100 * 0.75 : 0.02;
+        return d === hoverPoly ? `rgba(255,140,140,${Math.min(0.95, a + 0.15)})` : `rgba(242,85,90,${a.toFixed(3)})`;
+      }
+      return d === hoverPoly ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.015)';
+    })
     .polygonSideColor(() => 'rgba(0,0,0,0)').polygonStrokeColor(() => 'rgba(255,255,255,0.35)')
     .polygonAltitude(d => d === hoverPoly ? 0.008 : 0.004).polygonsTransitionDuration(150)
-    .onPolygonHover(d => { hoverPoly = d; globe.polygonCapColor(globe.polygonCapColor()); hover(d && (d.properties.ADMIN || d.properties.NAME)); })
+    .onPolygonHover(d => { hoverPoly = d; globe.polygonCapColor(globe.polygonCapColor()); hover(d && riskLabel(d.properties)); })
     .onPolygonClick(d => showCountry(d.properties))
     // Points
     .pointLat('lat').pointLng('lng').pointAltitude('alt').pointRadius('r').pointColor('color').pointResolution(6)
@@ -704,7 +810,7 @@ function init() {
   $('attr').innerHTML = ATTR;
 
   fetchJSON('https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@v5.1.2/geojson/ne_110m_admin_0_countries.geojson', 20000)
-    .then(g => { countries = (g.features || []).filter(f => f.properties.ISO_A3 !== 'ATA'); refresh(); })
+    .then(g => { countries = (g.features || []).filter(f => f.properties.ISO_A3 !== 'ATA'); if (ON.has('risk')) buildRisk(); refresh(); })
     .catch(e => console.warn('borders', e));
 
   const c = (DATA.meta && DATA.meta.counts) || {};
