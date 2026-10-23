@@ -33,7 +33,8 @@ def _single(name):
     f, h = rep["filing"], rep["holdings"]
     age = (date.today() - date.fromisoformat(f["filed"])).days
     live = h[h["value"] > 0]
-    dups = set(h.loc[h["issuer"].duplicated(keep=False) & (h["put_call"] == ""), "issuer"])
+    stock = h[h["put_call"] == ""]
+    dups = set(stock.loc[stock["issuer"].duplicated(keep=False), "issuer"])
     chg = h["change"].value_counts()
     tot_chg = (rep["total"] / rep["prev_total"] - 1) * 100 if rep.get("prev_total") else None
     cards([
@@ -55,7 +56,9 @@ def _single(name):
                              text=[f"{w:.1f}%" for w in top["weight"]], textposition="outside",
                              textfont=dict(size=10, color=TEXT_DIM),
                              hovertemplate="%{y}: %{x:.2f}%<extra></extra>"))
-        fig.update_layout(xaxis=dict(ticksuffix="%"), yaxis=dict(side="left"), margin=dict(l=8, r=40, t=36, b=8))
+        fig.update_traces(cliponaxis=False)
+        fig.update_layout(xaxis=dict(ticksuffix="%", range=[0, float(top["weight"].max()) * 1.2]),
+                          yaxis=dict(side="left"), margin=dict(l=8, r=40, t=36, b=8))
         plot(fig, key="fund_top")
         st.caption("Bar colour = last quarter's action: green new/added, red reduced, grey unchanged.")
     with right:

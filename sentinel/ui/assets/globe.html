@@ -6,11 +6,12 @@
 <title>Sentinel Globe</title>
 <script src="https://cdn.jsdelivr.net/npm/globe.gl@2.46.1/dist/globe.gl.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.0/dist/satellite.min.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap">
 <style>
 :root{--bg:#000;--panel:rgba(8,8,8,.92);--border:#1f1f1f;--border2:#333;--text:#ededed;--muted:#a3a3a3;--dim:#8a8a8a;--up:#3fcf8e;--down:#f2555a}
 *{margin:0;padding:0;box-sizing:border-box}
-html,body{background:#000;color:var(--text);width:100%;height:100%;overflow:hidden;font:12px Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
-.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;backdrop-filter:blur(6px)}
+html,body{background:#000;color:var(--text);width:100%;height:100%;overflow:hidden;font:12px 'JetBrains Mono',ui-monospace,Menlo,monospace}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:3px;backdrop-filter:blur(6px)}
 .lbl{color:var(--dim);font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase}
 button{font:inherit;color:inherit}
 
@@ -51,7 +52,7 @@ button{font:inherit;color:inherit}
 .rb div{height:100%;background:#F2555A}.rd{font-size:11.5px;color:#a3a3a3;margin-top:5px;line-height:1.5}.rd a{color:#d4d4d4;text-decoration:none}
 .riskhead{display:flex;gap:12px;align-items:center;margin:8px 0 6px}.riskhead .rs{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums}
 #riskLegend{position:absolute;left:50%;transform:translateX(-50%);bottom:14px;z-index:15;display:none;gap:8px;align-items:center;
-  background:rgba(8,8,8,.85);border:1px solid #1f1f1f;border-radius:8px;padding:6px 10px;font-size:11px;color:#a3a3a3}
+  background:rgba(8,8,8,.85);border:1px solid #1f1f1f;border-radius:3px;padding:6px 10px;font-size:11px;color:#a3a3a3}
 #riskLegend .g{width:140px;height:8px;border-radius:4px;background:linear-gradient(90deg,rgba(242,85,90,.06),rgba(242,85,90,.81))}
 .chead{display:flex;gap:12px;align-items:center;margin-bottom:4px}
 .chead .flag{height:40px;max-width:72px;object-fit:contain;border-radius:3px;box-shadow:0 0 0 1px #2a2a2a;flex:none}
@@ -498,7 +499,7 @@ function showCard(info, ev) {
         return;
       }
       const img = (ph.thumbnail_large || ph.thumbnail || {}).src;
-      extra.innerHTML = `<a href="${esc(safeUrl(ph.link))}" target="_blank" rel="noopener noreferrer"><img src="${esc(safeUrl(img))}" alt="Photo of ${esc(info.title)}" style="width:100%;border-radius:8px;margin-top:8px;display:block"></a>
+      extra.innerHTML = `<a href="${esc(safeUrl(ph.link))}" target="_blank" rel="noopener noreferrer"><img src="${esc(safeUrl(img))}" alt="Photo of ${esc(info.title)}" style="width:100%;border-radius:3px;margin-top:8px;display:block"></a>
         <div class="lbl" style="margin-top:4px;text-transform:none;letter-spacing:0">© ${esc(ph.photographer || 'photographer')} · Planespotters.net</div>`;
       positionCard();
     }).catch(() => { extra.innerHTML = '<div class="lbl" style="margin-top:8px">Photo service unavailable.</div>'; });

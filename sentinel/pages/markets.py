@@ -400,7 +400,9 @@ def _volatility():
 
 
 def render():
-    sub = st.segmented_control("Section", SUBPAGES, default="Overview", key="mk_sub",
+    if st.session_state.get("mk_sub") not in SUBPAGES:
+        st.session_state["mk_sub"] = "Overview"
+    sub = st.segmented_control("Section", SUBPAGES, key="mk_sub",
                                label_visibility="collapsed") or "Overview"
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     if sub == "Overview":

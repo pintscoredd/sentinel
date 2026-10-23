@@ -22,7 +22,9 @@ HILITE_BG = "rgba(255,255,255,0.05)"
 # Ordered grayscale ramp for multi-series charts (brightest = most important).
 SERIES = ["#FFFFFF", "#C2C2C2", "#8F8F8F", "#666666", "#474747", "#2E2E2E"]
 
-FONT = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+# Terminal look: monospace for all chrome and data; SANS only for long-form prose (news, notes, chat).
+FONT = "'JetBrains Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+SANS = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
 MONO = "'JetBrains Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace"
 
 

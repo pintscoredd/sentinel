@@ -256,7 +256,9 @@ def render():
              'Add a free FRED key (<a href="https://fred.stlouisfed.org/docs/api/api_key.html" target="_blank" '
              'rel="noopener">fred.stlouisfed.org</a>) for the regime score, PCE, credit spreads, liquidity and '
              'global central banks.', html=True)
-    sub = st.segmented_control("Section", SUBPAGES, default="Overview", key="mac_sub",
+    if st.session_state.get("mac_sub") not in SUBPAGES:
+        st.session_state["mac_sub"] = "Overview"
+    sub = st.segmented_control("Section", SUBPAGES, key="mac_sub",
                                label_visibility="collapsed") or "Overview"
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     if sub == "Overview":

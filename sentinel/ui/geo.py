@@ -84,7 +84,7 @@ def _network_html(net: dict) -> str:
     src = _esc(net["embed_url"])
     fallback = _esc(f"https://www.youtube.com/channel/{net['channel_id']}/live")
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-html,body{{margin:0;background:#000;font:12px Inter,system-ui,sans-serif;color:#8C8C8C}}
+html,body{{margin:0;background:#000;font:12px 'JetBrains Mono',ui-monospace,Menlo,monospace;color:#8C8C8C}}
 .w{{position:relative;width:100%;padding-top:56.25%;background:#000;border:1px solid #1F1F1F;border-radius:10px;overflow:hidden}}
 iframe{{position:absolute;inset:0;width:100%;height:100%;border:0}}
 a{{color:#A3A3A3;text-decoration:none}}.m{{display:flex;justify-content:space-between;margin-top:6px}}</style></head>

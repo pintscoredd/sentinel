@@ -92,6 +92,7 @@ def render():
                 st.markdown(f'<div class="chat-ai">{format_gemini_msg(m["content"])}</div>', unsafe_allow_html=True)
 
     prompt = st.chat_input("Ask anything, or /brief · /flash TSLA · /scenario gold · chain with “then”")
+    prompt = prompt or ss.pop("ai_pending", None)  # question typed on the terminal command line
     if clicked or prompt:
         _ask(clicked or prompt)
 

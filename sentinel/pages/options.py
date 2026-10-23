@@ -370,8 +370,10 @@ def _zero_dte():
 
 
 def render():
-    sub = st.segmented_control("Section", ["Chain & strategy", "Exposure (GEX)", "SPX 0DTE"], default="Chain & strategy",
-                               key="opt_sub", label_visibility="collapsed") or "Chain & strategy"
+    subs = ["Chain & strategy", "Exposure (GEX)", "SPX 0DTE"]
+    if st.session_state.get("opt_sub") not in subs:
+        st.session_state["opt_sub"] = subs[0]
+    sub = st.segmented_control("Section", subs, key="opt_sub", label_visibility="collapsed") or subs[0]
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     if sub == "Chain & strategy":
         _chain_section()

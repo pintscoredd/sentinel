@@ -29,7 +29,8 @@ def _fmt_bn(v):
 def render():
     c1, c2, c3, c4 = st.columns([1.1, 1.5, 2.2, 1.8])
     with c1:
-        tk = st.text_input("Underlying", value=st.session_state.get("exp_tk", "SPX"), key="exp_tk_in",
+        st.session_state.setdefault("exp_tk_in", st.session_state.get("exp_tk", "SPX"))
+        tk = st.text_input("Underlying", key="exp_tk_in",
                            help="SPX, NDX, RUT (cash indexes) or any optionable stock/ETF").strip().upper()[:8] or "SPX"
         st.session_state["exp_tk"] = tk
     with c2:
